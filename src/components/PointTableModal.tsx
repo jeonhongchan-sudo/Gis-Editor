@@ -6,7 +6,7 @@
 import React, { useState, useMemo } from 'react';
 import { X, Search, Trash2, Crosshair, Download } from 'lucide-react';
 import { CADPoint } from '../types/cad';
-import { downloadTextFile } from '../utils/dxfExporter';
+import { downloadTextFile } from '../utils/downloadHelper';
 
 interface PointTableModalProps {
   points: CADPoint[];

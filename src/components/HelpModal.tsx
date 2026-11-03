@@ -86,18 +86,18 @@ export const HelpModal: React.FC<HelpModalProps> = ({ onClose }) => {
 
           {/* Section 4 */}
           <div className="p-3.5 bg-slate-950/60 border border-slate-800 rounded-xl space-y-2">
-            <div className="flex items-center gap-2 text-blue-400 font-semibold text-sm">
+            <div className="flex items-center gap-2 text-emerald-400 font-semibold text-sm">
               <FileCode className="w-4 h-4" />
-              <span>4. DXF / SHP 성과물 내보내기 & 전날 작업 누적</span>
+              <span>4. SHP (Shapefile) & CSV 성과물 내보내기 및 누적 관리</span>
             </div>
             <p>
-              • <strong>DXF 내보내기</strong>: 오토캐드(AutoCAD) 전 버전에서 그대로 열 수 있는 표준 ASCII DXF 파일로 다운로드됩니다.
+              • <strong>SHP (Shapefile) 내보내기</strong>: QGIS 및 ArcGIS에서 좌표계(PRJ) 오류 없이 바로 열리는 표준 <strong>.shp, .shx, .dbf, .prj</strong> 4개 파일이 포함된 ZIP으로 다운로드됩니다. 점, 선, 면이 레이어별로 자동 분리 저장됩니다.
             </p>
             <p>
-              • <strong>SHP (Shapefile) 내보내기</strong>: QGIS 및 ArcGIS에서 좌표계(PRJ) 오류 없이 열리는 .shp, .shx, .dbf, .prj 4개 파일이 ZIP으로 제공됩니다.
+              • <strong>CSV 좌표 내보내기</strong>: 엑셀이나 측량기기에서 그대로 열 수 있는 측점명, X, Y, Z, 레이어 정보가 담긴 표준 CSV 파일로 저장됩니다.
             </p>
             <p>
-              • <strong>작업 누적</strong>: 기존 DXF 파일을 불러와서 그 위에 새로운 측점 CSV를 계속 추가하거나, [프로젝트 저장 (.cadgis)]으로 저장해두면 매일 누적 관리가 가능합니다.
+              • <strong>작업 누적 (.cadgis)</strong>: 기존 SHP 파일이나 CSV를 불러와서 그 위에 새로운 측점이나 선을 계속 추가하거나, [프로젝트 파일 백업 (.cadgis)]으로 저장해 두면 매일 데이터 손실 없이 이어서 작업할 수 있습니다.
             </p>
           </div>
         </div>

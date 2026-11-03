@@ -6,13 +6,13 @@
 import { CADPoint } from '../types/cad';
 
 export interface CSVColumnMapping {
-  idCol: number;
-  xCol: number;      // Column for CAD X (Easting)
-  yCol: number;      // Column for CAD Y (Northing)
-  zCol?: number;
-  nameCol?: number;  // Column for item record / remark / description
-  swapXY: boolean;   // Swap incoming X & Y
-  includeElevation: boolean; // Optional: whether to include Z or exclude for 2D drawings (default: false)
+  xCol: number;      // Column for CAD X (Easting / Horizontal)
+  yCol: number;      // Column for CAD Y (Northing / Vertical)
+  nameCol?: number;  // Column for item record / remark / description (항목)
+  zCol?: number;     // Optional elevation Z
+  idCol?: number;    // Deprecated / optional identifier
+  swapXY?: boolean;  // Swap incoming X & Y (default: false, CAD coordinates matched directly)
+  includeElevation?: boolean; // Optional: whether to include Z or exclude for 2D drawings (default: false)
 }
 
 export interface CSVParseResult {
@@ -102,7 +102,6 @@ export function analyzeTableRows(
   });
 
   // Detect column indices based on header names
-  let idCol = -1;
   let rawXCol = -1;
   let rawYCol = -1;
   let zCol = -1;
@@ -111,39 +110,40 @@ export function analyzeTableRows(
   headers.forEach((h, idx) => {
     const lower = h.toLowerCase().trim();
 
-    // ID candidate
+    // X candidate (CAD X / Easting / Horizontal)
     if (
-      ['no', 'id', 'num', 'number', '번호', '측점', '측점명', '점번', '점번호', 'pt', 'point', '순번'].includes(lower) ||
-      /^측점\s*번호?$/.test(lower)
+      rawXCol === -1 && (
+        ['x', 'x좌표', 'cad x', '동향', 'easting', 'east', 'x_측량', 'x(n)'].some(k => lower.includes(k)) ||
+        lower === 'x'
+      )
     ) {
-      if (idCol === -1) idCol = idx;
+      rawXCol = idx;
     }
-    // X candidate (Northing or Easting)
+    // Y candidate (CAD Y / Northing / Vertical)
     else if (
-      ['x', 'x좌표', 'northing', 'north', 'n', 'y(e)', '북향', 'x(n)', 'x_측량(n)', 'x_측량'].some(k => lower.includes(k)) ||
-      lower === 'x'
+      rawYCol === -1 && (
+        ['y', 'y좌표', 'cad y', '북향', 'northing', 'north', 'y_측량', 'y(e)'].some(k => lower.includes(k)) ||
+        lower === 'y'
+      )
     ) {
-      if (rawXCol === -1) rawXCol = idx;
-    }
-    // Y candidate
-    else if (
-      ['y', 'y좌표', 'easting', 'east', 'e', 'x(n)', '동향', 'y(e)', 'y_측량(e)', 'y_측량'].some(k => lower.includes(k)) ||
-      lower === 'y'
-    ) {
-      if (rawYCol === -1) rawYCol = idx;
+      rawYCol = idx;
     }
     // Z / Elevation
     else if (
-      ['z', 'z좌표', 'h', 'el', 'elev', 'elevation', '고도', '표고', '높이', 'z(h)'].some(k => lower.includes(k)) ||
-      lower === 'z'
+      zCol === -1 && (
+        ['z', 'z좌표', 'h', 'el', 'elev', 'elevation', '고도', '표고', '높이', 'z(h)'].some(k => lower.includes(k)) ||
+        lower === 'z'
+      )
     ) {
-      if (zCol === -1) zCol = idx;
+      zCol = idx;
     }
-    // Item / Remark / Record
+    // Item / Remark / Text to display on drawing (항목)
     else if (
-      ['항목', '레코드', '명칭', '비고', '지목', '코드', 'code', 'desc', '설명', '구분', '이름', 'name', '속성', '비고란', '메모'].some(k => lower.includes(k))
+      nameCol === -1 && (
+        ['항목', '명칭', '지목', '비고', '코드', 'code', '측점명', '측점', '점번', '점번호', 'id', 'no', '번호', 'desc', '설명', '구분', '이름', 'name', '속성'].some(k => lower.includes(k))
+      )
     ) {
-      if (nameCol === -1) nameCol = idx;
+      nameCol = idx;
     }
   });
 
@@ -158,62 +158,33 @@ export function analyzeTableRows(
 
   if (rawXCol === -1 || rawYCol === -1) {
     if (numIndices.length >= 2) {
-      if (numIndices.length >= 3 && idCol === -1) {
-        idCol = numIndices[0] === 0 ? 0 : -1;
-        rawXCol = numIndices[1];
-        rawYCol = numIndices[2];
-        if (numIndices.length >= 4) zCol = numIndices[3];
-      } else {
-        rawXCol = numIndices[0];
-        rawYCol = numIndices[1];
-        if (numIndices.length >= 3 && zCol === -1) zCol = numIndices[2];
-      }
+      rawXCol = numIndices[0];
+      rawYCol = numIndices[1];
+      if (numIndices.length >= 3 && zCol === -1) zCol = numIndices[2];
     } else {
       rawXCol = 0;
       rawYCol = 1;
     }
   }
 
-  if (idCol === -1) {
-    // If column 0 is not X or Y, use it as ID
-    idCol = rawXCol !== 0 && rawYCol !== 0 ? 0 : 0;
-  }
-
-  // If item record column is not set, look for the first non-numeric column that isn't ID
+  // If item record column is not set, look for the first non-numeric column
   if (nameCol === -1) {
     for (let c = 0; c < headers.length; c++) {
-      if (c !== idCol && c !== rawXCol && c !== rawYCol && c !== zCol) {
+      if (c !== rawXCol && c !== rawYCol && c !== zCol) {
         nameCol = c;
         break;
       }
     }
   }
 
-  // Heuristic for Korean TM coordinates (EPSG:5186 / 5187):
-  // Korean field survey instruments usually log: X = Northing (500,000 ~ 650,000) and Y = Easting (150,000 ~ 300,000).
-  // AutoCAD canvas expects: X = Easting (Horizontal, 200k), Y = Northing (Vertical, 500k).
-  // When rawX > 350,000 and rawY < 350,000, swapXY MUST be true!
-  let shouldSwap = false;
-  if (dataRows.length > 0) {
-    const testRow = dataRows[0];
-    const val1 = Number(testRow[rawXCol]);
-    const val2 = Number(testRow[rawYCol]);
-
-    if (!isNaN(val1) && !isNaN(val2)) {
-      if (val1 > 350000 && val2 < 350000) {
-        shouldSwap = true;
-      }
-    }
-  }
-
+  // Default CAD mapping without coordinate swapping as requested
   const mapping: CSVColumnMapping = {
-    idCol: idCol >= 0 ? idCol : 0,
     xCol: rawXCol >= 0 ? rawXCol : 0,
     yCol: rawYCol >= 0 ? rawYCol : 1,
     zCol: zCol !== -1 ? zCol : undefined,
     nameCol: nameCol !== -1 ? nameCol : undefined,
-    swapXY: shouldSwap,
-    includeElevation: false // Default to false: 2D drawings exclude elevation unless user opts in
+    swapXY: false,
+    includeElevation: false
   };
 
   return {
@@ -257,17 +228,14 @@ export function buildCADPointsFromCSV(
       return; // Skip invalid row
     }
 
-    // In CAD: X is Horizontal (Easting), Y is Vertical (Northing)
+    // Direct CAD coordinates (X = Horizontal, Y = Vertical)
     let cadX = rawValX;
     let cadY = rawValY;
-
     if (mapping.swapXY) {
       cadX = rawValY;
       cadY = rawValX;
     }
 
-    const idVal = mapping.idCol >= 0 && row[mapping.idCol] ? row[mapping.idCol].trim() : String(idx + 1);
-    
     // Elevation Z: Only included if includeElevation is true and zCol is specified
     let zVal: number | undefined = undefined;
     if (mapping.includeElevation && mapping.zCol !== undefined && mapping.zCol >= 0 && row[mapping.zCol]) {
@@ -276,25 +244,21 @@ export function buildCADPointsFromCSV(
         zVal = parsedZ;
       }
     }
-    
-    // Item record / description / remark
-    let itemRecord = '';
-    if (mapping.nameCol !== undefined && mapping.nameCol >= 0 && row[mapping.nameCol]) {
-      itemRecord = row[mapping.nameCol].trim();
+
+    // Item record text (항목) - Pure string without any 'PT-' prefix
+    let nameVal = '';
+    if (mapping.nameCol !== undefined && mapping.nameCol >= 0 && row[mapping.nameCol] !== undefined) {
+      nameVal = row[mapping.nameCol].trim();
+    } else if (mapping.idCol !== undefined && mapping.idCol >= 0 && row[mapping.idCol] !== undefined) {
+      nameVal = row[mapping.idCol].trim();
     }
 
-    // Name formatting: If item record exists, display "ID [항목]" or "항목"
-    let nameVal = `PT-${idVal}`;
-    if (itemRecord) {
-      if (itemRecord.toLowerCase() === idVal.toLowerCase()) {
-        nameVal = idVal;
-      } else {
-        nameVal = `${idVal} [${itemRecord}]`;
-      }
+    if (!nameVal) {
+      nameVal = String(idx + 1);
     }
 
     points.push({
-      id: `pt-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+      id: `point-${idx + 1}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       name: nameVal,
       x: cadX,
       y: cadY,

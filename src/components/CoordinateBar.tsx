@@ -82,7 +82,7 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
               </div>
             </div>
             <p className="text-[10px] text-slate-400 hidden lg:block">
-              좌표 CSV · 현장 스냅 드로잉 · DXF / SHP 변환 (오프라인 지원)
+              좌표 CSV · 현장 스냅 드로잉 · GIS SHP 변환 (오프라인 지원)
             </p>
           </div>
         </div>
@@ -111,10 +111,10 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
           {/* Export Button */}
           <button
             onClick={onOpenExport}
-            className="flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white text-xs font-medium shadow-md shadow-sky-600/30 transition whitespace-nowrap"
+            className="flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-medium shadow-md shadow-emerald-600/30 transition whitespace-nowrap"
           >
             <Download className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">내보내기 (DXF/SHP)</span>
+            <span className="hidden sm:inline">내보내기 (SHP/CSV)</span>
             <span className="sm:hidden">내보내기</span>
           </button>
 

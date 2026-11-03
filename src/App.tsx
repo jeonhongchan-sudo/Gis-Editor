@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Focus } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { Focus, Trash2, Ruler, X, Check, Layers, CheckSquare } from 'lucide-react';
+import { distance2D } from './utils/geometry';
 import { 
   CADLayer, 
   CADLine, 
@@ -30,6 +31,7 @@ import { OfflineIndicator } from './components/OfflineIndicator';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { db } from './db/localDb.ts';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { SHPParseResult } from './utils/shpParser';
 
 const DEFAULT_LAYERS: CADLayer[] = [
   {
@@ -84,10 +86,15 @@ export default function App() {
   const [texts, setTexts] = useState<CADText[]>([]);
 
   // Selection & Tools
-  const [tool, setTool] = useState<ToolMode>('polyline');
+  const [tool, setTool] = useState<ToolMode>('pan');
   const [ortho, setOrtho] = useState<boolean>(false);
   const [snapEnabled, setSnapEnabled] = useState<boolean>(true);
-  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [selectedEntityIds, setSelectedEntityIds] = useState<string[]>([]);
+  const [multiSelectMode, setMultiSelectMode] = useState<boolean>(false);
+  const selectedEntityId = selectedEntityIds[0] || null;
+  const setSelectedEntityId = useCallback((id: string | null) => {
+    setSelectedEntityIds(id ? [id] : []);
+  }, []);
 
   // Active Drawing State
   const [activePoints, setActivePoints] = useState<Point2D[]>([]);
@@ -204,11 +211,21 @@ export default function App() {
         handleRedo();
       } else if (e.key === 'Escape') {
         setActivePoints([]);
-        setSelectedEntityId(null);
+        setSelectedEntityIds([]);
       } else if (e.key === 'Enter') {
         handleFinishDrawing();
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        const allIds = [
+          ...points.map(p => p.id),
+          ...lines.map(l => l.id),
+          ...polylines.map(pl => pl.id),
+          ...polygons.map(pg => pg.id),
+          ...texts.map(t => t.id)
+        ];
+        setSelectedEntityIds(allIds);
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedEntityId) handleDeleteSelected();
+        if (selectedEntityIds.length > 0) handleDeleteSelected();
       } else if (e.key.toLowerCase() === 'z') {
         lastKeySequenceRef.current = { key: 'z', time: Date.now() };
       } else if (e.key.toLowerCase() === 'e') {
@@ -220,7 +237,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleUndo, handleRedo, handleZoomExtents, selectedEntityId, activePoints]);
+  }, [handleUndo, handleRedo, handleZoomExtents, selectedEntityIds, activePoints, points, lines, polylines, polygons, texts]);
 
   const saveEntityToDb = async (type: 'points'|'lines'|'polylines'|'polygons'|'texts', data: any) => {
     if (currentProjectId === null) {
@@ -290,26 +307,54 @@ export default function App() {
   };
 
   const handleDeleteSelected = async () => {
-    if (!selectedEntityId || currentProjectId === null) return;
+    if (selectedEntityIds.length === 0 || currentProjectId === null) return;
+    const idSet = new Set(selectedEntityIds);
     
     // UI state removal
-    setPoints(pts => pts.filter(p => p.id !== selectedEntityId));
-    setLines(ls => ls.filter(l => l.id !== selectedEntityId));
-    setPolylines(pls => pls.filter(p => p.id !== selectedEntityId));
-    setPolygons(pgs => pgs.filter(p => p.id !== selectedEntityId));
-    setTexts(txts => txts.filter(t => t.id !== selectedEntityId));
+    setPoints(pts => pts.filter(p => !idSet.has(p.id)));
+    setLines(ls => ls.filter(l => !idSet.has(l.id)));
+    setPolylines(pls => pls.filter(p => !idSet.has(p.id)));
+    setPolygons(pgs => pgs.filter(p => !idSet.has(p.id)));
+    setTexts(txts => txts.filter(t => !idSet.has(t.id)));
     
     // DB removal
     await Promise.all([
-      db.points.where('id').equals(selectedEntityId as any).delete(),
-      db.lines.where('id').equals(selectedEntityId as any).delete(),
-      db.polylines.where('id').equals(selectedEntityId as any).delete(),
-      db.polygons.where('id').equals(selectedEntityId as any).delete(),
-      db.texts.where('id').equals(selectedEntityId as any).delete(),
+      db.points.where('id').anyOf(selectedEntityIds as any).delete(),
+      db.lines.where('id').anyOf(selectedEntityIds as any).delete(),
+      db.polylines.where('id').anyOf(selectedEntityIds as any).delete(),
+      db.polygons.where('id').anyOf(selectedEntityIds as any).delete(),
+      db.texts.where('id').anyOf(selectedEntityIds as any).delete(),
     ]);
 
-    setSelectedEntityId(null);
-    pushHistory('객체 삭제');
+    setSelectedEntityIds([]);
+    pushHistory(`선택 객체 ${selectedEntityIds.length}개 삭제`);
+  };
+
+  const handleBatchChangeLayer = async (targetLayerId: string) => {
+    if (!targetLayerId || selectedEntityIds.length === 0 || currentProjectId === null) return;
+    const idSet = new Set(selectedEntityIds);
+
+    setPoints(prev => prev.map(p => idSet.has(p.id) ? { ...p, layerId: targetLayerId } : p));
+    setLines(prev => prev.map(l => idSet.has(l.id) ? { ...l, layerId: targetLayerId } : l));
+    setPolylines(prev => prev.map(pl => idSet.has(pl.id) ? { ...pl, layerId: targetLayerId } : pl));
+    setPolygons(prev => prev.map(pg => idSet.has(pg.id) ? { ...pg, layerId: targetLayerId } : pg));
+    setTexts(prev => prev.map(t => idSet.has(t.id) ? { ...t, layerId: targetLayerId } : t));
+
+    const ptsToUpdate = points.filter(p => idSet.has(p.id)).map(p => ({ ...p, layerId: targetLayerId, projectId: currentProjectId }));
+    const linesToUpdate = lines.filter(l => idSet.has(l.id)).map(l => ({ ...l, layerId: targetLayerId, projectId: currentProjectId }));
+    const plsToUpdate = polylines.filter(pl => idSet.has(pl.id)).map(pl => ({ ...pl, layerId: targetLayerId, projectId: currentProjectId }));
+    const pgsToUpdate = polygons.filter(pg => idSet.has(pg.id)).map(pg => ({ ...pg, layerId: targetLayerId, projectId: currentProjectId }));
+    const txtsToUpdate = texts.filter(t => idSet.has(t.id)).map(t => ({ ...t, layerId: targetLayerId, projectId: currentProjectId }));
+
+    await Promise.all([
+      ptsToUpdate.length > 0 ? db.points.bulkPut(ptsToUpdate) : Promise.resolve(),
+      linesToUpdate.length > 0 ? db.lines.bulkPut(linesToUpdate) : Promise.resolve(),
+      plsToUpdate.length > 0 ? db.polylines.bulkPut(plsToUpdate) : Promise.resolve(),
+      pgsToUpdate.length > 0 ? db.polygons.bulkPut(pgsToUpdate) : Promise.resolve(),
+      txtsToUpdate.length > 0 ? db.texts.bulkPut(txtsToUpdate) : Promise.resolve(),
+    ]);
+
+    pushHistory(`선택 객체 ${selectedEntityIds.length}개 레이어 일괄 변경`);
   };
 
   const handleDeletePoint = async (id: string) => {
@@ -354,20 +399,31 @@ export default function App() {
     pushHistory('CSV 측점 불러오기');
   };
 
-  const handleImportDXF = async (data: any, append: boolean) => {
+  const handleImportSHP = async (data: SHPParseResult, append: boolean) => {
     let pid = currentProjectId;
     if (pid === null) {
-      pid = await db.projects.add({ name: 'DXF 도면 프로젝트', createdAt: Date.now(), updatedAt: Date.now() });
+      pid = await db.projects.add({ name: 'SHP GIS 프로젝트', createdAt: Date.now(), updatedAt: Date.now() });
       setCurrentProjectId(pid);
     }
 
+    const incomingLayers = data.layers && data.layers.length > 0 ? data.layers : [
+      {
+        id: `layer-${data.layerName}`,
+        name: data.layerName,
+        color: '#38bdf8',
+        visible: true,
+        locked: false,
+        lineWidth: 2
+      }
+    ];
+
     if (!append) {
-      setLayers(data.layers);
+      setLayers(incomingLayers);
       setPoints(data.points);
       setLines(data.lines);
       setPolylines(data.polylines);
       setPolygons(data.polygons);
-      setTexts(data.texts);
+      setTexts([]);
 
       // Clean DB
       await Promise.all([
@@ -380,28 +436,47 @@ export default function App() {
       ]);
     } else {
       const existingLayerNames = new Set(layers.map(l => l.name));
-      const newLayersToAdd = data.layers.filter((l: any) => !existingLayerNames.has(l.name));
+      const newLayersToAdd = incomingLayers.filter(l => !existingLayerNames.has(l.name));
       setLayers(prev => [...prev, ...newLayersToAdd]);
       setPoints(prev => [...prev, ...data.points]);
       setLines(prev => [...prev, ...data.lines]);
       setPolylines(prev => [...prev, ...data.polylines]);
       setPolygons(prev => [...prev, ...data.polygons]);
-      setTexts(prev => [...prev, ...data.texts]);
     }
 
     // Bulk Add to DB
     await Promise.all([
-      db.layers.bulkAdd(data.layers.map((l: any) => ({ ...l, projectId: pid! }))),
-      db.points.bulkAdd(data.points.map((p: any) => ({ ...p, projectId: pid! }))),
-      db.lines.bulkAdd(data.lines.map((l: any) => ({ ...l, projectId: pid! }))),
-      db.polylines.bulkAdd(data.polylines.map((pl: any) => ({ ...pl, projectId: pid! }))),
-      db.polygons.bulkAdd(data.polygons.map((pg: any) => ({ ...pg, projectId: pid! }))),
-      db.texts.bulkAdd(data.texts.map((t: any) => ({ ...t, projectId: pid! })))
+      db.layers.bulkAdd(incomingLayers.map(l => ({ ...l, projectId: pid! }))),
+      db.points.bulkAdd(data.points.map(p => ({ ...p, projectId: pid! }))),
+      db.lines.bulkAdd(data.lines.map(l => ({ ...l, projectId: pid! }))),
+      db.polylines.bulkAdd(data.polylines.map(pl => ({ ...pl, projectId: pid! }))),
+      db.polygons.bulkAdd(data.polygons.map(pg => ({ ...pg, projectId: pid! })))
     ]);
 
     handleZoomExtents();
-    pushHistory('DXF 도면 불러오기');
+    pushHistory('SHP 데이터 불러오기');
   };
+
+  const selPointsCount = points.filter(p => selectedEntityIds.includes(p.id)).length;
+  const selLinesCount = lines.filter(l => selectedEntityIds.includes(l.id)).length + polylines.filter(pl => selectedEntityIds.includes(pl.id)).length;
+  const selPolygonsCount = polygons.filter(pg => selectedEntityIds.includes(pg.id)).length;
+  const selTextsCount = texts.filter(t => selectedEntityIds.includes(t.id)).length;
+
+  const measureSegments = useMemo(() => {
+    if (tool !== 'measure' || activePoints.length < 2) return [];
+    const segs: { index: number; dist: number }[] = [];
+    for (let i = 0; i < activePoints.length - 1; i++) {
+      segs.push({
+        index: i + 1,
+        dist: distance2D(activePoints[i], activePoints[i + 1])
+      });
+    }
+    return segs;
+  }, [tool, activePoints]);
+
+  const measureCumulative = useMemo(() => {
+    return measureSegments.reduce((sum: number, s: { index: number; dist: number }) => sum + s.dist, 0);
+  }, [measureSegments]);
 
   return (
     <div className="relative w-screen h-screen overflow-hidden flex flex-col bg-slate-950 font-sans">
@@ -424,14 +499,182 @@ export default function App() {
         <CADCanvas
           tool={tool} ortho={ortho} snapEnabled={snapEnabled}
           layers={layers} points={points} lines={lines} polylines={polylines} polygons={polygons} texts={texts}
-          activeLayerId={activeLayerId} selectedEntityId={selectedEntityId}
-          onSelectEntity={setSelectedEntityId} onAddPoint={handleAddPoint}
+          activeLayerId={activeLayerId} 
+          selectedEntityId={selectedEntityId}
+          selectedEntityIds={selectedEntityIds}
+          multiSelectMode={multiSelectMode}
+          onSelectEntity={setSelectedEntityId}
+          onSelectEntities={setSelectedEntityIds}
+          onAddPoint={handleAddPoint}
           onAddLine={handleAddLine} onAddPolyline={handleAddPolyline} onAddPolygon={handleAddPolygon}
           onCursorMove={(world, snap) => { setCursorWorld(world); setActiveSnap(snap); }}
           onLiveMeasurementChange={setLiveMeasurement}
           activePoints={activePoints} setActivePoints={setActivePoints}
           zoomExtentsTrigger={zoomExtentsTrigger}
         />
+
+        {/* Floating Multi-Select Action Bar (레이어 일괄 변경 & 일괄 삭제) */}
+        {selectedEntityIds.length > 0 && (
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-2 bg-slate-900/95 backdrop-blur-xl border border-amber-500/80 px-3.5 py-2 sm:px-4 sm:py-2 rounded-2xl shadow-2xl animate-in fade-in slide-in-from-top-3 duration-150 max-w-[95vw]">
+            <div className="flex items-center gap-1.5 text-xs text-amber-400 font-semibold shrink-0">
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+              <span>선택 {selectedEntityIds.length}개</span>
+              <span className="text-[11px] text-slate-400 font-normal hidden sm:inline">
+                (점 {selPointsCount}, 선 {selLinesCount}, 면 {selPolygonsCount}, 텍스트 {selTextsCount})
+              </span>
+            </div>
+
+            {/* Mobile / Desktop Multi-Select Append Mode Toggle */}
+            <button
+              onClick={() => setMultiSelectMode(prev => !prev)}
+              title="스마트폰/PC 누적 선택 모드 (터치마다 추가)"
+              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-medium transition ${
+                multiSelectMode
+                  ? 'bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/30'
+                  : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+              }`}
+            >
+              <CheckSquare className="w-3.5 h-3.5" />
+              <span>{multiSelectMode ? '누적추가 ON' : '+ 추가선택'}</span>
+            </button>
+
+            {/* Layer batch change selector */}
+            <div className="flex items-center gap-1.5 bg-slate-950/80 border border-slate-700/80 rounded-xl px-2 py-1">
+              <Layers className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+              <select
+                onChange={(e) => {
+                  if (e.target.value) {
+                    handleBatchChangeLayer(e.target.value);
+                    e.target.value = '';
+                  }
+                }}
+                defaultValue=""
+                className="bg-transparent text-sky-400 text-xs outline-none cursor-pointer pr-1 font-medium"
+              >
+                <option value="" disabled className="bg-slate-900 text-slate-400">레이어 일괄 변경...</option>
+                {layers.map(l => (
+                  <option key={l.id} value={l.id} className="bg-slate-900 text-slate-200">
+                    {l.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Delete button */}
+            <button
+              onClick={handleDeleteSelected}
+              title="선택된 객체 일괄 삭제"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-red-950/80 hover:bg-red-900 text-red-300 border border-red-800 hover:border-red-700 text-xs font-medium transition"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>삭제</span>
+            </button>
+
+            {/* Select all button */}
+            <button
+              onClick={() => {
+                const allIds = [
+                  ...points.map(p => p.id),
+                  ...lines.map(l => l.id),
+                  ...polylines.map(pl => pl.id),
+                  ...polygons.map(pg => pg.id),
+                  ...texts.map(t => t.id)
+                ];
+                setSelectedEntityIds(allIds);
+              }}
+              title="모든 객체 전체 선택 (Ctrl+A)"
+              className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition"
+            >
+              전체선택
+            </button>
+
+            {/* Deselect button */}
+            <button
+              onClick={() => setSelectedEntityIds([])}
+              title="선택 해제 (Esc)"
+              className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* Guidance pill when select tool is active without selection */}
+        {tool === 'select' && selectedEntityIds.length === 0 && (
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-slate-900/95 backdrop-blur-xl border border-sky-500/70 px-3.5 py-1.5 rounded-full shadow-xl text-xs text-slate-300 animate-in fade-in">
+            <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" />
+            <span>화면을 드래그하여 영역 선택 또는 터치하여 선택</span>
+            <button
+              onClick={() => setMultiSelectMode(prev => !prev)}
+              className={`ml-1 px-2 py-0.5 rounded-md text-[11px] font-semibold transition ${
+                multiSelectMode ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-amber-400 border border-amber-500/30'
+              }`}
+            >
+              {multiSelectMode ? '✓ 다중 누적 ON' : '+ 다중 누적 켜기'}
+            </button>
+          </div>
+        )}
+
+        {/* Floating Multi-Point Distance Measurement Panel (여러 점간 누적 거리 합산) */}
+        {tool === 'measure' && activePoints.length >= 1 && (
+          <div className="fixed top-16 right-2 sm:top-20 sm:right-4 z-30 w-72 sm:w-80 bg-slate-900/95 backdrop-blur-xl border border-cyan-500/80 rounded-2xl shadow-2xl p-3 sm:p-3.5 flex flex-col gap-2 animate-in fade-in slide-in-from-right-3 duration-200">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+              <div className="flex items-center gap-1.5">
+                <Ruler className="w-4 h-4 text-cyan-400" />
+                <h3 className="text-xs font-semibold text-slate-100">거리 및 점간 누적 측정</h3>
+              </div>
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800 font-mono">
+                {activePoints.length}개 지점
+              </span>
+            </div>
+
+            {/* Total Cumulative Sum Card */}
+            <div className="bg-slate-950/90 rounded-xl p-2.5 border border-slate-800/90 flex flex-col">
+              <span className="text-[10px] text-slate-400 font-medium">총 누적 거리 합계 (Total)</span>
+              <div className="flex items-baseline gap-1 mt-0.5">
+                <span className="text-2xl font-bold font-mono text-cyan-400">
+                  {measureCumulative.toFixed(2)}
+                </span>
+                <span className="text-xs text-slate-400 font-sans">m</span>
+                {liveMeasurement.currentSegment > 0 && (
+                  <span className="ml-auto text-[11px] font-mono text-cyan-300/80">
+                    (+{liveMeasurement.currentSegment.toFixed(2)}m)
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Segments List */}
+            {measureSegments.length > 0 && (
+              <div className="flex flex-col gap-1 max-h-32 overflow-y-auto pr-1">
+                <span className="text-[10px] text-slate-500 font-medium">구간별 거리 상세</span>
+                {measureSegments.map((seg: { index: number; dist: number }) => (
+                  <div key={seg.index} className="flex items-center justify-between py-1 px-2 rounded-lg bg-slate-800/50 text-[11px]">
+                    <span className="text-slate-400">P{seg.index} → P{seg.index + 1}</span>
+                    <span className="font-mono text-slate-200 font-semibold">{seg.dist.toFixed(2)} m</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex items-center gap-1.5 pt-1.5 border-t border-slate-800">
+              <button
+                onClick={() => setActivePoints(prev => prev.slice(0, -1))}
+                disabled={activePoints.length === 0}
+                className="flex-1 py-1.5 px-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition text-center"
+              >
+                마지막 점 취소
+              </button>
+              <button
+                onClick={() => setActivePoints([])}
+                className="py-1.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition"
+              >
+                초기화
+              </button>
+            </div>
+          </div>
+        )}
 
         <Toolbar
           tool={tool} setTool={setTool} ortho={ortho} setOrtho={setOrtho}
@@ -442,6 +685,8 @@ export default function App() {
           activePointsCount={activePoints.length}
           onFinishDrawing={handleFinishDrawing}
           onCancelDrawing={() => setActivePoints([])}
+          multiSelectMode={multiSelectMode}
+          setMultiSelectMode={setMultiSelectMode}
         />
 
         <div className="absolute left-4 bottom-18">
@@ -464,7 +709,7 @@ export default function App() {
       {showImportModal && (
         <ImportModal
           onImportCSVPoints={handleImportCSVPoints}
-          onImportDXF={handleImportDXF}
+          onImportSHP={handleImportSHP}
           onLoadProject={handleLoadProject}
           onClose={() => setShowImportModal(false)}
         />

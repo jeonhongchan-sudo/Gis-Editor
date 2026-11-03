@@ -12,50 +12,38 @@ import {
   AlertCircle, 
   ArrowLeftRight,
   Check,
-  ClipboardPaste,
-  HardDrive,
   Languages,
   Loader2,
-  TableProperties,
   Layers,
-  ChevronDown,
-  Info
+  Archive,
+  MapPin,
+  Maximize2
 } from 'lucide-react';
-import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText, ProjectState } from '../types/cad';
+import { CADLayer, CADPoint, ProjectState } from '../types/cad';
 import { 
   CSVColumnMapping, 
   CSVParseResult, 
-  SAMPLE_SURVEY_CSV_EPSG5186, 
   buildCADPointsFromCSV, 
   parseCSVPreview,
   analyzeTableRows 
 } from '../utils/csvParser';
 import { isExcelBuffer, parseExcelWorkbook } from '../utils/excelParser';
-import { parseDXFAsync } from '../utils/dxfParser';
 import { parseShapefileZip, parseShpBuffer, SHPParseResult } from '../utils/shpParser';
 import { decodeBufferText, SupportedEncoding } from '../utils/encoding';
 
 interface ImportModalProps {
   onImportCSVPoints: (points: CADPoint[], append: boolean) => void;
-  onImportDXF: (data: {
-    layers: CADLayer[];
-    points: CADPoint[];
-    lines: CADLine[];
-    polylines: CADPolyline[];
-    polygons: CADPolygon[];
-    texts: CADText[];
-  }, append: boolean) => void;
+  onImportSHP: (data: SHPParseResult, append: boolean) => void;
   onLoadProject: (state: ProjectState) => void;
   onClose: () => void;
 }
 
 export const ImportModal: React.FC<ImportModalProps> = ({
   onImportCSVPoints,
-  onImportDXF,
+  onImportSHP,
   onLoadProject,
   onClose
 }) => {
-  const [activeTab, setActiveTab] = useState<'file' | 'paste'>('file');
   const [appendMode, setAppendMode] = useState<boolean>(true);
 
   // Encoding State
@@ -69,7 +57,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
   const rawBufferRef = useRef<{ buffer: ArrayBuffer; filename: string } | null>(null);
 
-  // Table State
+  // CSV/Excel State
   const [csvPreview, setCsvPreview] = useState<CSVParseResult | null>(null);
   const [isExcelFile, setIsExcelFile] = useState<boolean>(false);
   const [excelSheets, setExcelSheets] = useState<string[]>([]);
@@ -78,19 +66,14 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   const [currentRawRows, setCurrentRawRows] = useState<(string | number)[][] | null>(null);
   const [headerRowIdx, setHeaderRowIdx] = useState<number>(0);
   const [csvMapping, setCsvMapping] = useState<CSVColumnMapping>({
-    idCol: 0, xCol: 1, yCol: 2, zCol: 3, nameCol: 4, swapXY: true, includeElevation: false
+    xCol: 0, yCol: 1, nameCol: 2, zCol: -1, swapXY: false, includeElevation: false
   });
 
-  // DXF State
-  const [dxfFileName, setDxfFileName] = useState<string | null>(null);
-  const [parsedDxfData, setParsedDxfData] = useState<any | null>(null);
-  const [selectedDxfLayers, setSelectedDxfLayers] = useState<Set<string>>(new Set());
-
   // SHP State
-  const [shpStats, setShpStats] = useState<SHPParseResult | null>(null);
+  const [shpResult, setShpResult] = useState<SHPParseResult | null>(null);
   const [shpFileName, setShpFileName] = useState<string | null>(null);
 
-  const [loadedFormat, setLoadedFormat] = useState<'csv' | 'dxf' | 'shp' | 'project' | null>(null);
+  const [loadedFormat, setLoadedFormat] = useState<'csv' | 'shp' | 'project' | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const applyRowsToPreview = (rows: (string | number)[][], headerIdx: number = 0) => {
@@ -110,18 +93,62 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     rawBufferRef.current = { buffer, filename };
     const ext = filename.split('.').pop()?.toLowerCase();
 
-    if (ext === 'shp') {
+    // 1. Project Backup (.cadgis or .json)
+    if (ext === 'cadgis' || (ext === 'json' && !filename.includes('package'))) {
       try {
-        const res = parseShpBuffer(buffer, filename);
-        setShpStats(res);
-        setShpFileName(filename);
-        setLoadedFormat('shp');
-      } catch (err: any) {
-        alert('SHP 파일 분석 실패: ' + err.message);
+        const text = new TextDecoder('utf-8').decode(buffer);
+        const projectData = JSON.parse(text) as ProjectState;
+        if (projectData.points || projectData.lines || projectData.polylines) {
+          onLoadProject(projectData);
+          onClose();
+          return;
+        }
+      } catch (err) {
+        console.warn('Not a project JSON file, continuing to text analysis', err);
       }
-      return;
     }
 
+    // 2. Shapefile Zip (.zip)
+    if (ext === 'zip') {
+      try {
+        setIsParsing(true);
+        setParsingStatusMsg('Shapefile ZIP 압축 파일 분석 중...');
+        setParsingProgress(40);
+        const res = await parseShapefileZip(buffer);
+        setParsingProgress(100);
+        setShpResult(res);
+        setShpFileName(filename);
+        setLoadedFormat('shp');
+        return;
+      } catch (err: any) {
+        alert('ZIP 파일 내 Shapefile 분석 오류: ' + err.message);
+        return;
+      } finally {
+        setIsParsing(false);
+      }
+    }
+
+    // 3. Standalone .shp file
+    if (ext === 'shp') {
+      try {
+        setIsParsing(true);
+        setParsingStatusMsg('ESRI .shp 바이너리 구조 분석 중...');
+        setParsingProgress(50);
+        const res = parseShpBuffer(buffer, filename);
+        setParsingProgress(100);
+        setShpResult(res);
+        setShpFileName(filename);
+        setLoadedFormat('shp');
+        return;
+      } catch (err: any) {
+        alert('SHP 파일 분석 실패: ' + err.message);
+        return;
+      } finally {
+        setIsParsing(false);
+      }
+    }
+
+    // 4. Excel (.xlsx, .xls)
     if (isExcelBuffer(buffer, filename)) {
       try {
         setIsParsing(true);
@@ -143,52 +170,23 @@ export const ImportModal: React.FC<ImportModalProps> = ({
       }
     }
 
+    // 5. CSV / Text
     const { text, detectedEncoding: det } = decodeBufferText(buffer, enc);
     setDetectedEncoding(det);
 
-    if (text.includes('SECTION') && text.includes('ENTITIES')) {
-      setIsParsing(true);
-      setParsingProgress(0);
-      setParsingStatusMsg('도면 레이어 및 객체 분석 중...');
-      setDxfFileName(filename);
-      try {
-        const result = await parseDXFAsync(text, p => setParsingProgress(p));
-        setParsedDxfData(result);
-        setSelectedDxfLayers(new Set(result.layers.map((l: any) => l.name)));
-        setLoadedFormat('dxf');
-      } catch (err: any) {
-        alert('DXF 파싱 오류: ' + err.message);
-      } finally {
-        setIsParsing(false);
-      }
-    } else {
-      try {
-        const res = parseCSVPreview(text, 0);
-        setCsvPreview(res);
-        setCsvMapping(res.detectedMapping);
-        setLoadedFormat('csv');
-      } catch {
-        alert('지원하지 않는 파일 형식이거나 읽을 수 없는 텍스트입니다.');
-      }
+    try {
+      const res = parseCSVPreview(text, 0);
+      setCsvPreview(res);
+      setCsvMapping(res.detectedMapping);
+      setLoadedFormat('csv');
+    } catch {
+      alert('지원하지 않는 파일 형식이거나 읽을 수 없는 텍스트입니다. CSV, XLSX, 또는 SHP(.zip/.shp) 파일을 선택해 주세요.');
     }
   };
 
-  const handleApplyDXF = () => {
-    if (!parsedDxfData) return;
-    
-    // Memory-safe filtering: Only include entities from selected layers
-    const layerIdMap = new Set(Array.from(selectedDxfLayers).map(name => `layer-${name}`));
-
-    const filtered = {
-      layers: parsedDxfData.layers.filter((l: CADLayer) => selectedDxfLayers.has(l.name)),
-      points: parsedDxfData.points.filter((p: CADPoint) => layerIdMap.has(p.layerId)),
-      lines: parsedDxfData.lines.filter((l: CADLine) => layerIdMap.has(l.layerId)),
-      polylines: parsedDxfData.polylines.filter((pl: CADPolyline) => layerIdMap.has(pl.layerId)),
-      polygons: parsedDxfData.polygons.filter((pg: CADPolygon) => layerIdMap.has(pg.layerId)),
-      texts: parsedDxfData.texts.filter((t: CADText) => layerIdMap.has(t.layerId))
-    };
-    
-    onImportDXF(filtered, appendMode);
+  const handleApplySHP = () => {
+    if (!shpResult) return;
+    onImportSHP(shpResult, appendMode);
     onClose();
   };
 
@@ -211,10 +209,10 @@ export const ImportModal: React.FC<ImportModalProps> = ({
           <div>
             <h2 className="text-sm sm:text-base font-semibold text-white flex items-center gap-2">
               <Upload className="w-4 h-4 sm:w-5 sm:h-5 text-sky-400" />
-              <span>도면 & 좌표 데이터 불러오기</span>
+              <span>좌표 및 도면 불러오기 (CSV / SHP)</span>
             </h2>
             <p className="text-[11px] sm:text-xs text-slate-400 mt-0.5">
-              기기 내부의 엑셀, CSV, DXF 파일을 인터넷 연결 없이 안전하게 불러옵니다.
+              인터넷 연결 없이 기기 내부의 엑셀, CSV, Shapefile(.zip / .shp) 파일을 안전하게 불러옵니다.
             </p>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition">
@@ -226,21 +224,21 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         <div className="px-3.5 py-2.5 bg-slate-950/70 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
           <div className="flex items-center gap-1.5 flex-wrap">
             <Languages className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-            <span className="text-slate-400 text-[11px]">문자 인코딩:</span>
+            <span className="text-slate-400 text-[11px]">텍스트 인코딩:</span>
             <select
               value={selectedEncoding}
               onChange={e => {
                 setSelectedEncoding(e.target.value as any);
                 if (rawBufferRef.current) processBuffer(rawBufferRef.current.buffer, rawBufferRef.current.filename, e.target.value as any);
               }}
-              disabled={isExcelFile}
+              disabled={isExcelFile || loadedFormat === 'shp'}
               className="bg-slate-800 border border-slate-700 text-sky-300 text-xs rounded-lg px-2 py-1 focus:outline-none"
             >
               <option value="auto">자동 감지 (CP949 / UTF-8)</option>
-              <option value="euc-kr">CP949 / EUC-KR (한국 캐드 표준)</option>
+              <option value="euc-kr">CP949 / EUC-KR (한국 지적/측량 표준)</option>
               <option value="utf-8">UTF-8 (유니코드)</option>
             </select>
-            {detectedEncoding && (
+            {detectedEncoding && loadedFormat === 'csv' && (
               <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-950 border border-emerald-800 text-emerald-400 font-medium uppercase">
                 {detectedEncoding} 적용됨
               </span>
@@ -254,7 +252,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
             </label>
             <label className="flex items-center gap-1.5 cursor-pointer text-slate-400 text-[11px]">
               <input type="radio" checked={!appendMode} onChange={() => setAppendMode(false)} className="text-sky-500" />
-              <span>새로 시작 (기존 데이터 삭제)</span>
+              <span>새로 시작 (기존 데이터 교체)</span>
             </label>
           </div>
         </div>
@@ -268,7 +266,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
             >
               <input
                 ref={fileInputRef} type="file" className="hidden"
-                accept=".xlsx,.xls,.csv,.txt,.dxf,.shp"
+                accept=".xlsx,.xls,.csv,.txt,.shp,.zip,.cadgis"
                 onChange={async e => {
                   const file = e.target.files?.[0];
                   if (file) processBuffer(await file.arrayBuffer(), file.name, selectedEncoding);
@@ -278,8 +276,18 @@ export const ImportModal: React.FC<ImportModalProps> = ({
               <div className="w-16 h-16 rounded-3xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 group-hover:scale-105 transition">
                 {isParsing ? <Loader2 className="w-8 h-8 animate-spin" /> : <Upload className="w-8 h-8" />}
               </div>
-              <div className="text-lg font-bold text-white">파일 선택</div>
-              <p className="text-sm text-slate-400">도면(DXF), 엑셀(XLSX), 측량값(CSV)을 지원합니다.</p>
+              <div className="text-lg font-bold text-white">파일 선택하여 불러오기</div>
+              <p className="text-sm text-slate-400">
+                측량 좌표(<strong>CSV / XLSX</strong>), GIS 도형(<strong>SHP / ZIP</strong>), 누적 프로젝트(<strong>.cadgis</strong>)를 지원합니다.
+              </p>
+              <div className="flex items-center gap-2 mt-2">
+                <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-[11px] text-emerald-400 border border-slate-700">
+                  ✓ CSV / 엑셀 좌표 (X, Y, Z)
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-[11px] text-sky-400 border border-slate-700">
+                  ✓ ESRI Shapefile (.shp / .zip)
+                </span>
+              </div>
             </div>
           )}
 
@@ -295,38 +303,68 @@ export const ImportModal: React.FC<ImportModalProps> = ({
             </div>
           )}
 
-          {/* DXF Layer Selector */}
-          {loadedFormat === 'dxf' && parsedDxfData && (
+          {/* SHP Preview & Confirmation */}
+          {loadedFormat === 'shp' && shpResult && (
             <div className="space-y-4 animate-in fade-in">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-                  <Layers className="w-4 h-4 text-sky-400" />
-                  레이어 선택 ({selectedDxfLayers.size}/{parsedDxfData.layers.length})
-                </h3>
-                <div className="flex gap-2">
-                  <button onClick={() => setSelectedDxfLayers(new Set(parsedDxfData.layers.map((l: any) => l.name)))} className="text-[10px] text-sky-400">전체 선택</button>
-                  <button onClick={() => setSelectedDxfLayers(new Set())} className="text-[10px] text-slate-400">해제</button>
+              <div className="p-4 bg-slate-950 border border-emerald-700/60 rounded-2xl space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                  <div className="flex items-center gap-2">
+                    <Archive className="w-5 h-5 text-emerald-400" />
+                    <div>
+                      <h3 className="text-sm font-semibold text-white">
+                        {shpFileName || 'Shapefile 데이터'}
+                      </h3>
+                      <p className="text-[11px] text-slate-400">
+                        ESRI 표준 Shapefile 도형 데이터가 정상 분석되었습니다.
+                      </p>
+                    </div>
+                  </div>
+                  <span className="px-2 py-0.5 rounded text-[11px] bg-emerald-950 border border-emerald-800 text-emerald-300 font-semibold">
+                    SHP 정상
+                  </span>
                 </div>
+
+                {/* Geometry Stats Grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl text-center">
+                    <div className="text-[10px] text-slate-400">측점 (Point)</div>
+                    <div className="text-lg font-bold text-sky-400 mt-0.5">{shpResult.points.length}개</div>
+                  </div>
+                  <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl text-center">
+                    <div className="text-[10px] text-slate-400">선 (Polyline)</div>
+                    <div className="text-lg font-bold text-amber-400 mt-0.5">{shpResult.polylines.length + shpResult.lines.length}개</div>
+                  </div>
+                  <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl text-center">
+                    <div className="text-[10px] text-slate-400">구역 (Polygon)</div>
+                    <div className="text-lg font-bold text-emerald-400 mt-0.5">{shpResult.polygons.length}개</div>
+                  </div>
+                  <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl text-center">
+                    <div className="text-[10px] text-slate-400">생성 레이어</div>
+                    <div className="text-lg font-bold text-purple-400 mt-0.5">{shpResult.layers.length}개</div>
+                  </div>
+                </div>
+
+                {/* Bounds / Coordinate Extents */}
+                {shpResult.bounds && (
+                  <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl text-[11px] text-slate-300 flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 text-slate-400">
+                      <Maximize2 className="w-3.5 h-3.5 text-sky-400" />
+                      <span>도면 영역 (좌표 범위):</span>
+                    </div>
+                    <span className="font-mono text-slate-200">
+                      X: [{shpResult.bounds.minX.toFixed(1)} ~ {shpResult.bounds.maxX.toFixed(1)}] · 
+                      Y: [{shpResult.bounds.minY.toFixed(1)} ~ {shpResult.bounds.maxY.toFixed(1)}]
+                    </span>
+                  </div>
+                )}
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-60 overflow-y-auto p-2 bg-slate-950 rounded-xl custom-scrollbar border border-slate-800">
-                {parsedDxfData.layers.map((l: CADLayer) => (
-                  <label key={l.name} className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition ${selectedDxfLayers.has(l.name) ? 'bg-sky-500/20 border-sky-500/50' : 'bg-slate-900 border-transparent hover:border-slate-700'} border`}>
-                    <input
-                      type="checkbox" checked={selectedDxfLayers.has(l.name)}
-                      onChange={() => {
-                        const next = new Set(selectedDxfLayers);
-                        if (next.has(l.name)) next.delete(l.name); else next.add(l.name);
-                        setSelectedDxfLayers(next);
-                      }}
-                      className="hidden"
-                    />
-                    <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: l.color || '#38bdf8' }} />
-                    <span className="text-[11px] text-slate-200 truncate">{l.name}</span>
-                  </label>
-                ))}
-              </div>
-              <button onClick={handleApplyDXF} className="w-full py-3 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl shadow-lg transition active:scale-95">
-                선택한 레이어 도면에 배치하기
+
+              <button
+                onClick={handleApplySHP}
+                className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold rounded-xl shadow-lg shadow-emerald-600/30 transition active:scale-95 flex items-center justify-center gap-2"
+              >
+                <Check className="w-4 h-4" />
+                <span>SHP 데이터 도면에 배치하기 (화면 자동맞춤)</span>
               </button>
             </div>
           )}
@@ -335,47 +373,147 @@ export const ImportModal: React.FC<ImportModalProps> = ({
           {loadedFormat === 'csv' && csvPreview && (
             <div className="space-y-4 animate-in fade-in">
               <div className="bg-slate-950 border border-slate-800 p-4 rounded-2xl space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 px-3 py-1 bg-emerald-950/50 border border-emerald-700/50 rounded-lg text-emerald-400 text-[11px] font-bold">
-                    <Check className="w-3 h-3" /> 측점 {csvPreview.totalRows.toLocaleString()}개 감지됨
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
+                  <div className="flex items-center gap-2 px-3 py-1 bg-emerald-950/60 border border-emerald-700/60 rounded-lg text-emerald-400 text-[11px] font-bold">
+                    <Check className="w-3.5 h-3.5" /> 측점 {csvPreview.totalRows.toLocaleString()}개 감지됨
                   </div>
-                  <button
-                    onClick={() => setCsvMapping(m => ({ ...m, swapXY: !m.swapXY }))}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[11px] font-bold transition ${csvMapping.swapXY ? 'bg-amber-950/50 border-amber-700 text-amber-300' : 'bg-slate-800 border-slate-700 text-slate-400'}`}
-                  >
-                    <ArrowLeftRight className="w-3 h-3" /> {csvMapping.swapXY ? 'X ⇄ Y 반전됨 (CAD 권장)' : '반전 없음'}
-                  </button>
+                  <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-sky-400 inline-block"></span>
+                    <span>캐드 좌표계 기준 (X: 수평, Y: 수직) · 항목 텍스트 표시</span>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  {['측점 ID', 'CAD X (동향)', 'CAD Y (북향)', '항목/비고'].map((label, idx) => {
-                    const fields = ['idCol', 'xCol', 'yCol', 'nameCol'] as const;
-                    const field = fields[idx];
-                    return (
-                      <div key={field} className="space-y-1.5">
-                        <label className="text-[10px] text-slate-500 font-bold ml-1">{label}</label>
-                        <select
-                          value={csvMapping[field] ?? -1}
-                          onChange={e => setCsvMapping({ ...csvMapping, [field]: parseInt(e.target.value) })}
-                          className="w-full bg-slate-900 border border-slate-700 text-white text-[11px] rounded-lg p-1.5"
-                        >
-                          {field === 'nameCol' && <option value={-1}>사용 안함</option>}
-                          {csvPreview.headers.map((h, i) => <option key={i} value={i}>{h}</option>)}
-                        </select>
-                      </div>
-                    );
-                  })}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] text-sky-400 font-bold ml-1 flex items-center gap-1">
+                      <span>CAD X 좌표 (수평)</span>
+                      <span className="text-red-400">*</span>
+                    </label>
+                    <select
+                      value={csvMapping.xCol}
+                      onChange={e => setCsvMapping(m => ({ ...m, xCol: parseInt(e.target.value) }))}
+                      className="w-full bg-slate-900 border border-slate-700 text-white text-xs rounded-xl p-2.5 focus:outline-none focus:ring-1 focus:ring-sky-500 font-medium"
+                    >
+                      {csvPreview.headers.map((h, i) => (
+                        <option key={i} value={i}>{h} (열 {i + 1})</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] text-sky-400 font-bold ml-1 flex items-center gap-1">
+                      <span>CAD Y 좌표 (수직)</span>
+                      <span className="text-red-400">*</span>
+                    </label>
+                    <select
+                      value={csvPreview.headers.length > 1 ? csvMapping.yCol : 0}
+                      onChange={e => setCsvMapping(m => ({ ...m, yCol: parseInt(e.target.value) }))}
+                      className="w-full bg-slate-900 border border-slate-700 text-white text-xs rounded-xl p-2.5 focus:outline-none focus:ring-1 focus:ring-sky-500 font-medium"
+                    >
+                      {csvPreview.headers.map((h, i) => (
+                        <option key={i} value={i}>{h} (열 {i + 1})</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] text-amber-400 font-bold ml-1 flex items-center gap-1">
+                      <span>항목 (도면 표시 텍스트)</span>
+                      <span className="text-red-400">*</span>
+                    </label>
+                    <select
+                      value={csvMapping.nameCol ?? -1}
+                      onChange={e => setCsvMapping(m => ({ ...m, nameCol: parseInt(e.target.value) }))}
+                      className="w-full bg-slate-900 border border-amber-500/40 text-amber-200 text-xs rounded-xl p-2.5 focus:outline-none focus:ring-1 focus:ring-amber-500 font-medium"
+                    >
+                      <option value={-1}>사용 안함 (기본 번호)</option>
+                      {csvPreview.headers.map((h, i) => (
+                        <option key={i} value={i}>{h} (열 {i + 1})</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
+
+                {/* Optional Z elevation */}
+                {csvPreview.headers.length > 2 && (
+                  <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-slate-300 font-medium">표고(고도 Z) 속성:</span>
+                      <select
+                        value={csvMapping.zCol ?? -1}
+                        onChange={e => {
+                          const val = parseInt(e.target.value);
+                          setCsvMapping(m => ({
+                            ...m,
+                            zCol: val,
+                            includeElevation: val >= 0
+                          }));
+                        }}
+                        className="bg-slate-900 border border-slate-700 text-white text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-sky-500 font-medium"
+                      >
+                        <option value={-1}>사용 안함 (고도 제외)</option>
+                        {csvPreview.headers.map((h, i) => (
+                          <option key={i} value={i}>{h} (열 {i + 1})</option>
+                        ))}
+                      </select>
+                    </div>
+                    <span className="text-[11px] text-slate-400">
+                      * 측점표 및 SHP/CSV 내보내기 속성에만 저장되며, 도면 라벨에는 표시되지 않습니다.
+                    </span>
+                  </div>
+                )}
+
+                {/* Data Preview Table */}
+                {csvPreview.sampleRows.length > 0 && (
+                  <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
+                    <div className="text-[10px] text-slate-400 font-semibold flex items-center justify-between">
+                      <span>데이터 미리보기 (상위 {Math.min(3, csvPreview.sampleRows.length)}행)</span>
+                      <span className="text-slate-500">도면에는 점과 함께 항목 텍스트가 표시됩니다</span>
+                    </div>
+                    <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/60 text-[11px]">
+                      <table className="w-full text-left font-mono">
+                        <thead className="bg-slate-950/80 text-slate-400 border-b border-slate-800 text-[10px]">
+                          <tr>
+                            <th className="py-1.5 px-3">CAD X</th>
+                            <th className="py-1.5 px-3">CAD Y</th>
+                            <th className="py-1.5 px-3 text-amber-300">항목 (텍스트)</th>
+                            {csvMapping.includeElevation && <th className="py-1.5 px-3">표고(Z)</th>}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                          {csvPreview.sampleRows.slice(0, 3).map((row, rIdx) => (
+                            <tr key={rIdx} className="hover:bg-slate-800/30">
+                              <td className="py-1.5 px-3 text-sky-400">{row[csvMapping.xCol] || '-'}</td>
+                              <td className="py-1.5 px-3 text-sky-400">{row[csvMapping.yCol] || '-'}</td>
+                              <td className="py-1.5 px-3 font-semibold text-amber-300">
+                                {csvMapping.nameCol !== undefined && csvMapping.nameCol >= 0 ? (row[csvMapping.nameCol] || '-') : String(rIdx + 1)}
+                              </td>
+                              {csvMapping.includeElevation && (
+                                <td className="py-1.5 px-3 text-slate-400">
+                                  {csvMapping.zCol !== undefined && csvMapping.zCol >= 0 ? (row[csvMapping.zCol] || '-') : '-'}
+                                </td>
+                              )}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </div>
-              <button onClick={handleApplyCSV} className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg transition active:scale-95">
-                데이터 도면에 배치하기
+              <button 
+                onClick={handleApplyCSV} 
+                className="w-full py-3.5 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white font-bold rounded-xl shadow-lg shadow-sky-600/30 transition active:scale-95 flex items-center justify-center gap-2"
+              >
+                <Check className="w-4 h-4" />
+                <span>측점 데이터 도면에 배치하기 (화면 자동맞춤)</span>
               </button>
             </div>
           )}
         </div>
 
         <div className="p-4 border-t border-slate-800 flex justify-between bg-slate-950/50">
-          <button onClick={() => setLoadedFormat(null)} className="px-4 py-2 text-xs text-slate-400 hover:text-white transition">뒤로가기</button>
+          <button onClick={() => setLoadedFormat(null)} className="px-4 py-2 text-xs text-slate-400 hover:text-white transition">다른 파일 선택</button>
           <button onClick={onClose} className="px-6 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl transition">닫기</button>
         </div>
       </div>

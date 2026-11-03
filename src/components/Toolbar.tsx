@@ -20,7 +20,8 @@ import {
   X,
   Compass,
   ChevronUp,
-  ChevronDown
+  ChevronDown,
+  CheckSquare
 } from 'lucide-react';
 import { ToolMode } from '../types/cad';
 
@@ -39,6 +40,8 @@ interface ToolbarProps {
   activePointsCount: number;
   onFinishDrawing: () => void;
   onCancelDrawing: () => void;
+  multiSelectMode?: boolean;
+  setMultiSelectMode?: (val: boolean | ((prev: boolean) => boolean)) => void;
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({
@@ -55,7 +58,9 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onZoomExtents,
   activePointsCount,
   onFinishDrawing,
-  onCancelDrawing
+  onCancelDrawing,
+  multiSelectMode = false,
+  setMultiSelectMode
 }) => {
   const [mobileExpanded, setMobileExpanded] = useState(false);
 
@@ -66,7 +71,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         {/* Pointer / Select */}
         <button
           onClick={() => setTool('select')}
-          title="객체 선택 (Select)"
+          title="객체 다중 선택 (마우스 드래그로 영역 상자 선택 / Shift+클릭)"
           className={`p-2.5 rounded-xl transition flex items-center justify-center ${
             tool === 'select'
               ? 'bg-sky-500 text-white shadow-lg shadow-sky-500/30'
@@ -79,7 +84,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         {/* Pan */}
         <button
           onClick={() => setTool('pan')}
-          title="화면 이동 (Pan)"
+          title="화면 이동 (Shift+드래그 시 바로 영역 선택)"
           className={`p-2.5 rounded-xl transition flex items-center justify-center ${
             tool === 'pan'
               ? 'bg-sky-500 text-white shadow-lg shadow-sky-500/30'
@@ -87,6 +92,22 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           }`}
         >
           <Hand className="w-5 h-5" />
+        </button>
+
+        {/* Multi-Select Mode Toggle (터치/클릭마다 누적 선택) */}
+        <button
+          onClick={() => setMultiSelectMode?.(prev => !prev)}
+          title={multiSelectMode ? "다중 선택 모드 켜짐 (터치/클릭할 때마다 추가) - 클릭하여 끄기" : "다중 선택 모드 (스마트폰/PC에서 Shift 없이 터치/클릭마다 추가 선택)"}
+          className={`p-2.5 rounded-xl transition flex items-center justify-center relative ${
+            multiSelectMode
+              ? 'bg-amber-500 text-slate-950 font-bold shadow-lg shadow-amber-500/30'
+              : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+          }`}
+        >
+          <CheckSquare className="w-5 h-5" />
+          {multiSelectMode && (
+            <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-amber-300 rounded-full animate-ping" />
+          )}
         </button>
 
         <div className="w-full h-px bg-slate-700/60 my-0.5" />
@@ -256,7 +277,21 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             }`}
           >
             <MousePointer className="w-4 h-4" />
-            <span className="text-[9px]">선택</span>
+            <span className="text-[9px]">영역선택</span>
+          </button>
+
+          {/* Multi-Select Toggle for Smartphone / Tablet */}
+          <button
+            onClick={() => setMultiSelectMode?.(prev => !prev)}
+            className={`p-2 rounded-xl transition flex flex-col items-center gap-0.5 relative ${
+              multiSelectMode ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400'
+            }`}
+          >
+            <CheckSquare className="w-4 h-4" />
+            <span className="text-[9px]">{multiSelectMode ? '다중 ON' : '다중선택'}</span>
+            {multiSelectMode && (
+              <span className="absolute top-1 right-1 w-1.5 h-1.5 bg-amber-950 rounded-full animate-ping" />
+            )}
           </button>
 
           {/* Pan */}

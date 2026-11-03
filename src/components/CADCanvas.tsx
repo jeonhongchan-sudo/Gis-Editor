@@ -4,9 +4,28 @@
  */
 
 import React, { useRef, useEffect, useCallback, useState, useMemo } from 'react';
-import { Focus } from 'lucide-react';
-import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText, Point2D, SnapPoint, SnapType, ToolMode } from '../types/cad';
-import { distance2D, findSnapPoint } from '../utils/geometry';
+import { Focus, MapPin } from 'lucide-react';
+import { 
+  CADLayer, 
+  CADLine, 
+  CADPoint, 
+  CADPolygon, 
+  CADPolyline, 
+  CADText, 
+  Point2D, 
+  SnapPoint, 
+  SnapType, 
+  ToolMode 
+} from '../types/cad';
+import { 
+  distance2D, 
+  findSnapPoint, 
+  closestPointOnSegment, 
+  isPointInBox, 
+  isLineInOrIntersectBox, 
+  isPolylineInOrIntersectBox, 
+  BoundingBox2D 
+} from '../utils/geometry';
 
 interface CADCanvasProps {
   tool: ToolMode;
@@ -19,8 +38,11 @@ interface CADCanvasProps {
   polygons: CADPolygon[];
   texts: CADText[];
   activeLayerId: string;
-  selectedEntityId: string | null;
-  onSelectEntity: (id: string | null) => void;
+  selectedEntityId?: string | null;
+  selectedEntityIds?: string[];
+  multiSelectMode?: boolean;
+  onSelectEntity?: (id: string | null) => void;
+  onSelectEntities?: (ids: string[]) => void;
   onAddPoint: (point: CADPoint) => void;
   onAddLine: (line: CADLine) => void;
   onAddPolyline: (polyline: CADPolyline) => void;
@@ -44,7 +66,10 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
   texts,
   activeLayerId,
   selectedEntityId,
+  selectedEntityIds = [],
+  multiSelectMode = false,
   onSelectEntity,
+  onSelectEntities,
   onAddPoint,
   onAddLine,
   onAddPolyline,
@@ -70,6 +95,58 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
   const panStartRef = useRef<{ clientX: number; clientY: number; panX: number; panY: number } | null>(null);
   const touchStartRef = useRef<{ dist: number; midX: number; midY: number; panX: number; panY: number; zoom: number } | null>(null);
 
+  // Marquee selection box in screen coordinates
+  const [selectionBox, setSelectionBox] = useState<{
+    startScreen: { x: number; y: number };
+    currentScreen: { x: number; y: number };
+  } | null>(null);
+
+  // Pointer down position & timestamp to detect drag vs click
+  const pointerDownPosRef = useRef<{
+    clientX: number;
+    clientY: number;
+    screenX: number;
+    screenY: number;
+    time: number;
+    button: number;
+  } | null>(null);
+
+  // Spacebar pan toggle
+  const [isSpacePressed, setIsSpacePressed] = useState(false);
+
+  // Toast / feedback message when polyline click is not on a node
+  const [nodeHintToast, setNodeHintToast] = useState<string | null>(null);
+  const hintTimeoutRef = useRef<any>(null);
+
+  const showNodeHint = (msg: string) => {
+    if (hintTimeoutRef.current) clearTimeout(hintTimeoutRef.current);
+    setNodeHintToast(msg);
+    hintTimeoutRef.current = setTimeout(() => {
+      setNodeHintToast(null);
+    }, 2400);
+  };
+
+  // Listen for Spacebar key to enable pan freely while drawing
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement)?.tagName === 'INPUT' || (e.target as HTMLElement)?.tagName === 'SELECT') return;
+      if (e.code === 'Space' && !e.repeat) {
+        setIsSpacePressed(true);
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setIsSpacePressed(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, []);
+
   // Quick lookup for layer visibility and color
   const layerMap = useRef<Map<string, CADLayer>>(new Map());
   useEffect(() => {
@@ -77,6 +154,17 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     layers.forEach(l => map.set(l.id, l));
     layerMap.current = map;
   }, [layers]);
+
+  // Unified selected entity Set for ultra-fast O(1) checks
+  const selectedSet = useMemo(() => {
+    const set = new Set<string>();
+    if (selectedEntityIds && selectedEntityIds.length > 0) {
+      selectedEntityIds.forEach(id => set.add(id));
+    } else if (selectedEntityId) {
+      set.add(selectedEntityId);
+    }
+    return set;
+  }, [selectedEntityIds, selectedEntityId]);
 
   // Coordinate transforms
   const worldToScreen = useCallback((world: Point2D, width: number, height: number) => {
@@ -97,7 +185,13 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     };
   }, [view]);
 
-  // Zoom to fit all entities or specific target points (e.g. newly placed CSV survey points)
+  // Stable ref to entities so zoomExtents never causes view jumps on layer change
+  const entitiesRef = useRef({ points, lines, polylines, polygons, texts });
+  useEffect(() => {
+    entitiesRef.current = { points, lines, polylines, polygons, texts };
+  }, [points, lines, polylines, polygons, texts]);
+
+  // Zoom to fit all entities or specific target points (Invoked on Z-E button, Z-E shortcut, or file import)
   const zoomExtents = useCallback((targetPoints?: Point2D[]) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -117,11 +211,12 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     if (targetPoints && targetPoints.length > 0) {
       targetPoints.forEach(consider);
     } else {
-      points.forEach(consider);
-      lines.forEach(l => { consider(l.start); consider(l.end); });
-      polylines.forEach(pl => pl.points.forEach(consider));
-      polygons.forEach(pg => pg.points.forEach(consider));
-      texts.forEach(t => consider({ x: t.x, y: t.y }));
+      const { points: curPoints, lines: curLines, polylines: curPls, polygons: curPgs, texts: curTexts } = entitiesRef.current;
+      curPoints.forEach(consider);
+      curLines.forEach(l => { consider(l.start); consider(l.end); });
+      curPls.forEach(pl => pl.points.forEach(consider));
+      curPgs.forEach(pg => pg.points.forEach(consider));
+      curTexts.forEach(t => consider({ x: t.x, y: t.y }));
     }
 
     if (count === 0) return;
@@ -135,7 +230,6 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     const worldHeight = maxY - minY;
 
     if (!isFinite(worldWidth) || !isFinite(worldHeight) || worldWidth <= 0 || worldHeight <= 0) {
-      // Fallback if dimensions are invalid
       setView({
         panX: isFinite(minX + maxX) ? (minX + maxX) / 2 : 0,
         panY: isFinite(minY + maxY) ? (minY + maxY) / 2 : 0,
@@ -153,7 +247,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       panY: (minY + maxY) / 2,
       zoom: newZoom
     });
-  }, [points, lines, polylines, polygons, texts]);
+  }, []);
 
   // Respond to zoom extents trigger
   useEffect(() => {
@@ -165,13 +259,6 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       }
     }
   }, [zoomExtentsTrigger, zoomExtents]);
-
-  // Initial fit on first points loaded
-  useEffect(() => {
-    if (points.length > 0) {
-      zoomExtents();
-    }
-  }, [points.length, zoomExtents]);
 
   // Orthogonal constraint
   const applyOrtho = useCallback((current: Point2D, reference: Point2D): Point2D => {
@@ -219,16 +306,22 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     });
   }, [activePoints, cursorWorld, activeSnap, tool, onLiveMeasurementChange]);
 
-  // High-performance Spatial Hash Index for 60fps snapping even with 50,000+ entities
+  // High-performance Spatial Hash Index including texts
   const spatialIndex = useMemo(() => {
     const cellSize = 100; // 100m grid cell
-    const cellMap = new Map<string, { points: CADPoint[]; lines: CADLine[]; polylines: CADPolyline[]; polygons: CADPolygon[] }>();
+    const cellMap = new Map<string, { 
+      points: CADPoint[]; 
+      lines: CADLine[]; 
+      polylines: CADPolyline[]; 
+      polygons: CADPolygon[]; 
+      texts: CADText[] 
+    }>();
 
     const getCell = (cx: number, cy: number) => {
       const key = `${cx}:${cy}`;
       let c = cellMap.get(key);
       if (!c) {
-        c = { points: [], lines: [], polylines: [], polygons: [] };
+        c = { points: [], lines: [], polylines: [], polygons: [], texts: [] };
         cellMap.set(key, c);
       }
       return c;
@@ -308,16 +401,23 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       }
     }
 
-    return { cellMap, cellSize };
-  }, [points, lines, polylines, polygons]);
+    // Index texts (as nodes)
+    for (let i = 0; i < texts.length; i++) {
+      const t = texts[i];
+      const cx = Math.floor(t.x / cellSize);
+      const cy = Math.floor(t.y / cellSize);
+      getCell(cx, cy).texts.push(t);
+    }
 
-  // Calculate snap with ultra-fast spatial candidate lookup (< 0.05ms)
+    return { cellMap, cellSize };
+  }, [points, lines, polylines, polygons, texts]);
+
+  // Evaluate Snap with Node & Text support
   const evaluateSnap = useCallback((rawWorld: Point2D): { effectiveWorld: Point2D; snap: SnapPoint | null } => {
     if (!snapEnabled) {
       return { effectiveWorld: rawWorld, snap: null };
     }
 
-    // Snap radius: 24 pixels converted to world meters
     const snapRadiusMeters = 24 / view.zoom;
     const { cellMap, cellSize } = spatialIndex;
 
@@ -330,6 +430,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     const candLines: CADLine[] = [];
     const candPolylines: CADPolyline[] = [];
     const candPolygons: CADPolygon[] = [];
+    const candTexts: CADText[] = [];
     const seenLineIds = new Set<string>();
     const seenPlIds = new Set<string>();
     const seenPgIds = new Set<string>();
@@ -343,6 +444,11 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
           const pt = c.points[i];
           const l = layerMap.current.get(pt.layerId);
           if (l?.visible !== false) candPoints.push(pt);
+        }
+        for (let i = 0; i < c.texts.length; i++) {
+          const t = c.texts[i];
+          const l = layerMap.current.get(t.layerId);
+          if (l?.visible !== false) candTexts.push(t);
         }
         for (let i = 0; i < c.lines.length; i++) {
           const ln = c.lines[i];
@@ -378,11 +484,11 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       lines: candLines,
       polylines: candPolylines,
       polygons: candPolygons,
+      texts: candTexts,
       activePoints
     });
 
     if (snap) {
-      // Haptic feedback if newly snapped
       if (!activeSnap || activeSnap.point.x !== snap.point.x || activeSnap.point.y !== snap.point.y) {
         if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
           try { navigator.vibrate(12); } catch { /* ignore */ }
@@ -394,23 +500,19 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     return { effectiveWorld: rawWorld, snap: null };
   }, [snapEnabled, view.zoom, spatialIndex, activePoints, activeSnap]);
 
-  // Pointer move handler
+  // Pointer Move Handler
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     if (isPanning && panStartRef.current) {
       const panStart = panStartRef.current;
-      if (!panStart) return;
       const dx = e.clientX - panStart.clientX;
       const dy = e.clientY - panStart.clientY;
-      const originX = panStart.panX;
-      const originY = panStart.panY;
-
       setView(v => ({
         ...v,
-        panX: originX - dx / v.zoom,
-        panY: originY + dy / v.zoom
+        panX: panStart.panX - dx / v.zoom,
+        panY: panStart.panY + dy / v.zoom
       }));
       return;
     }
@@ -418,6 +520,19 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     const rect = canvas.getBoundingClientRect();
     const screenX = e.clientX - rect.left;
     const screenY = e.clientY - rect.top;
+
+    // Update selection box if drag-selecting
+    const isDragSelecting = (tool === 'select' || (tool === 'pan' && e.shiftKey) || selectionBox !== null);
+    if (isDragSelecting && pointerDownPosRef.current && pointerDownPosRef.current.button === 0) {
+      const dist = Math.hypot(e.clientX - pointerDownPosRef.current.clientX, e.clientY - pointerDownPosRef.current.clientY);
+      if (dist > 4) {
+        setSelectionBox({
+          startScreen: { x: pointerDownPosRef.current.screenX, y: pointerDownPosRef.current.screenY },
+          currentScreen: { x: screenX, y: screenY }
+        });
+      }
+    }
+
     const rawWorld = screenToWorld(screenX, screenY, rect.width, rect.height);
 
     let effectiveWorld = rawWorld;
@@ -437,10 +552,16 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     onCursorMove(effectiveWorld, snap);
   };
 
-  // Pointer down handler
+  // Pointer Down Handler
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (e.button === 1 || tool === 'pan' || (e.pointerType === 'touch' && e.isPrimary === false)) {
-      // Middle click or Pan tool
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    // Pan with Middle Mouse Button, Pan Tool (without Shift), Spacebar, or secondary touch
+    const isShiftBoxSelect = (tool === 'select') || (tool === 'pan' && e.shiftKey);
+    const shouldPan = (e.button === 1 || (tool === 'pan' && !e.shiftKey) || isSpacePressed || (e.pointerType === 'touch' && e.isPrimary === false));
+
+    if (shouldPan) {
       setIsPanning(true);
       panStartRef.current = {
         clientX: e.clientX,
@@ -456,7 +577,53 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       return;
     }
 
-    if (e.button !== 0) return; // Only left button for actions
+    if (e.button !== 0) return; // Only primary button for drawing and selecting
+
+    const rect = canvas.getBoundingClientRect();
+    const screenX = e.clientX - rect.left;
+    const screenY = e.clientY - rect.top;
+
+    pointerDownPosRef.current = {
+      clientX: e.clientX,
+      clientY: e.clientY,
+      screenX,
+      screenY,
+      time: Date.now(),
+      button: e.button
+    };
+
+    if (isShiftBoxSelect) {
+      setSelectionBox({
+        startScreen: { x: screenX, y: screenY },
+        currentScreen: { x: screenX, y: screenY }
+      });
+    }
+  };
+
+  // Pointer Up Handler - Commits points or selections safely without breaking on pan/zoom
+  const handlePointerUp = (e?: React.PointerEvent<HTMLCanvasElement>) => {
+    if (isPanning) {
+      setIsPanning(false);
+      panStartRef.current = null;
+      if (e && e.currentTarget && 'hasPointerCapture' in e.currentTarget) {
+        try {
+          if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+            e.currentTarget.releasePointerCapture(e.pointerId);
+          }
+        } catch {
+          // ignore
+        }
+      }
+      return;
+    }
+
+    if (!pointerDownPosRef.current || !e) {
+      setSelectionBox(null);
+      return;
+    }
+
+    const down = pointerDownPosRef.current;
+    pointerDownPosRef.current = null;
 
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -464,70 +631,208 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     const rect = canvas.getBoundingClientRect();
     const screenX = e.clientX - rect.left;
     const screenY = e.clientY - rect.top;
-    let targetWorld = screenToWorld(screenX, screenY, rect.width, rect.height);
+    const movedDist = Math.hypot(e.clientX - down.clientX, e.clientY - down.clientY);
 
+    // 1. SELECT TOOL or Marquee Box Selection
+    if (tool === 'select' || (selectionBox && movedDist > 6)) {
+      if (selectionBox && movedDist > 6) {
+        // Marquee Area Box Selection
+        const minSx = Math.min(selectionBox.startScreen.x, selectionBox.currentScreen.x);
+        const maxSx = Math.max(selectionBox.startScreen.x, selectionBox.currentScreen.x);
+        const minSy = Math.min(selectionBox.startScreen.y, selectionBox.currentScreen.y);
+        const maxSy = Math.max(selectionBox.startScreen.y, selectionBox.currentScreen.y);
+
+        const p1 = screenToWorld(minSx, minSy, rect.width, rect.height);
+        const p2 = screenToWorld(maxSx, maxSy, rect.width, rect.height);
+        const box: BoundingBox2D = {
+          minX: Math.min(p1.x, p2.x),
+          maxX: Math.max(p1.x, p2.x),
+          minY: Math.min(p1.y, p2.y),
+          maxY: Math.max(p1.y, p2.y)
+        };
+
+        const foundIds: string[] = [];
+        points.forEach(p => {
+          const l = layerMap.current.get(p.layerId);
+          if (l?.visible !== false && isPointInBox(p, box)) foundIds.push(p.id);
+        });
+        lines.forEach(l => {
+          const lay = layerMap.current.get(l.layerId);
+          if (lay?.visible !== false && isLineInOrIntersectBox(l.start, l.end, box)) foundIds.push(l.id);
+        });
+        polylines.forEach(pl => {
+          const lay = layerMap.current.get(pl.layerId);
+          if (lay?.visible !== false && isPolylineInOrIntersectBox(pl.points, box)) foundIds.push(pl.id);
+        });
+        polygons.forEach(pg => {
+          const lay = layerMap.current.get(pg.layerId);
+          if (lay?.visible !== false && isPolylineInOrIntersectBox(pg.points, box)) foundIds.push(pg.id);
+        });
+        texts.forEach(t => {
+          const lay = layerMap.current.get(t.layerId);
+          if (lay?.visible !== false && isPointInBox({ x: t.x, y: t.y }, box)) foundIds.push(t.id);
+        });
+
+        if (e.shiftKey || multiSelectMode) {
+          const combined = Array.from(new Set([...selectedEntityIds, ...foundIds]));
+          onSelectEntities?.(combined);
+        } else {
+          onSelectEntities?.(foundIds);
+        }
+      } else {
+        // Single Click / Tap Selection
+        let targetWorld = screenToWorld(screenX, screenY, rect.width, rect.height);
+        const hitRadius = 18 / view.zoom;
+        let hitId: string | null = null;
+
+        for (const pt of points) {
+          const l = layerMap.current.get(pt.layerId);
+          if (l?.visible === false) continue;
+          if (distance2D(targetWorld, pt) < hitRadius) {
+            hitId = pt.id;
+            break;
+          }
+        }
+        if (!hitId) {
+          for (const txt of texts) {
+            const l = layerMap.current.get(txt.layerId);
+            if (l?.visible === false) continue;
+            if (distance2D(targetWorld, { x: txt.x, y: txt.y }) < hitRadius) {
+              hitId = txt.id;
+              break;
+            }
+          }
+        }
+        if (!hitId) {
+          for (const pl of polylines) {
+            const l = layerMap.current.get(pl.layerId);
+            if (l?.visible === false) continue;
+            for (let i = 0; i < pl.points.length - 1; i++) {
+              const { distance } = closestPointOnSegment(targetWorld, pl.points[i], pl.points[i + 1]);
+              if (distance < hitRadius) {
+                hitId = pl.id;
+                break;
+              }
+            }
+            if (hitId) break;
+          }
+        }
+        if (!hitId) {
+          for (const ln of lines) {
+            const l = layerMap.current.get(ln.layerId);
+            if (l?.visible === false) continue;
+            const { distance } = closestPointOnSegment(targetWorld, ln.start, ln.end);
+            if (distance < hitRadius) {
+              hitId = ln.id;
+              break;
+            }
+          }
+        }
+        if (!hitId) {
+          for (const pg of polygons) {
+            const l = layerMap.current.get(pg.layerId);
+            if (l?.visible === false) continue;
+            for (let i = 0; i < pg.points.length; i++) {
+              const j = (i + 1) % pg.points.length;
+              const { distance } = closestPointOnSegment(targetWorld, pg.points[i], pg.points[j]);
+              if (distance < hitRadius) {
+                hitId = pg.id;
+                break;
+              }
+            }
+            if (hitId) break;
+          }
+        }
+
+        if (e.shiftKey || multiSelectMode) {
+          if (hitId) {
+            const nextList = selectedEntityIds.includes(hitId)
+              ? selectedEntityIds.filter(id => id !== hitId)
+              : [...selectedEntityIds, hitId];
+            onSelectEntities?.(nextList);
+          }
+        } else {
+          onSelectEntities?.(hitId ? [hitId] : []);
+        }
+      }
+      setSelectionBox(null);
+      return;
+    }
+
+    // If moved > 6px, it was a pan or drag gesture, cancel drawing click!
+    if (movedDist > 6) {
+      return;
+    }
+
+    let targetWorld = screenToWorld(screenX, screenY, rect.width, rect.height);
     if (activePoints.length > 0 && ortho) {
       targetWorld = applyOrtho(targetWorld, activePoints[activePoints.length - 1]);
     }
+    const snapRes = evaluateSnap(targetWorld);
 
-    const { effectiveWorld } = evaluateSnap(targetWorld);
-    targetWorld = effectiveWorld;
-
-    // Tool actions
-    if (tool === 'select') {
-      // Select nearest entity
-      let foundId: string | null = null;
-      const hitRadius = 15 / view.zoom;
-
-      for (const pt of points) {
-        if (distance2D(targetWorld, pt) < hitRadius) {
-          foundId = pt.id;
-          break;
-        }
+    // 2. POLYLINE TOOL: STRICT NODE REQUIREMENT
+    // User request: "연속 그리기는 측점(노드)가 있는 곳에서만 적용되게 해줘... 우리 도면은 텍스트가 노드점이 돼..."
+    if (tool === 'polyline') {
+      if (!snapRes.snap || (snapRes.snap.type !== 'node' && snapRes.snap.type !== 'endpoint')) {
+        showNodeHint('연속선은 측점(노드) 또는 텍스트 점을 클릭해서 연결해야 합니다.');
+        return;
       }
-      onSelectEntity(foundId);
-    } else if (tool === 'point') {
+
+      const ptToAdd = snapRes.snap.point;
+      // Prevent consecutive identical points
+      if (activePoints.length > 0) {
+        const last = activePoints[activePoints.length - 1];
+        if (distance2D(last, ptToAdd) < 0.0001) return;
+      }
+      setActivePoints(prev => [...prev, ptToAdd]);
+      return;
+    }
+
+    // 3. MEASURE TOOL: MULTI-POINT ACCUMULATION
+    if (tool === 'measure') {
+      const ptToAdd = snapRes.snap ? snapRes.snap.point : snapRes.effectiveWorld;
+      if (activePoints.length > 0) {
+        const last = activePoints[activePoints.length - 1];
+        if (distance2D(last, ptToAdd) < 0.0001) return;
+      }
+      setActivePoints(prev => [...prev, ptToAdd]);
+      return;
+    }
+
+    // 4. POINT TOOL
+    if (tool === 'point') {
       onAddPoint({
         id: `pt-${Date.now()}`,
         name: `측점_${points.length + 1}`,
-        x: targetWorld.x,
-        y: targetWorld.y,
+        x: snapRes.effectiveWorld.x,
+        y: snapRes.effectiveWorld.y,
         layerId: activeLayerId,
         isSurveyNode: false
       });
-    } else if (tool === 'line') {
+      return;
+    }
+
+    // 5. LINE TOOL
+    if (tool === 'line') {
       if (activePoints.length === 0) {
-        setActivePoints([targetWorld]);
+        setActivePoints([snapRes.effectiveWorld]);
       } else {
         const start = activePoints[0];
         onAddLine({
           id: `line-${Date.now()}`,
           start,
-          end: targetWorld,
+          end: snapRes.effectiveWorld,
           layerId: activeLayerId
         });
         setActivePoints([]);
       }
-    } else if (tool === 'polyline') {
-      setActivePoints(prev => [...prev, targetWorld]);
-    } else if (tool === 'polygon') {
-      setActivePoints(prev => [...prev, targetWorld]);
-    } else if (tool === 'measure') {
-      setActivePoints(prev => [...prev, targetWorld]);
+      return;
     }
-  };
 
-  const handlePointerUp = (e?: React.PointerEvent<HTMLCanvasElement>) => {
-    setIsPanning(false);
-    panStartRef.current = null;
-    if (e && e.currentTarget && 'hasPointerCapture' in e.currentTarget) {
-      try {
-        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-          e.currentTarget.releasePointerCapture(e.pointerId);
-        }
-      } catch {
-        // ignore
-      }
+    // 6. POLYGON TOOL
+    if (tool === 'polygon') {
+      setActivePoints(prev => [...prev, snapRes.effectiveWorld]);
+      return;
     }
   };
 
@@ -545,7 +850,6 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     const zoomFactor = e.deltaY < 0 ? 1.2 : 0.833;
     const newZoom = Math.max(0.0001, Math.min(2000, view.zoom * zoomFactor));
 
-    // Keep world coordinate under mouse cursor stable
     const cx = rect.width / 2;
     const cy = rect.height / 2;
     const newPanX = worldBefore.x - (mouseX - cx) / newZoom;
@@ -580,7 +884,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     }
   };
 
-  // Mobile Pinch-to-zoom & two-finger pan touch listeners
+  // Mobile Pinch-to-zoom & two-finger pan
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -588,6 +892,8 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length === 2) {
         e.preventDefault();
+        pointerDownPosRef.current = null; // Cancel single tap drawing
+        setSelectionBox(null);
         const t1 = e.touches[0];
         const t2 = e.touches[1];
         const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
@@ -619,12 +925,10 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 
         const dx = newMidX - touchStart.midX;
         const dy = newMidY - touchStart.midY;
-        const originPanX = touchStart.panX;
-        const originPanY = touchStart.panY;
 
         setView({
-          panX: originPanX - dx / targetZoom,
-          panY: originPanY + dy / targetZoom,
+          panX: touchStart.panX - dx / targetZoom,
+          panY: touchStart.panY + dy / targetZoom,
           zoom: targetZoom
         });
       }
@@ -645,7 +949,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     };
   }, [view]);
 
-  // Dynamic Screen Resize Observer (Mobile, Tablet orientation, Window resizing)
+  // Screen Resize Observer
   const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
 
   useEffect(() => {
@@ -682,7 +986,6 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Retina display scaling
     const dpr = window.devicePixelRatio || 1;
     const width = canvas.clientWidth;
     const height = canvas.clientHeight;
@@ -696,28 +999,27 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     ctx.scale(dpr, dpr);
 
     // 1. Dark CAD Background
-    ctx.fillStyle = '#090d16'; // Deep CAD slate black
+    ctx.fillStyle = '#090d16';
     ctx.fillRect(0, 0, width, height);
 
-    // 2. Adaptive Engineering Metric Grid
+    // 2. Metric CAD Grid
     drawCADGrid(ctx, width, height, view);
 
     const getScreen = (p: Point2D) => worldToScreen(p, width, height);
 
-    // Visible World Bounding Box for High-Speed Viewport Culling
+    // Viewport Culling Bounds
     const marginMeters = 30 / view.zoom;
     const visMinX = view.panX - (width / 2) / view.zoom - marginMeters;
     const visMaxX = view.panX + (width / 2) / view.zoom + marginMeters;
     const visMinY = view.panY - (height / 2) / view.zoom - marginMeters;
     const visMaxY = view.panY + (height / 2) / view.zoom + marginMeters;
 
-    // 3. Render Polygons (fills first with viewport culling)
+    // 3. Render Polygons
     polygons.forEach(pg => {
       const layer = layerMap.current.get(pg.layerId);
       if (layer && !layer.visible) return;
       if (pg.points.length < 3) return;
 
-      // Fast AABB check
       let pMinX = Infinity, pMinY = Infinity, pMaxX = -Infinity, pMaxY = -Infinity;
       for (let i = 0; i < pg.points.length; i++) {
         const pt = pg.points[i];
@@ -726,11 +1028,11 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         pMaxX = Math.max(pMaxX, pt.x);
         pMaxY = Math.max(pMaxY, pt.y);
       }
-      if (pMaxX < visMinX || pMinX > visMaxX || pMaxY < visMinY || pMinY > visMaxY) {
-        return; // Cull
-      }
+      if (pMaxX < visMinX || pMinX > visMaxX || pMaxY < visMinY || pMinY > visMaxY) return;
 
-      const color = pg.color || layer?.color || '#38bdf8';
+      const isSelected = selectedSet.has(pg.id);
+      const color = isSelected ? '#f59e0b' : (pg.color || layer?.color || '#38bdf8');
+
       ctx.beginPath();
       const first = getScreen(pg.points[0]);
       ctx.moveTo(first.x, first.y);
@@ -740,14 +1042,14 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       }
       ctx.closePath();
 
-      ctx.fillStyle = color + '22'; // 13% opacity fill
+      ctx.fillStyle = isSelected ? '#f59e0b33' : (color + '22');
       ctx.fill();
 
       ctx.strokeStyle = color;
-      ctx.lineWidth = selectedEntityId === pg.id ? 3.5 : 2;
+      ctx.lineWidth = isSelected ? 3.5 : 2;
       ctx.stroke();
 
-      // Area label at centroid
+      // Area label
       if (view.zoom > 0.04) {
         let cx = 0, cy = 0;
         pg.points.forEach(p => { cx += p.x; cy += p.y; });
@@ -762,20 +1064,19 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         }
         area = Math.abs(area) / 2.0;
 
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = isSelected ? '#fbbf24' : '#ffffff';
         ctx.font = '11px Pretendard, sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText(`${area.toFixed(1)}㎡ (${(area / 3.305785).toFixed(1)}평)`, screenC.x, screenC.y);
       }
     });
 
-    // 4. Render Polylines (with viewport culling)
+    // 4. Render Polylines
     polylines.forEach(pl => {
       const layer = layerMap.current.get(pl.layerId);
       if (layer && !layer.visible) return;
       if (pl.points.length < 2) return;
 
-      // Fast AABB Cull
       let pMinX = Infinity, pMinY = Infinity, pMaxX = -Infinity, pMaxY = -Infinity;
       for (let i = 0; i < pl.points.length; i++) {
         const pt = pl.points[i];
@@ -784,11 +1085,11 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         pMaxX = Math.max(pMaxX, pt.x);
         pMaxY = Math.max(pMaxY, pt.y);
       }
-      if (pMaxX < visMinX || pMinX > visMaxX || pMaxY < visMinY || pMinY > visMaxY) {
-        return; // Cull
-      }
+      if (pMaxX < visMinX || pMinX > visMaxX || pMaxY < visMinY || pMinY > visMaxY) return;
 
-      const color = pl.color || layer?.color || '#38bdf8';
+      const isSelected = selectedSet.has(pl.id);
+      const color = isSelected ? '#f59e0b' : (pl.color || layer?.color || '#38bdf8');
+
       ctx.beginPath();
       const first = getScreen(pl.points[0]);
       ctx.moveTo(first.x, first.y);
@@ -799,14 +1100,22 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       if (pl.isClosed) ctx.closePath();
 
       ctx.strokeStyle = color;
-      ctx.lineWidth = selectedEntityId === pl.id ? 3.5 : (layer?.lineWidth || 2);
+      ctx.lineWidth = isSelected ? 4 : (layer?.lineWidth || 2);
       ctx.stroke();
 
-
+      // If selected, highlight vertex nodes
+      if (isSelected) {
+        ctx.fillStyle = '#fbbf24';
+        pl.points.forEach(p => {
+          const sp = getScreen(p);
+          ctx.beginPath();
+          ctx.arc(sp.x, sp.y, 3, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      }
     });
 
-    // 5. Render Lines (HIGH-SPEED LAYER BATCHING)
-    // Group all visible lines by layerId to execute 1 batch stroke per layer
+    // 5. Render Lines
     const linesByLayer = new Map<string, CADLine[]>();
     for (let i = 0; i < lines.length; i++) {
       const l = lines[i];
@@ -815,10 +1124,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       const minY = Math.min(l.start.y, l.end.y);
       const maxY = Math.max(l.start.y, l.end.y);
 
-      // Viewport culling
-      if (maxX < visMinX || minX > visMaxX || maxY < visMinY || minY > visMaxY) {
-        continue;
-      }
+      if (maxX < visMinX || minX > visMaxX || maxY < visMinY || minY > visMaxY) continue;
 
       let arr = linesByLayer.get(l.layerId);
       if (!arr) {
@@ -828,49 +1134,56 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       arr.push(l);
     }
 
-    // Render batch lines per layer
     linesByLayer.forEach((layerLines, layerId) => {
       const layer = layerMap.current.get(layerId);
       if (layer && !layer.visible) return;
 
-      ctx.beginPath();
       for (let i = 0; i < layerLines.length; i++) {
         const l = layerLines[i];
+        const isSelected = selectedSet.has(l.id);
         const sp1 = getScreen(l.start);
         const sp2 = getScreen(l.end);
+
+        ctx.beginPath();
         ctx.moveTo(sp1.x, sp1.y);
         ctx.lineTo(sp2.x, sp2.y);
+        ctx.strokeStyle = isSelected ? '#f59e0b' : (layer?.color || '#38bdf8');
+        ctx.lineWidth = isSelected ? 4 : (layer?.lineWidth || 1.5);
+        ctx.stroke();
       }
-      ctx.strokeStyle = layer?.color || '#38bdf8';
-      ctx.lineWidth = layer?.lineWidth || 1.5;
-      ctx.stroke();
-
-
     });
 
-    // 6. Render Survey Points & Nodes (Batched with Viewport Culling)
+    // 6. Render Survey Points & Nodes (with QGIS Dynamic Label Collision Avoidance)
     const visiblePoints: CADPoint[] = [];
     for (let i = 0; i < points.length; i++) {
       const pt = points[i];
-      if (pt.x < visMinX || pt.x > visMaxX || pt.y < visMinY || pt.y > visMaxY) {
-        continue;
-      }
+      if (pt.x < visMinX || pt.x > visMaxX || pt.y < visMinY || pt.y > visMaxY) continue;
       const layer = layerMap.current.get(pt.layerId);
       if (layer && !layer.visible) continue;
       visiblePoints.push(pt);
     }
 
-    // Draw visible points
-    const showPointLabels = visiblePoints.length <= 150 && view.zoom > 0.08;
+    // Step A: Draw point geometry accurately at exact real-world coordinates
     ctx.lineWidth = 1.5;
+    const pointScreenCoords = new Map<string, { x: number; y: number }>();
 
     for (let i = 0; i < visiblePoints.length; i++) {
       const pt = visiblePoints[i];
       const sp = getScreen(pt);
-      const isSelected = selectedEntityId === pt.id;
+      pointScreenCoords.set(pt.id, sp);
+      const isSelected = selectedSet.has(pt.id);
       const layer = layerMap.current.get(pt.layerId);
 
-      ctx.strokeStyle = isSelected ? '#f59e0b' : (layer?.color || '#ef4444');
+      if (isSelected) {
+        // Multi-select glow ring
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, 7.5, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = isSelected ? '#fbbf24' : (layer?.color || '#ef4444');
       ctx.fillStyle = isSelected ? '#fbbf24' : '#ef4444';
 
       ctx.beginPath();
@@ -883,34 +1196,214 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       ctx.moveTo(sp.x, sp.y - 5);
       ctx.lineTo(sp.x, sp.y + 5);
       ctx.stroke();
+    }
 
-      if (showPointLabels || isSelected) {
-        ctx.font = '10px Pretendard, sans-serif';
-        ctx.fillStyle = '#cbd5e1';
-        ctx.textAlign = 'left';
-        const labelText = pt.name + (pt.z !== undefined ? ` (${pt.z.toFixed(2)})` : '');
-        ctx.fillText(labelText, sp.x + 7, sp.y - 3);
+    // Step B: QGIS-style Dynamic Label Placement Engine (PAL Collision Avoidance)
+    const showPointLabels = (visiblePoints.length <= 1200 && view.zoom > 0.03) || selectedSet.size > 0;
+    if (showPointLabels) {
+      ctx.font = '10px Pretendard, sans-serif';
+
+      // Keep track of screen bounding boxes already occupied by points or labels
+      interface LabelBox {
+        minX: number;
+        minY: number;
+        maxX: number;
+        maxY: number;
+      }
+      const occupiedBoxes: LabelBox[] = [];
+
+      // Register point centers as small obstacles to prevent labels from completely masking adjacent nodes
+      for (let i = 0; i < visiblePoints.length; i++) {
+        const sp = pointScreenCoords.get(visiblePoints[i].id);
+        if (sp) {
+          occupiedBoxes.push({
+            minX: sp.x - 4,
+            minY: sp.y - 4,
+            maxX: sp.x + 4,
+            maxY: sp.y + 4
+          });
+        }
+      }
+
+      // Check AABB collision helper
+      const checkCollision = (box: LabelBox): boolean => {
+        for (let k = 0; k < occupiedBoxes.length; k++) {
+          const occ = occupiedBoxes[k];
+          if (box.minX < occ.maxX && box.maxX > occ.minX && box.minY < occ.maxY && box.maxY > occ.minY) {
+            return true;
+          }
+        }
+        return false;
+      };
+
+      // Prioritize selected points first so their labels are never dropped
+      const prioritizedPoints = [
+        ...visiblePoints.filter(p => selectedSet.has(p.id)),
+        ...visiblePoints.filter(p => !selectedSet.has(p.id))
+      ];
+
+      for (let i = 0; i < prioritizedPoints.length; i++) {
+        const pt = prioritizedPoints[i];
+        const sp = pointScreenCoords.get(pt.id);
+        if (!sp) continue;
+
+        const isSelected = selectedSet.has(pt.id);
+        const labelText = pt.name || '';
+        if (!labelText.trim()) continue;
+
+        const tw = ctx.measureText(labelText).width;
+        const th = 11;
+
+        // 8 standard QGIS compass candidate positions + 4 extended offset positions
+        const candidates: { tx: number; ty: number; box: LabelBox; isExtended: boolean }[] = [
+          // 1. Top-Right (우상단, QGIS default 1st preference)
+          {
+            tx: sp.x + 6,
+            ty: sp.y - 3,
+            box: { minX: sp.x + 5, minY: sp.y - 14, maxX: sp.x + 7 + tw, maxY: sp.y + 1 },
+            isExtended: false
+          },
+          // 2. Bottom-Right (우하단)
+          {
+            tx: sp.x + 6,
+            ty: sp.y + 12,
+            box: { minX: sp.x + 5, minY: sp.y + 1, maxX: sp.x + 7 + tw, maxY: sp.y + 16 },
+            isExtended: false
+          },
+          // 3. Top-Left (좌상단)
+          {
+            tx: sp.x - tw - 6,
+            ty: sp.y - 3,
+            box: { minX: sp.x - tw - 7, minY: sp.y - 14, maxX: sp.x - 5, maxY: sp.y + 1 },
+            isExtended: false
+          },
+          // 4. Bottom-Left (좌하단)
+          {
+            tx: sp.x - tw - 6,
+            ty: sp.y + 12,
+            box: { minX: sp.x - tw - 7, minY: sp.y + 1, maxX: sp.x - 5, maxY: sp.y + 16 },
+            isExtended: false
+          },
+          // 5. Top-Center (상단)
+          {
+            tx: sp.x - tw / 2,
+            ty: sp.y - 8,
+            box: { minX: sp.x - tw / 2 - 1, minY: sp.y - 19, maxX: sp.x + tw / 2 + 1, maxY: sp.y - 4 },
+            isExtended: false
+          },
+          // 6. Bottom-Center (하단)
+          {
+            tx: sp.x - tw / 2,
+            ty: sp.y + 16,
+            box: { minX: sp.x - tw / 2 - 1, minY: sp.y + 5, maxX: sp.x + tw / 2 + 1, maxY: sp.y + 20 },
+            isExtended: false
+          },
+          // 7. Right-Center (우측)
+          {
+            tx: sp.x + 8,
+            ty: sp.y + 4,
+            box: { minX: sp.x + 7, minY: sp.y - 7, maxX: sp.x + 9 + tw, maxY: sp.y + 8 },
+            isExtended: false
+          },
+          // 8. Left-Center (좌측)
+          {
+            tx: sp.x - tw - 8,
+            ty: sp.y + 4,
+            box: { minX: sp.x - tw - 9, minY: sp.y - 7, maxX: sp.x - 7, maxY: sp.y + 8 },
+            isExtended: false
+          },
+          // 9. Extended Far Top-Right (인출선 포함 우상단)
+          {
+            tx: sp.x + 16,
+            ty: sp.y - 12,
+            box: { minX: sp.x + 15, minY: sp.y - 23, maxX: sp.x + 17 + tw, maxY: sp.y - 8 },
+            isExtended: true
+          },
+          // 10. Extended Far Bottom-Right (인출선 포함 우하단)
+          {
+            tx: sp.x + 16,
+            ty: sp.y + 20,
+            box: { minX: sp.x + 15, minY: sp.y + 9, maxX: sp.x + 17 + tw, maxY: sp.y + 24 },
+            isExtended: true
+          },
+          // 11. Extended Far Top-Left (인출선 포함 좌상단)
+          {
+            tx: sp.x - tw - 16,
+            ty: sp.y - 12,
+            box: { minX: sp.x - tw - 17, minY: sp.y - 23, maxX: sp.x - 15, maxY: sp.y - 8 },
+            isExtended: true
+          },
+          // 12. Extended Far Bottom-Left (인출선 포함 좌하단)
+          {
+            tx: sp.x - tw - 16,
+            ty: sp.y + 20,
+            box: { minX: sp.x - tw - 17, minY: sp.y + 9, maxX: sp.x - 15, maxY: sp.y + 24 },
+            isExtended: true
+          }
+        ];
+
+        let chosenCandidate: typeof candidates[0] | null = null;
+        for (let c = 0; c < candidates.length; c++) {
+          if (!checkCollision(candidates[c].box)) {
+            chosenCandidate = candidates[c];
+            break;
+          }
+        }
+
+        // If high density and everything collides, force placement for selected entities
+        if (!chosenCandidate && isSelected) {
+          chosenCandidate = candidates[0];
+        }
+
+        if (chosenCandidate) {
+          occupiedBoxes.push(chosenCandidate.box);
+
+          // Draw leader line if extended offset was used
+          if (chosenCandidate.isExtended) {
+            ctx.save();
+            ctx.strokeStyle = isSelected ? '#fbbf2477' : '#94a3b866';
+            ctx.lineWidth = 0.8;
+            ctx.beginPath();
+            ctx.moveTo(sp.x, sp.y);
+            const leaderEndX = chosenCandidate.tx < sp.x ? chosenCandidate.tx + tw : chosenCandidate.tx;
+            ctx.lineTo(leaderEndX, chosenCandidate.ty - 3);
+            ctx.stroke();
+            ctx.restore();
+          }
+
+          // Draw label with QGIS-style text buffer/halo for high contrast
+          ctx.save();
+          ctx.font = '10px Pretendard, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.lineJoin = 'round';
+          ctx.strokeStyle = '#090d16';
+          ctx.lineWidth = 2.5;
+          ctx.strokeText(labelText, chosenCandidate.tx, chosenCandidate.ty);
+
+          ctx.fillStyle = isSelected ? '#fbbf24' : '#e2e8f0';
+          ctx.fillText(labelText, chosenCandidate.tx, chosenCandidate.ty);
+          ctx.restore();
+        }
       }
     }
 
-    // 7. Render Text Entities (with Viewport Culling)
+    // 7. Render Text Entities & Anchor Nodes
     for (let i = 0; i < texts.length; i++) {
       const txt = texts[i];
-      if (txt.x < visMinX || txt.x > visMaxX || txt.y < visMinY || txt.y > visMaxY) {
-        continue;
-      }
+      if (txt.x < visMinX || txt.x > visMaxX || txt.y < visMinY || txt.y > visMaxY) continue;
       const layer = layerMap.current.get(txt.layerId);
       if (layer && !layer.visible) continue;
 
       const pxHeight = txt.height * view.zoom;
-      if (pxHeight < 5.0) continue; // LOD: Skip sub-pixel microscopic text when zoomed out
+      if (pxHeight < 5.0) continue;
       const renderPxHeight = Math.max(8, pxHeight);
       const sp = getScreen({ x: txt.x, y: txt.y });
+      const isSelected = selectedSet.has(txt.id);
 
-      // Draw small node marker at text anchor (as requested: "텍스트가 노드점이 돼")
-      ctx.fillStyle = txt.color || layer?.color || '#ffffff';
+      // Node point at anchor
+      ctx.fillStyle = isSelected ? '#f59e0b' : (txt.color || layer?.color || '#ffffff');
       ctx.beginPath();
-      ctx.arc(sp.x, sp.y, 2, 0, Math.PI * 2);
+      ctx.arc(sp.x, sp.y, isSelected ? 3.5 : 2, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.save();
@@ -919,80 +1412,206 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         ctx.rotate((-txt.rotation * Math.PI) / 180);
       }
       ctx.font = `${renderPxHeight}px Pretendard, sans-serif`;
-      ctx.fillStyle = txt.color || layer?.color || '#ffffff';
+      ctx.fillStyle = isSelected ? '#fbbf24' : (txt.color || layer?.color || '#ffffff');
       ctx.textAlign = 'left';
       ctx.textBaseline = 'bottom';
-      ctx.fillText(txt.text, 4, 0); // Offset slightly from node point
+      ctx.fillText(txt.text, 4, 0);
+
+      if (isSelected) {
+        const tw = ctx.measureText(txt.text).width;
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(2, -renderPxHeight, tw + 4, renderPxHeight + 2);
+      }
       ctx.restore();
     }
 
-    // 8. Render Active Drawing Rubber-Band / Preview
+    // 8. Render Active Drawing / Multi-Point Measuring Path
     if (activePoints.length > 0) {
-      ctx.strokeStyle = '#38bdf8';
-      ctx.lineWidth = 2.5;
-      ctx.setLineDash([5, 5]);
+      if (tool === 'measure') {
+        // Distinct Multi-Point Measurement Path
+        ctx.strokeStyle = '#06b6d4';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        const first = getScreen(activePoints[0]);
+        ctx.moveTo(first.x, first.y);
 
-      ctx.beginPath();
-      const first = getScreen(activePoints[0]);
-      ctx.moveTo(first.x, first.y);
-
-      for (let i = 1; i < activePoints.length; i++) {
-        const pt = getScreen(activePoints[i]);
-        ctx.lineTo(pt.x, pt.y);
-      }
-
-      // Rubber-band line to cursor
-      if (cursorWorld) {
-        const curSp = getScreen(cursorWorld);
-        ctx.lineTo(curSp.x, curSp.y);
-
-        if (tool === 'polygon' && activePoints.length >= 2) {
-          ctx.lineTo(first.x, first.y); // close preview
+        for (let i = 1; i < activePoints.length; i++) {
+          const pt = getScreen(activePoints[i]);
+          ctx.lineTo(pt.x, pt.y);
         }
-      }
-      ctx.stroke();
-      ctx.setLineDash([]); // Reset dash
-
-      // Draw vertex markers for active points
-      activePoints.forEach((p, idx) => {
-        const sp = getScreen(p);
-        ctx.fillStyle = idx === 0 ? '#10b981' : '#38bdf8';
-        ctx.beginPath();
-        ctx.arc(sp.x, sp.y, 4.5, 0, Math.PI * 2);
-        ctx.fill();
-      });
-
-      // Live cursor distance callout
-      if (cursorWorld) {
-        const last = activePoints[activePoints.length - 1];
-        const segDist = distance2D(last, cursorWorld);
-        const curSp = getScreen(cursorWorld);
-
-        ctx.font = '12px JetBrains Mono, monospace';
-        const label = `${segDist.toFixed(2)}m`;
-        const tw = ctx.measureText(label).width;
-
-        ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
-        ctx.strokeStyle = '#0284c7';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.roundRect(curSp.x + 12, curSp.y - 25, tw + 14, 20, 4);
-        ctx.fill();
         ctx.stroke();
 
-        ctx.fillStyle = '#38bdf8';
-        ctx.textAlign = 'left';
-        ctx.fillText(label, curSp.x + 19, curSp.y - 11);
+        // Rubber-band to cursor
+        if (cursorWorld) {
+          const curSp = getScreen(cursorWorld);
+          ctx.strokeStyle = '#22d3ee';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([5, 5]);
+          ctx.beginPath();
+          const last = getScreen(activePoints[activePoints.length - 1]);
+          ctx.moveTo(last.x, last.y);
+          ctx.lineTo(curSp.x, curSp.y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+
+        // Draw measurement points with sequential numbers
+        activePoints.forEach((p, idx) => {
+          const sp = getScreen(p);
+          ctx.fillStyle = '#0891b2';
+          ctx.beginPath();
+          ctx.arc(sp.x, sp.y, 8, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          ctx.font = 'bold 9px Pretendard, sans-serif';
+          ctx.fillStyle = '#ffffff';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(`${idx + 1}`, sp.x, sp.y);
+        });
+
+        // Draw distance badges along completed segments
+        let cumDist = 0;
+        for (let i = 0; i < activePoints.length - 1; i++) {
+          const p1 = activePoints[i];
+          const p2 = activePoints[i + 1];
+          const seg = distance2D(p1, p2);
+          cumDist += seg;
+          const midW = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+          const midS = getScreen(midW);
+
+          ctx.font = '10px JetBrains Mono, monospace';
+          const badgeText = `${seg.toFixed(2)}m`;
+          const tw = ctx.measureText(badgeText).width;
+
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+          ctx.strokeStyle = '#06b6d4';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(midS.x - tw / 2 - 5, midS.y - 10, tw + 10, 18, 4);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = '#67e8f9';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(badgeText, midS.x, midS.y - 1);
+        }
+
+        // Live cursor distance callout with cumulative sum
+        if (cursorWorld) {
+          const last = activePoints[activePoints.length - 1];
+          const segDist = distance2D(last, cursorWorld);
+          const totalDist = cumDist + segDist;
+          const curSp = getScreen(cursorWorld);
+
+          ctx.font = '11px JetBrains Mono, monospace';
+          const label = `+${segDist.toFixed(2)}m (누적: ${totalDist.toFixed(2)}m)`;
+          const tw = ctx.measureText(label).width;
+
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+          ctx.strokeStyle = '#06b6d4';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.roundRect(curSp.x + 12, curSp.y - 28, tw + 14, 22, 6);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = '#22d3ee';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(label, curSp.x + 19, curSp.y - 17);
+        }
+      } else {
+        // Standard Polyline / Polygon Drawing Preview
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([5, 5]);
+
+        ctx.beginPath();
+        const first = getScreen(activePoints[0]);
+        ctx.moveTo(first.x, first.y);
+
+        for (let i = 1; i < activePoints.length; i++) {
+          const pt = getScreen(activePoints[i]);
+          ctx.lineTo(pt.x, pt.y);
+        }
+
+        if (cursorWorld) {
+          const curSp = getScreen(cursorWorld);
+          ctx.lineTo(curSp.x, curSp.y);
+
+          if (tool === 'polygon' && activePoints.length >= 2) {
+            ctx.lineTo(first.x, first.y);
+          }
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Vertex markers
+        activePoints.forEach((p, idx) => {
+          const sp = getScreen(p);
+          ctx.fillStyle = idx === 0 ? '#10b981' : '#38bdf8';
+          ctx.beginPath();
+          ctx.arc(sp.x, sp.y, 4.5, 0, Math.PI * 2);
+          ctx.fill();
+        });
+
+        // Live cursor distance callout
+        if (cursorWorld) {
+          const last = activePoints[activePoints.length - 1];
+          const segDist = distance2D(last, cursorWorld);
+          const curSp = getScreen(cursorWorld);
+
+          ctx.font = '12px JetBrains Mono, monospace';
+          const label = `${segDist.toFixed(2)}m`;
+          const tw = ctx.measureText(label).width;
+
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+          ctx.strokeStyle = '#0284c7';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(curSp.x + 12, curSp.y - 25, tw + 14, 20, 4);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = '#38bdf8';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(label, curSp.x + 19, curSp.y - 15);
+        }
       }
     }
 
-    // 9. Render Magnetic Snap Indicator
+    // 9. Marquee Selection Box (AutoCAD Blue Window Style)
+    if (selectionBox) {
+      const bx = Math.min(selectionBox.startScreen.x, selectionBox.currentScreen.x);
+      const by = Math.min(selectionBox.startScreen.y, selectionBox.currentScreen.y);
+      const bw = Math.abs(selectionBox.currentScreen.x - selectionBox.startScreen.x);
+      const bh = Math.abs(selectionBox.currentScreen.y - selectionBox.startScreen.y);
+
+      if (bw > 2 || bh > 2) {
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.16)';
+        ctx.fillRect(bx, by, bw, bh);
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(bx, by, bw, bh);
+        ctx.setLineDash([]);
+      }
+    }
+
+    // 10. Magnetic Snap Indicator
     if (activeSnap) {
       const snapSp = getScreen(activeSnap.point);
       drawSnapMarker(ctx, snapSp, activeSnap.type, activeSnap.label);
     }
 
-    // 10. Scale Bar in bottom-left
+    // 11. Scale Bar
     drawScaleBar(ctx, width, height, view.zoom);
 
     ctx.restore();
@@ -1007,7 +1626,8 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     cursorWorld,
     activeSnap,
     tool,
-    selectedEntityId,
+    selectedSet,
+    selectionBox,
     worldToScreen,
     viewportSize
   ]);
@@ -1016,7 +1636,9 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     <div className="relative w-full h-full overflow-hidden select-none touch-none">
       <canvas
         ref={canvasRef}
-        className="w-full h-full block cursor-crosshair"
+        className={`w-full h-full block ${
+          tool === 'pan' || isSpacePressed ? 'cursor-grab active:cursor-grabbing' : 'cursor-crosshair'
+        }`}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -1026,16 +1648,32 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         onDoubleClick={handleDoubleClick}
       />
 
-      {/* Floating AutoCAD Z-E (Zoom Extents) Quick Button */}
+      {/* Floating AutoCAD Z-E (Zoom Extents) Button (icon only as requested) */}
       <div className="absolute right-3.5 bottom-7 z-10 pointer-events-none flex flex-col items-end gap-1.5">
         <button
           onClick={() => zoomExtents()}
-          title="전체 도면 및 측점 화면 맞춤"
+          title="전체 맞춤"
           className="pointer-events-auto flex items-center justify-center p-2.5 bg-slate-900/90 hover:bg-sky-600 text-sky-400 hover:text-white border border-slate-700 hover:border-sky-500 rounded-2xl shadow-xl backdrop-blur-md transition group active:scale-95"
         >
           <Focus className="w-5 h-5 transition" />
         </button>
       </div>
+
+      {/* Visual Guide Banner for Multi-Select */}
+      {tool === 'select' && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-slate-900/95 backdrop-blur-md text-sky-300 border border-sky-500/80 px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-2xl shadow-2xl flex items-center gap-2 text-[11px] sm:text-xs font-medium pointer-events-none animate-in fade-in slide-in-from-top-2 max-w-[90vw] text-center">
+          <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping shrink-0" />
+          <span>마우스를 <strong>드래그하여 사각 영역</strong>으로 여러 객체(점/선/면/글자)를 한 번에 선택하세요 (Shift+클릭: 개별 추가/제외)</span>
+        </div>
+      )}
+
+      {/* Strict Node Requirement Visual Toast */}
+      {nodeHintToast && (
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-30 bg-amber-500/95 text-slate-950 font-bold px-4 py-2 rounded-xl shadow-2xl flex items-center gap-2 text-xs border border-amber-300 animate-in fade-in slide-in-from-top-2 duration-150 backdrop-blur-sm pointer-events-none">
+          <MapPin className="w-4 h-4 shrink-0 text-slate-950" />
+          <span>{nodeHintToast}</span>
+        </div>
+      )}
     </div>
   );
 };
@@ -1047,11 +1685,9 @@ function drawCADGrid(
   height: number,
   view: { panX: number; panY: number; zoom: number }
 ) {
-  // Determine suitable grid spacing in world meters
   const minPixelsBetweenLines = 60;
   const rawSpacing = minPixelsBetweenLines / view.zoom;
 
-  // Find nearest power of 10 or 1, 2, 5 multiple
   const power = Math.pow(10, Math.floor(Math.log10(rawSpacing)));
   let spacing = power;
   if (rawSpacing / power > 5) spacing = power * 10;
@@ -1070,14 +1706,12 @@ function drawCADGrid(
   ctx.lineWidth = 1;
   ctx.beginPath();
 
-  // Vertical grid lines
   for (let x = startX; x <= right; x += spacing) {
     const sx = width / 2 + (x - view.panX) * view.zoom;
     ctx.moveTo(sx, 0);
     ctx.lineTo(sx, height);
   }
 
-  // Horizontal grid lines
   for (let y = startY; y <= top; y += spacing) {
     const sy = height / 2 - (y - view.panY) * view.zoom;
     ctx.moveTo(0, sy);
@@ -1085,7 +1719,6 @@ function drawCADGrid(
   }
   ctx.stroke();
 
-  // Axis Coordinate Labels along edges
   ctx.font = '9px JetBrains Mono, monospace';
   ctx.fillStyle = 'rgba(148, 163, 184, 0.45)';
   ctx.textAlign = 'left';
@@ -1116,17 +1749,14 @@ function drawSnapMarker(
   ctx.lineWidth = 2;
 
   if (type === 'node') {
-    // Green circle + cross
     ctx.strokeStyle = '#22c55e';
     ctx.beginPath();
     ctx.arc(x, y, 7, 0, Math.PI * 2);
     ctx.stroke();
   } else if (type === 'endpoint') {
-    // Green square
     ctx.strokeStyle = '#22c55e';
     ctx.strokeRect(x - 6, y - 6, 12, 12);
   } else if (type === 'midpoint') {
-    // Cyan triangle
     ctx.strokeStyle = '#06b6d4';
     ctx.beginPath();
     ctx.moveTo(x, y - 7);
@@ -1135,7 +1765,6 @@ function drawSnapMarker(
     ctx.closePath();
     ctx.stroke();
   } else if (type === 'intersection') {
-    // Yellow X
     ctx.strokeStyle = '#eab308';
     ctx.beginPath();
     ctx.moveTo(x - 6, y - 6);
@@ -1144,7 +1773,6 @@ function drawSnapMarker(
     ctx.lineTo(x - 6, y + 6);
     ctx.stroke();
   } else {
-    // Nearest: Hourglass
     ctx.strokeStyle = '#a855f7';
     ctx.beginPath();
     ctx.moveTo(x - 5, y - 5);
@@ -1168,6 +1796,7 @@ function drawSnapMarker(
 
   ctx.fillStyle = '#4ade80';
   ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
   ctx.fillText(label, x + 16, y + 23);
 }
 
@@ -1178,11 +1807,9 @@ function drawScaleBar(
   height: number,
   zoom: number
 ) {
-  // Target width on screen ~ 100px
   const targetPixels = 100;
   const metersRaw = targetPixels / zoom;
 
-  // Round meters to clean 1, 2, 5, 10, 20, 50, 100, 200, 500, etc.
   const power = Math.pow(10, Math.floor(Math.log10(metersRaw)));
   let barMeters = power;
   if (metersRaw / power > 5) barMeters = power * 5;
@@ -1193,7 +1820,6 @@ function drawScaleBar(
   const startX = 20;
   const startY = height - 20;
 
-  // Draw bar
   ctx.strokeStyle = '#f8fafc';
   ctx.lineWidth = 2.5;
   ctx.beginPath();
@@ -1205,10 +1831,10 @@ function drawScaleBar(
   ctx.lineTo(startX + barPixels, startY + 4);
   ctx.stroke();
 
-  // Label
   ctx.font = '10px JetBrains Mono, monospace';
   ctx.fillStyle = '#f8fafc';
   ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
   const label = barMeters >= 1000 ? `${(barMeters / 1000).toFixed(1)} km` : `${barMeters.toFixed(0)} m`;
   ctx.fillText(label, startX + barPixels / 2, startY - 6);
 }

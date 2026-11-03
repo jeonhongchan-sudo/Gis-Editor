@@ -90,6 +90,7 @@ export interface FindSnapOptions {
   lines: CADLine[];
   polylines: CADPolyline[];
   polygons: CADPolygon[];
+  texts?: import('../types/cad').CADText[];
   activePoints?: Point2D[]; // currently being drawn
   enabledSnapTypes?: Partial<Record<SnapType, boolean>>;
 }
@@ -106,6 +107,7 @@ export function findSnapPoint(opts: FindSnapOptions): SnapPoint | null {
     lines,
     polylines,
     polygons,
+    texts = [],
     activePoints = [],
     enabledSnapTypes = { node: true, endpoint: true, midpoint: true, intersection: true, nearest: true }
   } = opts;
@@ -128,6 +130,21 @@ export function findSnapPoint(opts: FindSnapOptions): SnapPoint | null {
         };
       }
     }
+
+    // Text anchor nodes (user requirement: "우리 도면은 텍스트가 노드점이 돼")
+    for (const txt of texts) {
+      if (Math.abs(txt.x - worldCursor.x) > minDistance || Math.abs(txt.y - worldCursor.y) > minDistance) continue;
+      const d = distance2D(worldCursor, { x: txt.x, y: txt.y });
+      if (d < minDistance) {
+        minDistance = d;
+        bestSnap = {
+          point: { x: txt.x, y: txt.y },
+          type: 'node',
+          sourceId: txt.id,
+          label: txt.text ? `측점/텍스트 [${txt.text}]` : '텍스트 노드'
+        };
+      }
+    }
   }
 
   // Active polyline points (e.g. closing polygon back to first vertex)
@@ -147,41 +164,39 @@ export function findSnapPoint(opts: FindSnapOptions): SnapPoint | null {
     }
   }
 
-  // 2. Endpoints of lines & polylines
+  // 2. Endpoints & Vertices of lines & polylines
   if (enabledSnapTypes.endpoint !== false) {
     for (const line of lines) {
       if (Math.abs(line.start.x - worldCursor.x) <= minDistance && Math.abs(line.start.y - worldCursor.y) <= minDistance) {
         const d1 = distance2D(worldCursor, line.start);
         if (d1 < minDistance) {
           minDistance = d1;
-          bestSnap = { point: { ...line.start }, type: 'endpoint', label: '끝점 (Endpoint)' };
+          bestSnap = { point: { ...line.start }, type: 'endpoint', label: '선 끝점' };
         }
       }
       if (Math.abs(line.end.x - worldCursor.x) <= minDistance && Math.abs(line.end.y - worldCursor.y) <= minDistance) {
         const d2 = distance2D(worldCursor, line.end);
         if (d2 < minDistance) {
           minDistance = d2;
-          bestSnap = { point: { ...line.end }, type: 'endpoint', label: '끝점 (Endpoint)' };
+          bestSnap = { point: { ...line.end }, type: 'endpoint', label: '선 끝점' };
         }
       }
     }
 
+    // Check ALL vertices of polylines
     for (const pl of polylines) {
-      if (pl.points.length > 0) {
-        const first = pl.points[0];
-        if (Math.abs(first.x - worldCursor.x) <= minDistance && Math.abs(first.y - worldCursor.y) <= minDistance) {
-          const d1 = distance2D(worldCursor, first);
-          if (d1 < minDistance) {
-            minDistance = d1;
-            bestSnap = { point: { ...first }, type: 'endpoint', label: '선 시작점' };
-          }
-        }
-        const last = pl.points[pl.points.length - 1];
-        if (Math.abs(last.x - worldCursor.x) <= minDistance && Math.abs(last.y - worldCursor.y) <= minDistance) {
-          const d2 = distance2D(worldCursor, last);
-          if (d2 < minDistance) {
-            minDistance = d2;
-            bestSnap = { point: { ...last }, type: 'endpoint', label: '선 끝점' };
+      for (let i = 0; i < pl.points.length; i++) {
+        const pt = pl.points[i];
+        if (Math.abs(pt.x - worldCursor.x) <= minDistance && Math.abs(pt.y - worldCursor.y) <= minDistance) {
+          const d = distance2D(worldCursor, pt);
+          if (d < minDistance) {
+            minDistance = d;
+            const isEnd = i === 0 || i === pl.points.length - 1;
+            bestSnap = {
+              point: { ...pt },
+              type: 'endpoint',
+              label: isEnd ? (i === 0 ? '선 시작점' : '선 끝점') : `선 굴절점 #${i + 1}`
+            };
           }
         }
       }
@@ -247,6 +262,54 @@ export function findSnapPoint(opts: FindSnapOptions): SnapPoint | null {
   }
 
   return bestSnap;
+}
+
+export interface BoundingBox2D {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+export function isPointInBox(p: Point2D, box: BoundingBox2D): boolean {
+  return p.x >= box.minX && p.x <= box.maxX && p.y >= box.minY && p.y <= box.maxY;
+}
+
+export function isLineInOrIntersectBox(p1: Point2D, p2: Point2D, box: BoundingBox2D): boolean {
+  // If either point is inside the box
+  if (isPointInBox(p1, box) || isPointInBox(p2, box)) return true;
+
+  // Box bounds check
+  const lineMinX = Math.min(p1.x, p2.x);
+  const lineMaxX = Math.max(p1.x, p2.x);
+  const lineMinY = Math.min(p1.y, p2.y);
+  const lineMaxY = Math.max(p1.y, p2.y);
+  if (lineMaxX < box.minX || lineMinX > box.maxX || lineMaxY < box.minY || lineMinY > box.maxY) {
+    return false;
+  }
+
+  // Check 4 edges of the box
+  const tl: Point2D = { x: box.minX, y: box.maxY };
+  const tr: Point2D = { x: box.maxX, y: box.maxY };
+  const bl: Point2D = { x: box.minX, y: box.minY };
+  const br: Point2D = { x: box.maxX, y: box.minY };
+
+  if (lineIntersection(p1, p2, tl, tr)) return true;
+  if (lineIntersection(p1, p2, tr, br)) return true;
+  if (lineIntersection(p1, p2, br, bl)) return true;
+  if (lineIntersection(p1, p2, bl, tl)) return true;
+
+  return false;
+}
+
+export function isPolylineInOrIntersectBox(pts: Point2D[], box: BoundingBox2D): boolean {
+  for (let i = 0; i < pts.length; i++) {
+    if (isPointInBox(pts[i], box)) return true;
+  }
+  for (let i = 0; i < pts.length - 1; i++) {
+    if (isLineInOrIntersectBox(pts[i], pts[i + 1], box)) return true;
+  }
+  return false;
 }
 
 /**

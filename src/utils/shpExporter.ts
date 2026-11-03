@@ -489,13 +489,4 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
   return await zip.generateAsync({ type: 'blob' });
 }
 
-export function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
+export { downloadBlob, downloadTextFile } from './downloadHelper';
