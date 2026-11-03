@@ -907,6 +907,12 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       const renderPxHeight = Math.max(8, pxHeight);
       const sp = getScreen({ x: txt.x, y: txt.y });
 
+      // Draw small node marker at text anchor (as requested: "텍스트가 노드점이 돼")
+      ctx.fillStyle = txt.color || layer?.color || '#ffffff';
+      ctx.beginPath();
+      ctx.arc(sp.x, sp.y, 2, 0, Math.PI * 2);
+      ctx.fill();
+
       ctx.save();
       ctx.translate(sp.x, sp.y);
       if (txt.rotation) {
@@ -916,7 +922,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       ctx.fillStyle = txt.color || layer?.color || '#ffffff';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'bottom';
-      ctx.fillText(txt.text, 0, 0);
+      ctx.fillText(txt.text, 4, 0); // Offset slightly from node point
       ctx.restore();
     }
 

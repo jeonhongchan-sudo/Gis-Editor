@@ -1,8 +1,3 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import { useEffect, useState } from 'react';
 
 interface BeforeInstallPromptEvent extends Event {
@@ -16,16 +11,13 @@ export function usePWAInstall() {
   const [isIOS, setIsIOS] = useState(false);
 
   useEffect(() => {
-    // Detect standalone mode (already installed)
     const isStandalone =
       window.matchMedia('(display-mode: standalone)').matches ||
-      (window.navigator as unknown as { standalone?: boolean }).standalone === true;
+      (window.navigator as any).standalone === true;
     setIsInstalled(isStandalone);
 
-    // Detect iOS devices
     const userAgent = window.navigator.userAgent.toLowerCase();
-    const isIOSDevice = /iphone|ipad|ipod/.test(userAgent) && !(window as any).MSStream;
-    setIsIOS(isIOSDevice);
+    setIsIOS(/iphone|ipad|ipod/.test(userAgent));
 
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
@@ -58,10 +50,5 @@ export function usePWAInstall() {
     return false;
   };
 
-  return {
-    isInstallable: !!deferredPrompt,
-    isInstalled,
-    isIOS,
-    install,
-  };
+  return { isInstallable: !!deferredPrompt, isInstalled, isIOS, install };
 }

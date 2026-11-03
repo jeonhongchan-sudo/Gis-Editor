@@ -202,10 +202,9 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <Compass className="w-5 h-5" />
         </button>
 
-        {/* Center / Zoom Extents */}
         <button
           onClick={onZoomExtents}
-          title="전체 도면 화면 맞춤 (Zoom Extents)"
+          title="전체 화면 맞춤"
           className="p-2.5 rounded-xl text-slate-300 hover:bg-slate-800 hover:text-white transition flex items-center justify-center"
         >
           <Focus className="w-5 h-5" />
