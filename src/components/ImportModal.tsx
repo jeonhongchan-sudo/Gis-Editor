@@ -55,7 +55,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   onLoadProject,
   onClose
 }) => {
-  const [activeTab, setActiveTab] = useState<'file' | 'paste' | 'sample'>('file');
+  const [activeTab, setActiveTab] = useState<'file' | 'paste'>('file');
   const [appendMode, setAppendMode] = useState<boolean>(true);
 
   // Encoding State (CP949 / EUC-KR vs UTF-8)
@@ -103,6 +103,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     layers: number;
   } | null>(null);
   const [parsedDxfData, setParsedDxfData] = useState<any | null>(null);
+  const [selectedDxfLayers, setSelectedDxfLayers] = useState<Set<string>>(new Set());
 
   // SHP State
   const [shpStats, setShpStats] = useState<SHPParseResult | null>(null);
@@ -249,6 +250,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         });
 
         setParsedDxfData(result);
+        setSelectedDxfLayers(new Set(result.layers.map((l: CADLayer) => l.name)));
         setDxfStats({
           points: result.points.length,
           lines: result.lines.length,
@@ -314,7 +316,18 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
   const handleApplyDXF = () => {
     if (!parsedDxfData) return;
-    onImportDXF(parsedDxfData, appendMode);
+    
+    // Filter entities based on selected layers to save memory in main app
+    const filtered = {
+      layers: parsedDxfData.layers.filter((l: CADLayer) => selectedDxfLayers.has(l.name)),
+      points: parsedDxfData.points.filter((p: CADPoint) => selectedDxfLayers.has(p.layerId.replace('layer-', ''))),
+      lines: parsedDxfData.lines.filter((l: CADLine) => selectedDxfLayers.has(l.layerId.replace('layer-', ''))),
+      polylines: parsedDxfData.polylines.filter((pl: CADPolyline) => selectedDxfLayers.has(pl.layerId.replace('layer-', ''))),
+      polygons: parsedDxfData.polygons.filter((pg: CADPolygon) => selectedDxfLayers.has(pg.layerId.replace('layer-', ''))),
+      texts: parsedDxfData.texts.filter((t: CADText) => selectedDxfLayers.has(t.layerId.replace('layer-', '')))
+    };
+    
+    onImportDXF(filtered, appendMode);
     onClose();
   };
 
@@ -349,6 +362,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
       try {
         const result = await parseDXFAsync(pasteContent, percent => setParsingProgress(percent));
         setParsedDxfData(result);
+        setSelectedDxfLayers(new Set(result.layers.map((l: any) => l.name)));
         setDxfFileName('붙여넣은 DXF');
         setDxfStats({
           points: result.points.length,
@@ -467,17 +481,6 @@ export const ImportModal: React.FC<ImportModalProps> = ({
             <ClipboardPaste className="w-3.5 h-3.5" />
             텍스트 직접 붙여넣기
           </button>
-          <button
-            onClick={() => setActiveTab('sample')}
-            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-t-xl transition whitespace-nowrap ${
-              activeTab === 'sample'
-                ? 'border-b-2 border-sky-500 text-sky-400 bg-slate-900 font-semibold'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-            샘플 데이터
-          </button>
         </div>
 
         {/* Tab Body */}
@@ -505,7 +508,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".xlsx,.xls,.csv,.tsv,.txt,.dxf,.shp,.zip,*/*"
+                  accept=".xlsx,.xls,.csv,.tsv,.txt,.dxf,.shp,.zip,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,text/plain,application/dxf,image/vnd.dxf"
                   className="hidden"
                   onChange={handleFileInputChange}
                   disabled={isParsing}
@@ -572,25 +575,6 @@ export const ImportModal: React.FC<ImportModalProps> = ({
             </div>
           )}
 
-          {/* TAB 3: SAMPLE DATA */}
-          {activeTab === 'sample' && (
-            <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-xl space-y-3">
-              <div className="flex items-center gap-2 text-amber-400 text-xs font-semibold">
-                <Sparkles className="w-4 h-4" />
-                <span>현황측량 테스트용 샘플 데이터 (EPSG:5186)</span>
-              </div>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                파일이 없어도 즉시 도로 및 부지경계 15개 측점을 캔버스에 올려 스냅과 연속선 기능을 시험해 보실 수 있습니다.
-              </p>
-              <button
-                type="button"
-                onClick={handleLoadSampleCSV}
-                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold rounded-xl shadow-md transition"
-              >
-                샘플 데이터 로드하기
-              </button>
-            </div>
-          )}
 
           {/* PREVIEW: EXCEL & CSV TABLE CONFIGURATION */}
           {loadedFormat === 'csv' && csvPreview && (
@@ -879,38 +863,94 @@ export const ImportModal: React.FC<ImportModalProps> = ({
             </div>
           )}
 
-          {/* PREVIEW 2: DXF PARSE PREVIEW */}
-          {loadedFormat === 'dxf' && dxfStats && (
-            <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-xl space-y-3 animate-in fade-in">
-              <div className="flex items-center gap-2 text-emerald-400 text-xs font-semibold">
-                <Check className="w-4 h-4" />
-                <span>DXF 도면 파싱 성공: {dxfFileName}</span>
+          {/* PREVIEW 2: DXF PARSE PREVIEW & LAYER SELECTION */}
+          {loadedFormat === 'dxf' && dxfStats && parsedDxfData && (
+            <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-xl space-y-4 animate-in fade-in shadow-inner">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                <div className="flex items-center gap-2 text-emerald-400 text-xs font-semibold">
+                  <Check className="w-4 h-4" />
+                  <span>DXF 도면 분석 성공: {dxfFileName}</span>
+                </div>
+                <div className="text-[10px] text-slate-500">
+                  총 {parsedDxfData.layers.length}개 레이어 중 {selectedDxfLayers.size}개 선택됨
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
-                <div className="p-2.5 bg-slate-900 rounded-lg border border-slate-800">
-                  <span className="text-slate-400 block text-[11px]">도면층 (레이어)</span>
-                  <strong className="text-white text-sm">{dxfStats.layers}개</strong>
+              {/* DXF Stats Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[11px]">
+                <div className="p-2 bg-slate-900 rounded-lg border border-slate-800/60">
+                  <span className="text-slate-500 block">선</span>
+                  <strong className="text-slate-200">{dxfStats.lines.toLocaleString()}</strong>
                 </div>
-                <div className="p-2.5 bg-slate-900 rounded-lg border border-slate-800">
-                  <span className="text-slate-400 block text-[11px]">선 (Lines)</span>
-                  <strong className="text-white text-sm">{dxfStats.lines.toLocaleString()}개</strong>
+                <div className="p-2 bg-slate-900 rounded-lg border border-slate-800/60">
+                  <span className="text-slate-500 block">연속선</span>
+                  <strong className="text-slate-200">{dxfStats.polylines.toLocaleString()}</strong>
                 </div>
-                <div className="p-2.5 bg-slate-900 rounded-lg border border-slate-800">
-                  <span className="text-slate-400 block text-[11px]">폴리라인 (Polylines)</span>
-                  <strong className="text-white text-sm">{dxfStats.polylines.toLocaleString()}개</strong>
+                <div className="p-2 bg-slate-900 rounded-lg border border-slate-800/60">
+                  <span className="text-slate-500 block">면적</span>
+                  <strong className="text-slate-200">{dxfStats.polygons.toLocaleString()}</strong>
                 </div>
-                <div className="p-2.5 bg-slate-900 rounded-lg border border-slate-800">
-                  <span className="text-slate-400 block text-[11px]">폐합 면적 (Polygons)</span>
-                  <strong className="text-white text-sm">{dxfStats.polygons.toLocaleString()}개</strong>
+                <div className="p-2 bg-slate-900 rounded-lg border border-slate-800/60">
+                  <span className="text-slate-500 block">측점</span>
+                  <strong className="text-slate-200">{dxfStats.points.toLocaleString()}</strong>
                 </div>
-                <div className="p-2.5 bg-slate-900 rounded-lg border border-slate-800">
-                  <span className="text-slate-400 block text-[11px]">측점 (Points)</span>
-                  <strong className="text-white text-sm">{dxfStats.points.toLocaleString()}개</strong>
+                <div className="p-2 bg-slate-900 rounded-lg border border-slate-800/60">
+                  <span className="text-slate-500 block">문자</span>
+                  <strong className="text-slate-200">{dxfStats.texts.toLocaleString()}</strong>
                 </div>
-                <div className="p-2.5 bg-slate-900 rounded-lg border border-slate-800">
-                  <span className="text-slate-400 block text-[11px]">문자 라벨 (Texts)</span>
-                  <strong className="text-white text-sm">{dxfStats.texts.toLocaleString()}개</strong>
+              </div>
+
+              {/* Layer Selection Checklist */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-200 flex items-center gap-2">
+                    <Layers className="w-3.5 h-3.5 text-sky-400" />
+                    불러올 레이어 선택 (불필요한 레이어 제외 시 렌더링 성능 향상)
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setSelectedDxfLayers(new Set(parsedDxfData.layers.map((l: any) => l.name)))}
+                      className="text-[10px] text-sky-400 hover:text-sky-300"
+                    >
+                      전체 선택
+                    </button>
+                    <button
+                      onClick={() => setSelectedDxfLayers(new Set())}
+                      className="text-[10px] text-slate-400 hover:text-slate-300"
+                    >
+                      선택 해제
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-48 overflow-y-auto p-2 bg-slate-950 border border-slate-800 rounded-xl custom-scrollbar">
+                  {parsedDxfData.layers.map((layer: CADLayer) => (
+                    <label
+                      key={layer.name}
+                      className={`flex items-center gap-2 p-2 rounded-lg border text-[11px] cursor-pointer transition ${
+                        selectedDxfLayers.has(layer.name)
+                          ? 'bg-slate-800 border-sky-500/50 text-slate-100'
+                          : 'bg-slate-900/40 border-slate-800 text-slate-500 opacity-60'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedDxfLayers.has(layer.name)}
+                        onChange={() => {
+                          const next = new Set(selectedDxfLayers);
+                          if (next.has(layer.name)) next.delete(layer.name);
+                          else next.add(layer.name);
+                          setSelectedDxfLayers(next);
+                        }}
+                        className="w-3.5 h-3.5 rounded border-slate-700 text-sky-500 focus:ring-0"
+                      />
+                      <div
+                        className="w-2.5 h-2.5 rounded-full shrink-0"
+                        style={{ backgroundColor: layer.color }}
+                      />
+                      <span className="truncate">{layer.name}</span>
+                    </label>
+                  ))}
                 </div>
               </div>
             </div>

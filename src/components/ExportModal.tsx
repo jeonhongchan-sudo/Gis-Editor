@@ -27,8 +27,6 @@ interface ExportModalProps {
   polylines: CADPolyline[];
   polygons: CADPolygon[];
   texts: CADText[];
-  crs: string;
-  isSwappedXY: boolean;
   onClose: () => void;
 }
 
@@ -39,8 +37,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   polylines,
   polygons,
   texts,
-  crs,
-  isSwappedXY,
   onClose
 }) => {
   const [includeLabels, setIncludeLabels] = useState(true);
@@ -79,7 +75,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         lines,
         polylines,
         polygons,
-        crs
+        crs: 'EPSG:5186' // Defaulting to standard Korean TM as selection was removed
       });
       const filename = `gis_shapefiles_${new Date().toISOString().slice(0, 10)}.zip`;
       downloadBlob(blob, filename);
@@ -96,8 +92,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     const project: ProjectState = {
       version: '1.0.0',
       name: '도면작업_' + new Date().toISOString().slice(0, 10),
-      crs,
-      isSwappedXY,
       layers,
       points,
       lines,
@@ -147,8 +141,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         {/* Current Project Summary Badge */}
         <div className="p-3 bg-slate-950/80 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
           <div className="flex items-center gap-2 text-slate-300">
-            <span className="text-slate-400">적용 좌표계:</span>
-            <span className="font-semibold text-sky-400">{crs} ({COORDINATE_SYSTEMS[crs]?.name.split('/')[1] || crs})</span>
+            <Layers className="w-3.5 h-3.5 text-purple-400" />
+            <span className="text-slate-400">데이터 구성 요약:</span>
           </div>
 
           <div className="flex items-center gap-3 text-slate-400">

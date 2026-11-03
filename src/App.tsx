@@ -74,10 +74,6 @@ const DEFAULT_LAYERS: CADLayer[] = [
 ];
 
 export default function App() {
-  // Coordinate System and X/Y Orientation
-  const [crs, setCrs] = useState<string>('EPSG:5186');
-  const [isSwappedXY, setIsSwappedXY] = useState<boolean>(true);
-
   // Entities & Layers
   const [layers, setLayers] = useState<CADLayer[]>(DEFAULT_LAYERS);
   const [activeLayerId, setActiveLayerId] = useState<string>('layer-boundary');
@@ -219,48 +215,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleUndo, handleRedo, handleZoomExtents, selectedEntityId, activePoints]);
 
-  // Load initial demo data on fresh start if empty
-  useEffect(() => {
-    const saved = localStorage.getItem('webcad_project_state');
-    if (saved) {
-      try {
-        const parsed: ProjectState = JSON.parse(saved);
-        setCrs(parsed.crs || 'EPSG:5186');
-        setIsSwappedXY(parsed.isSwappedXY !== undefined ? parsed.isSwappedXY : true);
-        if (parsed.layers) setLayers(parsed.layers);
-        if (parsed.points) setPoints(parsed.points);
-        if (parsed.lines) setLines(parsed.lines);
-        if (parsed.polylines) setPolylines(parsed.polylines);
-        if (parsed.polygons) setPolygons(parsed.polygons);
-        if (parsed.texts) setTexts(parsed.texts);
-        return;
-      } catch (e) {
-        console.warn('Failed to restore local project:', e);
-      }
-    }
-
-    // Initialize with standard sample data (EPSG:5186)
-    try {
-      const preview = parseCSVPreview(SAMPLE_SURVEY_CSV_EPSG5186);
-      const initialPts = buildCADPointsFromCSV(preview.allRows, preview.detectedMapping, 'layer-survey-points');
-      setPoints(initialPts);
-
-      // Pre-connect sample boundary polyline for road/boundary demonstration
-      if (initialPts.length >= 6) {
-        const sampleBoundary: CADPolyline = {
-          id: 'sample-pl-1',
-          name: '경계_01-05',
-          points: initialPts.slice(0, 5).map(p => ({ x: p.x, y: p.y })),
-          isClosed: false,
-          layerId: 'layer-boundary',
-          color: '#38bdf8'
-        };
-        setPolylines([sampleBoundary]);
-      }
-    } catch {
-      // Ignored
-    }
-  }, []);
+    // Fresh start is always blank as requested
 
   // Auto-save to LocalStorage so mobile/tablet refresh never loses work
   useEffect(() => {
@@ -272,8 +227,6 @@ export default function App() {
       const state: ProjectState = {
         version: '1.0.0',
         name: 'AutoSaved',
-        crs,
-        isSwappedXY,
         layers,
         points,
         lines,
@@ -288,7 +241,7 @@ export default function App() {
       }
     }, 1500);
     return () => clearTimeout(timeout);
-  }, [crs, isSwappedXY, layers, points, lines, polylines, polygons, texts]);
+  }, [layers, points, lines, polylines, polygons, texts]);
 
   // Finish active drawing
   const handleFinishDrawing = () => {
@@ -374,30 +327,6 @@ export default function App() {
     setSelectedEntityId(pt.id);
   };
 
-  // Toggle X/Y Coordinate Swap across entire project
-  const handleToggleSwapXY = () => {
-    // Invert X and Y coordinates for all entities
-    setPoints(pts => pts.map(p => ({ ...p, x: p.y, y: p.x })));
-    setLines(ls => ls.map(l => ({
-      ...l,
-      start: { ...l.start, x: l.start.y, y: l.start.x },
-      end: { ...l.end, x: l.end.y, y: l.end.x }
-    })));
-    setPolylines(pls => pls.map(pl => ({
-      ...pl,
-      points: pl.points.map(p => ({ ...p, x: p.y, y: p.x }))
-    })));
-    setPolygons(pgs => pgs.map(pg => ({
-      ...pg,
-      points: pg.points.map(p => ({ ...p, x: p.y, y: p.x }))
-    })));
-    setTexts(txts => txts.map(t => ({ ...t, x: t.y, y: t.x })));
-
-    setIsSwappedXY(prev => !prev);
-    setZoomExtentsTrigger(Date.now());
-    pushHistory('X/Y 좌표축 반전');
-  };
-
   // Import CSV Points
   const handleImportCSVPoints = (newPoints: CADPoint[], append: boolean) => {
     if (append) {
@@ -409,7 +338,7 @@ export default function App() {
       setPolygons([]);
       setTexts([]);
     }
-    setZoomExtentsTrigger(Date.now());
+    setZoomExtentsTrigger({ timestamp: Date.now() });
     pushHistory('CSV 측점 불러오기');
   };
 
@@ -441,21 +370,19 @@ export default function App() {
       setPolygons(data.polygons);
       setTexts(data.texts);
     }
-    setZoomExtentsTrigger(Date.now());
+    setZoomExtentsTrigger({ timestamp: Date.now() });
     pushHistory('DXF 도면 불러오기');
   };
 
   // Load Saved Project State
   const handleLoadProject = (state: ProjectState) => {
-    setCrs(state.crs || 'EPSG:5186');
-    setIsSwappedXY(state.isSwappedXY !== undefined ? state.isSwappedXY : true);
     setLayers(state.layers || DEFAULT_LAYERS);
     setPoints(state.points || []);
     setLines(state.lines || []);
     setPolylines(state.polylines || []);
     setPolygons(state.polygons || []);
     setTexts(state.texts || []);
-    setZoomExtentsTrigger(Date.now());
+    setZoomExtentsTrigger({ timestamp: Date.now() });
     pushHistory('프로젝트 복원');
   };
 
@@ -492,10 +419,6 @@ export default function App() {
 
       {/* Top Header & Coordinate Bar */}
       <CoordinateBar
-        crs={crs}
-        onChangeCRS={setCrs}
-        isSwappedXY={isSwappedXY}
-        onToggleSwapXY={handleToggleSwapXY}
         cursorWorld={cursorWorld}
         activeSnap={activeSnap}
         pointsCount={points.length}
@@ -549,7 +472,7 @@ export default function App() {
           canRedo={historyIndex < history.length - 1}
           onUndo={handleUndo}
           onRedo={handleRedo}
-          onZoomExtents={() => setZoomExtentsTrigger(Date.now())}
+          onZoomExtents={() => setZoomExtentsTrigger({ timestamp: Date.now() })}
           activePointsCount={activePoints.length}
           onFinishDrawing={handleFinishDrawing}
           onCancelDrawing={handleCancelDrawing}
@@ -588,8 +511,6 @@ export default function App() {
           polylines={polylines}
           polygons={polygons}
           texts={texts}
-          crs={crs}
-          isSwappedXY={isSwappedXY}
           onClose={() => setShowExportModal(false)}
         />
       )}

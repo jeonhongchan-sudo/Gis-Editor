@@ -240,10 +240,9 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             </button>
             <button
               onClick={() => { onZoomExtents(); setMobileExpanded(false); }}
-              className="p-2.5 rounded-xl flex flex-col items-center gap-0.5 text-[10px] text-slate-300"
+              className="p-2.5 rounded-xl flex flex-col items-center justify-center text-slate-300"
             >
-              <Focus className="w-4 h-4" />
-              <span>전체맞춤</span>
+              <Focus className="w-5 h-5" />
             </button>
           </div>
         )}

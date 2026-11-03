@@ -97,8 +97,8 @@ export interface CoordinateSystem {
 export interface ProjectState {
   version: string;
   name: string;
-  crs: string; // e.g. "EPSG:5186"
-  isSwappedXY: boolean;
+  crs?: string; // e.g. "EPSG:5186" (Optional, as coordinate system selection was removed)
+  isSwappedXY?: boolean; // (Optional, as coordinate system selection was removed)
   layers: CADLayer[];
   points: CADPoint[];
   lines: CADLine[];

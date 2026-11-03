@@ -181,7 +181,7 @@ export async function parseDXFAsync(
           if (pair.code === 10) x = parseFloat(pair.value);
           else if (pair.code === 20) y = parseFloat(pair.value);
           else if (pair.code === 30) z = parseFloat(pair.value);
-          else if (pair.code === 8) layer = pair.value;
+          else if (pair.code === 8) layer = pair.value.trim();
         }
         if (!isNaN(x) && !isNaN(y)) {
           points.push({
@@ -203,7 +203,7 @@ export async function parseDXFAsync(
           else if (pair.code === 20) y1 = parseFloat(pair.value);
           else if (pair.code === 11) x2 = parseFloat(pair.value);
           else if (pair.code === 21) y2 = parseFloat(pair.value);
-          else if (pair.code === 8) layer = pair.value;
+          else if (pair.code === 8) layer = pair.value.trim();
         }
         if (!isNaN(x1) && !isNaN(y1) && !isNaN(x2) && !isNaN(y2)) {
           cadLines.push({
@@ -226,7 +226,7 @@ export async function parseDXFAsync(
           if (pair.code === 70) {
             isClosed = (parseInt(pair.value, 10) & 1) === 1;
           } else if (pair.code === 8) {
-            layer = pair.value;
+            layer = pair.value.trim();
           } else if (pair.code === 10) {
             if (currentX !== null && currentY !== null) {
               polyPoints.push({ x: currentX, y: currentY });
@@ -273,7 +273,7 @@ export async function parseDXFAsync(
 
         while ((pair = nextPair()) && pair.code !== 0) {
           if (pair.code === 70) isClosed = (parseInt(pair.value, 10) & 1) === 1;
-          else if (pair.code === 8) layer = pair.value;
+          else if (pair.code === 8) layer = pair.value.trim();
         }
 
         // Read subsequent VERTEX entities until SEQEND
@@ -314,7 +314,7 @@ export async function parseDXFAsync(
           if (pair.code === 10) cx = parseFloat(pair.value);
           else if (pair.code === 20) cy = parseFloat(pair.value);
           else if (pair.code === 40) r = parseFloat(pair.value);
-          else if (pair.code === 8) layer = cleanDxfText(pair.value) || '0';
+          else if (pair.code === 8) layer = pair.value.trim();
         }
         if (!isNaN(cx) && !isNaN(cy) && r > 0) {
           const circlePts: Point2D[] = [];
@@ -344,7 +344,7 @@ export async function parseDXFAsync(
           else if (pair.code === 40) r = parseFloat(pair.value);
           else if (pair.code === 50) startAng = parseFloat(pair.value);
           else if (pair.code === 51) endAng = parseFloat(pair.value);
-          else if (pair.code === 8) layer = cleanDxfText(pair.value) || '0';
+          else if (pair.code === 8) layer = pair.value.trim();
         }
         if (!isNaN(cx) && !isNaN(cy) && r > 0) {
           let sRad = (startAng * Math.PI) / 180;
@@ -378,7 +378,7 @@ export async function parseDXFAsync(
           else if (pair.code === 40) height = parseFloat(pair.value);
           else if (pair.code === 3) textParts.push(pair.value);
           else if (pair.code === 1) textParts.push(pair.value);
-          else if (pair.code === 8) layer = cleanDxfText(pair.value) || '0';
+          else if (pair.code === 8) layer = pair.value.trim();
         }
         const textContent = cleanDxfText(textParts.join(''));
         if (textContent) {
@@ -508,7 +508,7 @@ export function parseDXF(dxfText: string): DXFParseResult {
           if (pair.code === 10) x = parseFloat(pair.value);
           else if (pair.code === 20) y = parseFloat(pair.value);
           else if (pair.code === 30) z = parseFloat(pair.value);
-          else if (pair.code === 8) layer = pair.value;
+          else if (pair.code === 8) layer = pair.value.trim();
         }
         if (!isNaN(x) && !isNaN(y)) {
           points.push({
@@ -530,7 +530,7 @@ export function parseDXF(dxfText: string): DXFParseResult {
           else if (pair.code === 20) y1 = parseFloat(pair.value);
           else if (pair.code === 11) x2 = parseFloat(pair.value);
           else if (pair.code === 21) y2 = parseFloat(pair.value);
-          else if (pair.code === 8) layer = pair.value;
+          else if (pair.code === 8) layer = pair.value.trim();
         }
         if (!isNaN(x1) && !isNaN(y1) && !isNaN(x2) && !isNaN(y2)) {
           cadLines.push({
@@ -551,7 +551,7 @@ export function parseDXF(dxfText: string): DXFParseResult {
 
         while ((pair = nextPair()) && pair.code !== 0) {
           if (pair.code === 70) isClosed = (parseInt(pair.value, 10) & 1) === 1;
-          else if (pair.code === 8) layer = pair.value;
+          else if (pair.code === 8) layer = pair.value.trim();
           else if (pair.code === 10) {
             if (currentX !== null && currentY !== null) {
               polyPoints.push({ x: currentX, y: currentY });
@@ -597,7 +597,7 @@ export function parseDXF(dxfText: string): DXFParseResult {
           if (pair.code === 10) cx = parseFloat(pair.value);
           else if (pair.code === 20) cy = parseFloat(pair.value);
           else if (pair.code === 40) r = parseFloat(pair.value);
-          else if (pair.code === 8) layer = cleanDxfText(pair.value) || '0';
+          else if (pair.code === 8) layer = pair.value.trim();
         }
         if (!isNaN(cx) && !isNaN(cy) && r > 0) {
           const circlePts: Point2D[] = [];
@@ -627,7 +627,7 @@ export function parseDXF(dxfText: string): DXFParseResult {
           else if (pair.code === 40) r = parseFloat(pair.value);
           else if (pair.code === 50) startAng = parseFloat(pair.value);
           else if (pair.code === 51) endAng = parseFloat(pair.value);
-          else if (pair.code === 8) layer = cleanDxfText(pair.value) || '0';
+          else if (pair.code === 8) layer = pair.value.trim();
         }
         if (!isNaN(cx) && !isNaN(cy) && r > 0) {
           let sRad = (startAng * Math.PI) / 180;
@@ -661,7 +661,7 @@ export function parseDXF(dxfText: string): DXFParseResult {
           else if (pair.code === 40) height = parseFloat(pair.value);
           else if (pair.code === 3) textParts.push(pair.value);
           else if (pair.code === 1) textParts.push(pair.value);
-          else if (pair.code === 8) layer = cleanDxfText(pair.value) || '0';
+          else if (pair.code === 8) layer = pair.value.trim();
         }
         const textContent = cleanDxfText(textParts.join(''));
         if (textContent) {

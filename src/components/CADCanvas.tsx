@@ -59,8 +59,8 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 
   // Viewport state: CAD world coordinate at canvas center
   const [view, setView] = useState<{ panX: number; panY: number; zoom: number }>({
-    panX: 200000,
-    panY: 550000,
+    panX: 0,
+    panY: 0,
     zoom: 2.0 // pixels per meter
   });
 
@@ -131,12 +131,22 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     const width = canvas.clientWidth || (canvas.width / dpr) || window.innerWidth;
     const height = canvas.clientHeight || (canvas.height / dpr) || window.innerHeight;
 
-    const worldWidth = Math.max(10, maxX - minX);
-    const worldHeight = Math.max(10, maxY - minY);
+    const worldWidth = maxX - minX;
+    const worldHeight = maxY - minY;
+
+    if (!isFinite(worldWidth) || !isFinite(worldHeight) || worldWidth <= 0 || worldHeight <= 0) {
+      // Fallback if dimensions are invalid
+      setView({
+        panX: isFinite(minX + maxX) ? (minX + maxX) / 2 : 0,
+        panY: isFinite(minY + maxY) ? (minY + maxY) / 2 : 0,
+        zoom: 2.0
+      });
+      return;
+    }
 
     const zoomX = (width - padding * 2) / worldWidth;
     const zoomY = (height - padding * 2) / worldHeight;
-    const newZoom = Math.max(0.0001, Math.min(100, Math.min(zoomX, zoomY)));
+    const newZoom = Math.max(0.0001, Math.min(2000, Math.min(zoomX, zoomY)));
 
     setView({
       panX: (minX + maxX) / 2,
@@ -157,10 +167,8 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
   }, [zoomExtentsTrigger, zoomExtents]);
 
   // Initial fit on first points loaded
-  const hasAutoCentered = useRef(false);
   useEffect(() => {
-    if (!hasAutoCentered.current && points.length > 0) {
-      hasAutoCentered.current = true;
+    if (points.length > 0) {
       zoomExtents();
     }
   }, [points.length, zoomExtents]);
@@ -794,32 +802,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       ctx.lineWidth = selectedEntityId === pl.id ? 3.5 : (layer?.lineWidth || 2);
       ctx.stroke();
 
-      // Draw segment lengths only when zoomed in close (LOD)
-      if (view.zoom > 0.12 && pl.points.length < 50) {
-        ctx.font = '10px JetBrains Mono, monospace';
-        ctx.textAlign = 'center';
 
-        for (let i = 0; i < pl.points.length - 1; i++) {
-          const p1 = pl.points[i];
-          const p2 = pl.points[i + 1];
-          const midX = (p1.x + p2.x) / 2;
-          const midY = (p1.y + p2.y) / 2;
-          if (midX < visMinX || midX > visMaxX || midY < visMinY || midY > visMaxY) continue;
-
-          const sp1 = getScreen(p1);
-          const sp2 = getScreen(p2);
-          const segDist = distance2D(p1, p2);
-          const smidX = (sp1.x + sp2.x) / 2;
-          const smidY = (sp1.y + sp2.y) / 2;
-
-          const label = `${segDist.toFixed(2)}m`;
-          const textW = ctx.measureText(label).width;
-          ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
-          ctx.fillRect(smidX - textW / 2 - 3, smidY - 8, textW + 6, 14);
-          ctx.fillStyle = '#38bdf8';
-          ctx.fillText(label, smidX, smidY + 3);
-        }
-      }
     });
 
     // 5. Render Lines (HIGH-SPEED LAYER BATCHING)
@@ -862,25 +845,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       ctx.lineWidth = layer?.lineWidth || 1.5;
       ctx.stroke();
 
-      // If zoomed in close and small number of lines in view, show length badges
-      if (view.zoom > 0.15 && layerLines.length < 80) {
-        ctx.font = '10px JetBrains Mono, monospace';
-        ctx.textAlign = 'center';
-        for (let i = 0; i < layerLines.length; i++) {
-          const l = layerLines[i];
-          const segDist = distance2D(l.start, l.end);
-          const sp1 = getScreen(l.start);
-          const sp2 = getScreen(l.end);
-          const midX = (sp1.x + sp2.x) / 2;
-          const midY = (sp1.y + sp2.y) / 2;
-          const label = `${segDist.toFixed(2)}m`;
-          const textW = ctx.measureText(label).width;
-          ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
-          ctx.fillRect(midX - textW / 2 - 3, midY - 8, textW + 6, 14);
-          ctx.fillStyle = '#38bdf8';
-          ctx.fillText(label, midX, midY + 3);
-        }
-      }
+
     });
 
     // 6. Render Survey Points & Nodes (Batched with Viewport Culling)
@@ -949,6 +914,8 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       }
       ctx.font = `${renderPxHeight}px Pretendard, sans-serif`;
       ctx.fillStyle = txt.color || layer?.color || '#ffffff';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
       ctx.fillText(txt.text, 0, 0);
       ctx.restore();
     }
@@ -1057,11 +1024,10 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       <div className="absolute right-3.5 bottom-7 z-10 pointer-events-none flex flex-col items-end gap-1.5">
         <button
           onClick={() => zoomExtents()}
-          title="캐드 단축키 Z-E (Zoom Extents): 전체 도면 및 측점 화면 맞춤"
-          className="pointer-events-auto flex items-center gap-1.5 px-3 py-1.5 bg-slate-900/90 hover:bg-sky-600 text-sky-400 hover:text-white border border-slate-700 hover:border-sky-500 rounded-xl shadow-xl backdrop-blur-md transition text-xs font-semibold group active:scale-95"
+          title="전체 도면 및 측점 화면 맞춤"
+          className="pointer-events-auto flex items-center justify-center p-2.5 bg-slate-900/90 hover:bg-sky-600 text-sky-400 hover:text-white border border-slate-700 hover:border-sky-500 rounded-2xl shadow-xl backdrop-blur-md transition group active:scale-95"
         >
-          <Focus className="w-4 h-4 text-sky-400 group-hover:text-white transition" />
-          <span>Z-E (전체 맞춤)</span>
+          <Focus className="w-5 h-5 transition" />
         </button>
       </div>
     </div>

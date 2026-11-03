@@ -19,14 +19,9 @@ import {
   Smartphone
 } from 'lucide-react';
 import { Point2D, SnapPoint } from '../types/cad';
-import { COORDINATE_SYSTEMS } from '../utils/projections';
 import { PWAInstallButton } from './PWAInstallButton';
 
 interface CoordinateBarProps {
-  crs: string;
-  onChangeCRS: (newCrs: string) => void;
-  isSwappedXY: boolean;
-  onToggleSwapXY: () => void;
   cursorWorld: Point2D | null;
   activeSnap: SnapPoint | null;
   pointsCount: number;
@@ -45,10 +40,6 @@ interface CoordinateBarProps {
 }
 
 export const CoordinateBar: React.FC<CoordinateBarProps> = ({
-  crs,
-  onChangeCRS,
-  isSwappedXY,
-  onToggleSwapXY,
   cursorWorld,
   activeSnap,
   pointsCount,
@@ -96,36 +87,11 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
           </div>
         </div>
 
-        {/* Center: Quick CRS & Swap (Visible on Tablet & PC) */}
+        {/* Center: Brand Subtitle (Visible on Tablet & PC) */}
         <div className="hidden sm:flex items-center gap-2">
-          <div className="flex items-center gap-1 bg-slate-800/80 px-2 py-1 rounded-xl border border-slate-700">
-            <span className="text-slate-400 text-[11px]">좌표계:</span>
-            <select
-              value={crs}
-              onChange={e => onChangeCRS(e.target.value)}
-              className="bg-transparent text-sky-300 text-xs font-medium focus:outline-none cursor-pointer"
-            >
-              {Object.values(COORDINATE_SYSTEMS).map(cs => (
-                <option key={cs.code} value={cs.code} className="bg-slate-900 text-slate-200">
-                  {cs.code} - {cs.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <button
-            onClick={onToggleSwapXY}
-            title="측량 좌표계 (X=Northing, Y=Easting) ⇄ CAD 좌표계 (X=Easting, Y=Northing) 반전"
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-xl border text-xs font-medium transition ${
-              isSwappedXY
-                ? 'bg-amber-950/80 border-amber-600/80 text-amber-300 shadow-sm shadow-amber-900/30'
-                : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
-            }`}
-          >
-            <ArrowLeftRight className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">{isSwappedXY ? '측량반전(X↔Y) 켜짐' : '일반(X/Y)'}</span>
-            <span className="md:hidden">{isSwappedXY ? 'X↔Y 반전' : 'X/Y'}</span>
-          </button>
+          <p className="text-[11px] text-slate-500 font-medium bg-slate-800/40 px-3 py-1 rounded-xl border border-slate-800">
+            실시간 좌표 연동 및 도면 편집
+          </p>
         </div>
 
         {/* Right: Actions & PWA Install Button */}
@@ -198,34 +164,9 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
       {/* Mobile Drawer Dropdown Menu (on < 640px) */}
       {mobileMenuOpen && (
         <div className="sm:hidden border-t border-slate-800 bg-slate-900 px-3 py-2.5 flex flex-col gap-2 animate-in slide-in-from-top-2 duration-150">
-          {/* Mobile CRS & Swap */}
-          <div className="flex items-center justify-between gap-2 p-2 bg-slate-950 rounded-xl border border-slate-800">
-            <div className="flex items-center gap-1 flex-1">
-              <span className="text-[11px] text-slate-400">좌표계:</span>
-              <select
-                value={crs}
-                onChange={e => onChangeCRS(e.target.value)}
-                className="bg-transparent text-sky-400 text-xs font-semibold focus:outline-none flex-1 truncate"
-              >
-                {Object.values(COORDINATE_SYSTEMS).map(cs => (
-                  <option key={cs.code} value={cs.code} className="bg-slate-900 text-slate-200">
-                    {cs.code} - {cs.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <button
-              onClick={onToggleSwapXY}
-              className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] shrink-0 font-medium ${
-                isSwappedXY
-                  ? 'bg-amber-950/80 border-amber-600 text-amber-300'
-                  : 'bg-slate-800 border-slate-700 text-slate-300'
-              }`}
-            >
-              <ArrowLeftRight className="w-3 h-3" />
-              <span>{isSwappedXY ? 'X↔Y 반전됨' : '일반(X/Y)'}</span>
-            </button>
+          {/* Mobile Info */}
+          <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-center">
+            <span className="text-[11px] text-slate-500 font-medium">현장 측량 및 도면 편집 도구</span>
           </div>
 
           {/* Mobile Buttons Grid */}
