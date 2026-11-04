@@ -101,43 +101,43 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="w-full max-w-2xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+      <div className="w-full max-w-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700/80 rounded-2xl shadow-2xl flex flex-col overflow-hidden text-slate-900 dark:text-slate-100">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-slate-800">
+        <div className="flex items-center justify-between p-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50">
           <div>
-            <h2 className="text-base font-semibold text-white flex items-center gap-2">
-              <Download className="w-5 h-5 text-emerald-400" />
+            <h2 className="text-base font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+              <Download className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
               <span>성과물 내보내기 (SHP / CSV)</span>
             </h2>
-            <p className="text-xs text-slate-400 mt-0.5">
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
               GIS 표준 Shapefile(.zip) 또는 좌표 CSV 파일로 데이터를 즉시 내보냅니다.
             </p>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
+            className="p-1.5 rounded-xl text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Current Project Summary Badge */}
-        <div className="p-3 bg-slate-950/80 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
-          <div className="flex items-center gap-2 text-slate-300">
-            <Layers className="w-3.5 h-3.5 text-purple-400" />
-            <span className="text-slate-400">데이터 구성:</span>
+        <div className="p-3 bg-slate-50 dark:bg-slate-950/80 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
+            <Layers className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
+            <span className="text-slate-500 dark:text-slate-400">데이터 구성:</span>
           </div>
 
-          <div className="flex items-center gap-3 text-slate-400">
-            <span>측점: <strong className="text-sky-400">{points.length}</strong></span>
-            <span>선: <strong className="text-amber-400">{totalLinesCount}</strong></span>
-            <span>폴리곤: <strong className="text-emerald-400">{polygons.length}</strong></span>
+          <div className="flex items-center gap-3 text-slate-500 dark:text-slate-400">
+            <span>측점: <strong className="text-sky-600 dark:text-sky-400">{points.length}</strong></span>
+            <span>선: <strong className="text-amber-600 dark:text-amber-400">{totalLinesCount}</strong></span>
+            <span>폴리곤: <strong className="text-emerald-600 dark:text-emerald-400">{polygons.length}</strong></span>
           </div>
         </div>
 
         {/* Success Alert */}
         {exportSuccessMsg && (
-          <div className="mx-4 mt-3 p-3 bg-emerald-950/80 border border-emerald-700 rounded-xl flex items-center gap-2 text-emerald-300 text-xs animate-in fade-in">
+          <div className="mx-4 mt-3 p-3 bg-emerald-50 dark:bg-emerald-950/80 border border-emerald-200 dark:border-emerald-700 rounded-xl flex items-center gap-2 text-emerald-700 dark:text-emerald-300 text-xs animate-in fade-in">
             <Check className="w-4 h-4 shrink-0" />
             <span>{exportSuccessMsg}</span>
           </div>
@@ -146,17 +146,17 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         {/* Export Options Grid */}
         <div className="p-4 space-y-3.5 overflow-y-auto max-h-[60vh] custom-scrollbar">
           {/* Option 1: ESRI Shapefile ZIP (SHP) */}
-          <div className="p-4 bg-slate-950/80 border border-emerald-500/40 hover:border-emerald-500 rounded-2xl flex flex-col gap-3 transition">
+          <div className="p-4 bg-slate-50/50 dark:bg-slate-950/80 border border-slate-200 dark:border-emerald-500/40 hover:border-emerald-500 rounded-2xl flex flex-col gap-3 transition shadow-sm">
             <div className="flex items-start justify-between gap-2">
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
-                  <Archive className="w-5 h-5 text-emerald-400" />
-                  <h3 className="text-sm font-semibold text-white">ESRI Shapefile 압축 번들 (.ZIP)</h3>
-                  <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800 px-2 py-0.5 rounded-full font-bold">
+                  <Archive className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">ESRI Shapefile 압축 번들 (.ZIP)</h3>
+                  <span className="text-[10px] bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 px-2 py-0.5 rounded-full font-bold uppercase">
                     GIS 표준 권장
                   </span>
                 </div>
-                <p className="text-xs text-slate-400">
+                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
                   QGIS, ArcGIS, 국토정보플랫폼 등에서 호환되는 <strong>.shp, .shx, .dbf, .prj</strong> 파일이 압축된 패키지입니다.
                   측점, 선, 구역 도형이 레이어별로 자동 분리되어 저장됩니다.
                 </p>
@@ -164,15 +164,15 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             </div>
 
             {/* Coordinate System Selector for .PRJ */}
-            <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-slate-900 rounded-xl border border-slate-800 text-xs">
-              <div className="flex items-center gap-1.5 text-slate-300">
-                <Globe2 className="w-4 h-4 text-sky-400" />
-                <span className="text-slate-400">좌표계 정의(PRJ):</span>
+            <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800 text-xs">
+              <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
+                <Globe2 className="w-4 h-4 text-sky-600 dark:text-sky-400" />
+                <span className="text-slate-500 dark:text-slate-400">좌표계 정의(PRJ):</span>
               </div>
               <select
                 value={selectedCrs}
                 onChange={e => setSelectedCrs(e.target.value)}
-                className="bg-slate-800 border border-slate-700 text-sky-300 text-xs rounded-lg px-2.5 py-1 focus:outline-none"
+                className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sky-700 dark:text-sky-300 text-xs rounded-lg px-2.5 py-1 focus:outline-none shadow-sm"
               >
                 {Object.entries(COORDINATE_SYSTEMS).map(([code, def]) => (
                   <option key={code} value={code}>
@@ -193,17 +193,17 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           </div>
 
           {/* Option 2: CSV Coordinates */}
-          <div className="p-4 bg-slate-950/60 border border-slate-800 hover:border-sky-500/50 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 transition">
+          <div className="p-4 bg-slate-50/50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 hover:border-sky-500/50 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 transition shadow-sm">
             <div className="space-y-1">
               <div className="flex items-center gap-2">
-                <FileSpreadsheet className="w-5 h-5 text-sky-400" />
-                <h3 className="text-sm font-semibold text-white">측점 좌표 목록 CSV</h3>
-                <span className="text-[10px] bg-sky-950 text-sky-400 border border-sky-800 px-1.5 py-0.5 rounded">
+                <FileSpreadsheet className="w-5 h-5 text-sky-600 dark:text-sky-400" />
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">측점 좌표 목록 CSV</h3>
+                <span className="text-[10px] bg-sky-50 dark:bg-sky-950 text-sky-700 dark:text-sky-400 border border-sky-100 dark:border-sky-800 px-1.5 py-0.5 rounded uppercase font-bold">
                   좌표 원본
                 </span>
               </div>
-              <p className="text-xs text-slate-400">
-                엑셀이나 측량 전용기에서 열어볼 수 있는 표준 CSV 형식 좌표 파일(측점명, X, Y, Z, 레이어)입니다.
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                엑셀이나 측량 전용기에서 열어볼 수 있는 표준 CSV 형식 좌표 파일입니다.
               </p>
             </div>
 
@@ -218,14 +218,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           </div>
 
           {/* Option 3: Project Save (.cadgis) */}
-          <div className="p-4 bg-slate-950/60 border border-slate-800 hover:border-purple-500/50 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 transition">
+          <div className="p-4 bg-slate-50/50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 hover:border-purple-500/50 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 transition shadow-sm">
             <div className="space-y-1">
               <div className="flex items-center gap-2">
-                <Save className="w-5 h-5 text-purple-400" />
-                <h3 className="text-sm font-semibold text-white">작업 누적 보관 파일 (.cadgis)</h3>
+                <Save className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">작업 누적 보관 파일 (.cadgis)</h3>
               </div>
-              <p className="text-xs text-slate-400">
-                작업했던 레이어, 측점, 선, 폴리곤 및 텍스트를 누적 저장하여 다음 날 그대로 이어서 작업할 때 사용합니다.
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                작업했던 레이어, 측점, 선, 폴리곤 및 텍스트를 누적 저장하여 다음에 이어서 작업할 때 사용합니다.
               </p>
             </div>
 
@@ -240,10 +240,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-slate-800 bg-slate-950 flex items-center justify-end">
+        <div className="p-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950 flex items-center justify-end">
           <button
             onClick={onClose}
-            className="px-5 py-2 text-xs font-medium text-slate-400 hover:text-white transition"
+            className="px-6 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-bold rounded-xl transition"
           >
             닫기
           </button>

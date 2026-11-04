@@ -53,16 +53,16 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
   };
 
   return (
-    <div className="absolute top-14 sm:top-20 right-2 sm:right-3 z-30 w-80 max-w-[calc(100vw-16px)] bg-slate-900/95 backdrop-blur-xl border border-slate-700/80 rounded-2xl shadow-2xl p-3 sm:p-4 flex flex-col gap-3 animate-in fade-in zoom-in-95 duration-150">
+    <div className="absolute top-14 sm:top-20 right-2 sm:right-3 z-30 w-80 max-w-[calc(100vw-16px)] bg-white dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200 dark:border-slate-700/80 rounded-2xl shadow-2xl p-3 sm:p-4 flex flex-col gap-3 animate-in fade-in zoom-in-95 duration-150">
       {/* Header */}
-      <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+      <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
         <div>
-          <h2 className="text-sm font-semibold text-slate-100">CAD 도면 레이어</h2>
-          <p className="text-[11px] text-slate-400">도면층 표시/숨김 및 색상 관리</p>
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">CAD 도면 레이어</h2>
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">도면층 표시/숨김 및 색상 관리</p>
         </div>
         <button
           onClick={onClose}
-          className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+          className="p-1 rounded-lg text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition"
         >
           <X className="w-4 h-4" />
         </button>
@@ -79,8 +79,8 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
               onClick={() => onSetActiveLayerId(layer.id)}
               className={`flex items-center justify-between p-2 rounded-xl text-xs cursor-pointer transition ${
                 isActive
-                  ? 'bg-sky-950/60 border border-sky-500/50 text-white'
-                  : 'hover:bg-slate-800/80 text-slate-300 border border-transparent'
+                  ? 'bg-sky-50 dark:bg-sky-950/60 border border-sky-200 dark:border-sky-500/50 text-sky-900 dark:text-white'
+                  : 'hover:bg-slate-50 dark:hover:bg-slate-800/80 text-slate-600 dark:text-slate-300 border border-transparent'
               }`}
             >
               {/* Left: Active Check & Color Swatch & Name */}
@@ -116,7 +116,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                     onToggleVisible(layer.id);
                   }}
                   className={`p-1 rounded-lg transition ${
-                    layer.visible ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-400'
+                    layer.visible ? 'text-slate-500 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white' : 'text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400'
                   }`}
                   title={layer.visible ? '레이어 숨기기' : '레이어 표시'}
                 >
@@ -131,7 +131,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                     onToggleLock(layer.id);
                   }}
                   className={`p-1 rounded-lg transition ${
-                    layer.locked ? 'text-amber-400' : 'text-slate-500 hover:text-slate-300'
+                    layer.locked ? 'text-amber-500 dark:text-amber-400' : 'text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
                   }`}
                   title={layer.locked ? '잠금 해제' : '레이어 잠금'}
                 >
@@ -145,7 +145,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
 
       {/* Color picker popup if open */}
       {colorPickerLayerId && (
-        <div className="p-2 bg-slate-950 border border-slate-700 rounded-xl flex items-center justify-between gap-1">
+        <div className="p-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl flex items-center justify-between gap-1 shadow-lg">
           {PALETTE.map(c => (
             <button
               key={c}
@@ -161,13 +161,13 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
       )}
 
       {/* Add New Layer Form */}
-      <form onSubmit={handleCreate} className="pt-2 border-t border-slate-800 flex items-center gap-1.5">
+      <form onSubmit={handleCreate} className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center gap-1.5">
         <input
           type="text"
           placeholder="새 레이어명 (예: 경계선, 도로)"
           value={newLayerName}
           onChange={e => setNewLayerName(e.target.value)}
-          className="flex-1 bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-sky-500"
+          className="flex-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-200 text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-sky-500 shadow-sm"
         />
         <input
           type="color"
@@ -179,7 +179,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
         <button
           type="submit"
           disabled={!newLayerName.trim()}
-          className="p-2 bg-sky-600 hover:bg-sky-500 disabled:bg-slate-800 disabled:text-slate-600 text-white rounded-xl transition"
+          className="p-2 bg-sky-600 hover:bg-sky-500 disabled:bg-slate-100 dark:disabled:bg-slate-800 disabled:text-slate-300 dark:disabled:text-slate-600 text-white rounded-xl transition shadow-sm"
           title="레이어 추가"
         >
           <Plus className="w-4 h-4" />

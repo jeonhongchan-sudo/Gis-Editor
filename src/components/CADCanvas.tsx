@@ -28,6 +28,7 @@ import {
 } from '../utils/geometry';
 
 interface CADCanvasProps {
+  theme?: 'light' | 'dark';
   tool: ToolMode;
   ortho: boolean;
   snapEnabled: boolean;
@@ -55,6 +56,7 @@ interface CADCanvasProps {
 }
 
 export const CADCanvas: React.FC<CADCanvasProps> = ({
+  theme = 'dark',
   tool,
   ortho,
   snapEnabled,
@@ -999,11 +1001,11 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     ctx.scale(dpr, dpr);
 
     // 1. Dark CAD Background
-    ctx.fillStyle = '#090d16';
+    ctx.fillStyle = theme === 'dark' ? '#090d16' : '#f8fafc';
     ctx.fillRect(0, 0, width, height);
 
     // 2. Metric CAD Grid
-    drawCADGrid(ctx, width, height, view);
+    drawCADGrid(ctx, width, height, view, theme);
 
     const getScreen = (p: Point2D) => worldToScreen(p, width, height);
 
@@ -1376,11 +1378,11 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
           ctx.font = '10px Pretendard, sans-serif';
           ctx.textAlign = 'left';
           ctx.lineJoin = 'round';
-          ctx.strokeStyle = '#090d16';
+          ctx.strokeStyle = theme === 'dark' ? '#090d16' : '#ffffff';
           ctx.lineWidth = 2.5;
           ctx.strokeText(labelText, chosenCandidate.tx, chosenCandidate.ty);
 
-          ctx.fillStyle = isSelected ? '#fbbf24' : '#e2e8f0';
+          ctx.fillStyle = isSelected ? '#fbbf24' : (theme === 'dark' ? '#e2e8f0' : '#334155');
           ctx.fillText(labelText, chosenCandidate.tx, chosenCandidate.ty);
           ctx.restore();
         }
@@ -1412,7 +1414,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         ctx.rotate((-txt.rotation * Math.PI) / 180);
       }
       ctx.font = `${renderPxHeight}px Pretendard, sans-serif`;
-      ctx.fillStyle = isSelected ? '#fbbf24' : (txt.color || layer?.color || '#ffffff');
+      ctx.fillStyle = isSelected ? '#fbbf24' : (txt.color || layer?.color || (theme === 'dark' ? '#ffffff' : '#1e293b'));
       ctx.textAlign = 'left';
       ctx.textBaseline = 'bottom';
       ctx.fillText(txt.text, 4, 0);
@@ -1608,11 +1610,11 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     // 10. Magnetic Snap Indicator
     if (activeSnap) {
       const snapSp = getScreen(activeSnap.point);
-      drawSnapMarker(ctx, snapSp, activeSnap.type, activeSnap.label);
+      drawSnapMarker(ctx, snapSp, activeSnap.type, activeSnap.label, theme);
     }
 
     // 11. Scale Bar
-    drawScaleBar(ctx, width, height, view.zoom);
+    drawScaleBar(ctx, width, height, view.zoom, theme);
 
     ctx.restore();
   }, [
@@ -1653,7 +1655,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         <button
           onClick={() => zoomExtents()}
           title="전체 맞춤"
-          className="pointer-events-auto flex items-center justify-center p-2.5 bg-slate-900/90 hover:bg-sky-600 text-sky-400 hover:text-white border border-slate-700 hover:border-sky-500 rounded-2xl shadow-xl backdrop-blur-md transition group active:scale-95"
+          className="pointer-events-auto flex items-center justify-center p-2.5 bg-white/90 dark:bg-slate-900/90 hover:bg-sky-600 text-sky-600 dark:text-sky-400 hover:text-white border border-slate-200 dark:border-slate-700 hover:border-sky-500 rounded-2xl shadow-xl backdrop-blur-md transition group active:scale-95"
         >
           <Focus className="w-5 h-5 transition" />
         </button>
@@ -1661,8 +1663,8 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 
       {/* Visual Guide Banner for Multi-Select */}
       {tool === 'select' && (
-        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-slate-900/95 backdrop-blur-md text-sky-300 border border-sky-500/80 px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-2xl shadow-2xl flex items-center gap-2 text-[11px] sm:text-xs font-medium pointer-events-none animate-in fade-in slide-in-from-top-2 max-w-[90vw] text-center">
-          <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping shrink-0" />
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md text-sky-700 dark:text-sky-300 border border-sky-400 dark:border-sky-500/80 px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-2xl shadow-2xl flex items-center gap-2 text-[11px] sm:text-xs font-medium pointer-events-none animate-in fade-in slide-in-from-top-2 max-w-[90vw] text-center">
+          <span className="w-2 h-2 rounded-full bg-sky-500 dark:bg-sky-400 animate-ping shrink-0" />
           <span>마우스를 <strong>드래그하여 사각 영역</strong>으로 여러 객체(점/선/면/글자)를 한 번에 선택하세요 (Shift+클릭: 개별 추가/제외)</span>
         </div>
       )}
@@ -1683,7 +1685,8 @@ function drawCADGrid(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
-  view: { panX: number; panY: number; zoom: number }
+  view: { panX: number; panY: number; zoom: number },
+  theme: 'light' | 'dark' = 'dark'
 ) {
   const minPixelsBetweenLines = 60;
   const rawSpacing = minPixelsBetweenLines / view.zoom;
@@ -1702,7 +1705,7 @@ function drawCADGrid(
   const startX = Math.floor(left / spacing) * spacing;
   const startY = Math.floor(bottom / spacing) * spacing;
 
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+  ctx.strokeStyle = theme === 'dark' ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.06)';
   ctx.lineWidth = 1;
   ctx.beginPath();
 
@@ -1720,7 +1723,7 @@ function drawCADGrid(
   ctx.stroke();
 
   ctx.font = '9px JetBrains Mono, monospace';
-  ctx.fillStyle = 'rgba(148, 163, 184, 0.45)';
+  ctx.fillStyle = theme === 'dark' ? 'rgba(148, 163, 184, 0.45)' : 'rgba(71, 85, 105, 0.5)';
   ctx.textAlign = 'left';
 
   for (let x = startX; x <= right; x += spacing * 2) {
@@ -1743,7 +1746,8 @@ function drawSnapMarker(
   ctx: CanvasRenderingContext2D,
   screenPt: { x: number; y: number },
   type: SnapType,
-  label: string
+  label: string,
+  theme: 'light' | 'dark' = 'dark'
 ) {
   const { x, y } = screenPt;
   ctx.lineWidth = 2;
@@ -1786,15 +1790,15 @@ function drawSnapMarker(
   // Snap Label Badge
   ctx.font = '11px Pretendard, sans-serif';
   const textW = ctx.measureText(label).width;
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
-  ctx.strokeStyle = '#22c55e';
+  ctx.fillStyle = theme === 'dark' ? 'rgba(15, 23, 42, 0.9)' : 'rgba(255, 255, 255, 0.95)';
+  ctx.strokeStyle = theme === 'dark' ? '#22c55e' : '#16a34a';
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.roundRect(x + 10, y + 10, textW + 12, 18, 4);
   ctx.fill();
   ctx.stroke();
 
-  ctx.fillStyle = '#4ade80';
+  ctx.fillStyle = theme === 'dark' ? '#4ade80' : '#15803d';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
   ctx.fillText(label, x + 16, y + 23);
@@ -1805,7 +1809,8 @@ function drawScaleBar(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
-  zoom: number
+  zoom: number,
+  theme: 'light' | 'dark' = 'dark'
 ) {
   const targetPixels = 100;
   const metersRaw = targetPixels / zoom;
@@ -1832,7 +1837,7 @@ function drawScaleBar(
   ctx.stroke();
 
   ctx.font = '10px JetBrains Mono, monospace';
-  ctx.fillStyle = '#f8fafc';
+  ctx.fillStyle = theme === 'dark' ? '#f8fafc' : '#475569';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
   const label = barMeters >= 1000 ? `${(barMeters / 1000).toFixed(3)} km` : `${barMeters.toFixed(3)} m`;

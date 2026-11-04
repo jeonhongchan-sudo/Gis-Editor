@@ -26,6 +26,7 @@ import { LayerPanel } from './components/LayerPanel';
 import { PointTableModal } from './components/PointTableModal';
 import { ImportModal } from './components/ImportModal';
 import { ExportModal } from './components/ExportModal';
+import { ManualPointModal } from './components/ManualPointModal';
 import { HelpModal } from './components/HelpModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { PWAInstallButton } from './components/PWAInstallButton';
@@ -76,6 +77,20 @@ export default function App() {
     return saved ? parseInt(saved) : null;
   });
 
+  // Theme state
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    return (localStorage.getItem('theme') as 'light' | 'dark') || 'dark';
+  });
+
+  useEffect(() => {
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
   // Entities & Layers (Cached for fast rendering)
   const [layers, setLayers] = useState<CADLayer[]>(DEFAULT_LAYERS);
   const [activeLayerId, setActiveLayerId] = useState<string>('layer-boundary');
@@ -120,6 +135,7 @@ export default function App() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
+  const [showManualPointModal, setShowManualPointModal] = useState(false);
 
   // History for Undo / Redo
   const [history, setHistory] = useState<HistoryStep[]>([]);
@@ -483,6 +499,8 @@ export default function App() {
       <OfflineIndicator />
       
       <CoordinateBar
+        theme={theme}
+        setTheme={setTheme}
         cursorWorld={cursorWorld}
         activeSnap={activeSnap}
         pointsCount={points.length}
@@ -493,10 +511,12 @@ export default function App() {
         onOpenTable={() => setShowTableModal(true)}
         onToggleLayerPanel={() => setShowLayerPanel(prev => !prev)}
         onOpenHelp={() => setShowHelpModal(true)}
+        onOpenManualPoint={() => setShowManualPointModal(true)}
       />
 
-      <main className="relative flex-1 w-full h-full overflow-hidden">
+      <main className="relative flex-1 w-full h-full overflow-hidden bg-slate-50 dark:bg-slate-950">
         <CADCanvas
+          theme={theme}
           tool={tool} ortho={ortho} snapEnabled={snapEnabled}
           layers={layers} points={points} lines={lines} polylines={polylines} polygons={polygons} texts={texts}
           activeLayerId={activeLayerId} 
@@ -515,11 +535,11 @@ export default function App() {
 
         {/* Floating Multi-Select Action Bar (레이어 일괄 변경 & 일괄 삭제) */}
         {selectedEntityIds.length > 0 && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-2 bg-slate-900/95 backdrop-blur-xl border border-amber-500/80 px-3.5 py-2 sm:px-4 sm:py-2 rounded-2xl shadow-2xl animate-in fade-in slide-in-from-top-3 duration-150 max-w-[95vw]">
-            <div className="flex items-center gap-1.5 text-xs text-amber-400 font-semibold shrink-0">
-              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-amber-400 dark:border-amber-500/80 px-3.5 py-2 sm:px-4 sm:py-2 rounded-2xl shadow-2xl animate-in fade-in slide-in-from-top-3 duration-150 max-w-[95vw]">
+            <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 font-semibold shrink-0">
+              <span className="w-2 h-2 rounded-full bg-amber-500 dark:bg-amber-400 animate-ping" />
               <span>선택 {selectedEntityIds.length}개</span>
-              <span className="text-[11px] text-slate-400 font-normal hidden sm:inline">
+              <span className="text-[11px] text-slate-500 dark:text-slate-400 font-normal hidden sm:inline">
                 (점 {selPointsCount}, 선 {selLinesCount}, 면 {selPolygonsCount}, 텍스트 {selTextsCount})
               </span>
             </div>
@@ -531,7 +551,7 @@ export default function App() {
               className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-medium transition ${
                 multiSelectMode
                   ? 'bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/30'
-                  : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
               }`}
             >
               <CheckSquare className="w-3.5 h-3.5" />
@@ -539,7 +559,7 @@ export default function App() {
             </button>
 
             {/* Layer batch change selector */}
-            <div className="flex items-center gap-1.5 bg-slate-950/80 border border-slate-700/80 rounded-xl px-2 py-1">
+            <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-700/80 rounded-xl px-2 py-1">
               <Layers className="w-3.5 h-3.5 text-purple-400 shrink-0" />
               <select
                 onChange={(e) => {
@@ -551,9 +571,9 @@ export default function App() {
                 defaultValue=""
                 className="bg-transparent text-sky-400 text-xs outline-none cursor-pointer pr-1 font-medium"
               >
-                <option value="" disabled className="bg-slate-900 text-slate-400">레이어 일괄 변경...</option>
+                <option value="" disabled className="bg-white dark:bg-slate-900 text-slate-400">레이어 일괄 변경...</option>
                 {layers.map(l => (
-                  <option key={l.id} value={l.id} className="bg-slate-900 text-slate-200">
+                  <option key={l.id} value={l.id} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-200">
                     {l.name}
                   </option>
                 ))}
@@ -564,7 +584,7 @@ export default function App() {
             <button
               onClick={handleDeleteSelected}
               title="선택된 객체 일괄 삭제"
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-red-950/80 hover:bg-red-900 text-red-300 border border-red-800 hover:border-red-700 text-xs font-medium transition"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-red-50 dark:bg-red-950/80 hover:bg-red-100 dark:hover:bg-red-900 text-red-600 dark:text-red-300 border border-red-200 dark:border-red-800 hover:border-red-300 dark:hover:border-red-700 text-xs font-medium transition"
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span>삭제</span>
@@ -583,7 +603,7 @@ export default function App() {
                 setSelectedEntityIds(allIds);
               }}
               title="모든 객체 전체 선택 (Ctrl+A)"
-              className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition"
+              className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-medium transition"
             >
               전체선택
             </button>
@@ -592,7 +612,7 @@ export default function App() {
             <button
               onClick={() => setSelectedEntityIds([])}
               title="선택 해제 (Esc)"
-              className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition"
+              className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-900 dark:hover:text-white transition"
             >
               <X className="w-4 h-4" />
             </button>
@@ -601,13 +621,13 @@ export default function App() {
 
         {/* Guidance pill when select tool is active without selection */}
         {tool === 'select' && selectedEntityIds.length === 0 && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-slate-900/95 backdrop-blur-xl border border-sky-500/70 px-3.5 py-1.5 rounded-full shadow-xl text-xs text-slate-300 animate-in fade-in">
-            <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" />
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-sky-300 dark:border-sky-500/70 px-3.5 py-1.5 rounded-full shadow-xl text-xs text-slate-600 dark:text-slate-300 animate-in fade-in">
+            <span className="w-2 h-2 rounded-full bg-sky-500 dark:bg-sky-400 animate-pulse" />
             <span>화면을 드래그하여 영역 선택 또는 터치하여 선택</span>
             <button
               onClick={() => setMultiSelectMode(prev => !prev)}
               className={`ml-1 px-2 py-0.5 rounded-md text-[11px] font-semibold transition ${
-                multiSelectMode ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-amber-400 border border-amber-500/30'
+                multiSelectMode ? 'bg-amber-500 text-slate-950' : 'bg-slate-100 dark:bg-slate-800 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-500/30'
               }`}
             >
               {multiSelectMode ? '✓ 다중 누적 ON' : '+ 다중 누적 켜기'}
@@ -617,27 +637,27 @@ export default function App() {
 
         {/* Floating Multi-Point Distance Measurement Panel (여러 점간 누적 거리 합산) */}
         {tool === 'measure' && activePoints.length >= 1 && (
-          <div className="fixed top-16 right-2 sm:top-20 sm:right-4 z-30 w-72 sm:w-80 bg-slate-900/95 backdrop-blur-xl border border-cyan-500/80 rounded-2xl shadow-2xl p-3 sm:p-3.5 flex flex-col gap-2 animate-in fade-in slide-in-from-right-3 duration-200">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+          <div className="fixed top-16 right-2 sm:top-20 sm:right-4 z-30 w-72 sm:w-80 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-cyan-400 dark:border-cyan-500/80 rounded-2xl shadow-2xl p-3 sm:p-3.5 flex flex-col gap-2 animate-in fade-in slide-in-from-right-3 duration-200">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
               <div className="flex items-center gap-1.5">
-                <Ruler className="w-4 h-4 text-cyan-400" />
-                <h3 className="text-xs font-semibold text-slate-100">거리 및 점간 누적 측정</h3>
+                <Ruler className="w-4 h-4 text-cyan-600 dark:text-cyan-400" />
+                <h3 className="text-xs font-semibold text-slate-900 dark:text-slate-100">거리 및 점간 누적 측정</h3>
               </div>
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800 font-mono">
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-cyan-50 dark:bg-cyan-950 text-cyan-700 dark:text-cyan-300 border border-cyan-200 dark:border-cyan-800 font-mono">
                 {activePoints.length}개 지점
               </span>
             </div>
 
             {/* Total Cumulative Sum Card */}
-            <div className="bg-slate-950/90 rounded-xl p-2.5 border border-slate-800/90 flex flex-col">
-              <span className="text-[10px] text-slate-400 font-medium">총 누적 거리 합계 (Total)</span>
+            <div className="bg-slate-50 dark:bg-slate-950/90 rounded-xl p-2.5 border border-slate-200 dark:border-slate-800/90 flex flex-col">
+              <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">총 누적 거리 합계 (Total)</span>
               <div className="flex items-baseline gap-1 mt-0.5">
-                <span className="text-2xl font-bold font-mono text-cyan-400">
+                <span className="text-2xl font-bold font-mono text-cyan-600 dark:text-cyan-400">
                   {measureCumulative.toFixed(3)}
                 </span>
-                <span className="text-xs text-slate-400 font-sans">m</span>
+                <span className="text-xs text-slate-500 dark:text-slate-400 font-sans">m</span>
                 {liveMeasurement.currentSegment > 0 && (
-                  <span className="ml-auto text-[11px] font-mono text-cyan-300/80">
+                  <span className="ml-auto text-[11px] font-mono text-cyan-600/80 dark:text-cyan-300/80">
                     (+{liveMeasurement.currentSegment.toFixed(3)}m)
                   </span>
                 )}
@@ -649,26 +669,26 @@ export default function App() {
               <div className="flex flex-col gap-1 max-h-32 overflow-y-auto pr-1">
                 <span className="text-[10px] text-slate-500 font-medium">구간별 거리 상세</span>
                 {measureSegments.map((seg: { index: number; dist: number }) => (
-                  <div key={seg.index} className="flex items-center justify-between py-1 px-2 rounded-lg bg-slate-800/50 text-[11px]">
-                    <span className="text-slate-400">P{seg.index} → P{seg.index + 1}</span>
-                    <span className="font-mono text-slate-200 font-semibold">{seg.dist.toFixed(3)} m</span>
+                  <div key={seg.index} className="flex items-center justify-between py-1 px-2 rounded-lg bg-white dark:bg-slate-800/50 border border-slate-100 dark:border-transparent text-[11px]">
+                    <span className="text-slate-500 dark:text-slate-400">P{seg.index} → P{seg.index + 1}</span>
+                    <span className="font-mono text-slate-900 dark:text-slate-200 font-semibold">{seg.dist.toFixed(3)} m</span>
                   </div>
                 ))}
               </div>
             )}
 
             {/* Actions */}
-            <div className="flex items-center gap-1.5 pt-1.5 border-t border-slate-800">
+            <div className="flex items-center gap-1.5 pt-1.5 border-t border-slate-100 dark:border-slate-800">
               <button
                 onClick={() => setActivePoints(prev => prev.slice(0, -1))}
                 disabled={activePoints.length === 0}
-                className="flex-1 py-1.5 px-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition text-center"
+                className="flex-1 py-1.5 px-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium transition text-center border border-slate-200 dark:border-transparent"
               >
                 마지막 점 취소
               </button>
               <button
                 onClick={() => setActivePoints([])}
-                className="py-1.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition"
+                className="py-1.5 px-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-300 text-xs font-medium transition border border-slate-200 dark:border-transparent"
               >
                 초기화
               </button>
@@ -687,6 +707,7 @@ export default function App() {
           onCancelDrawing={() => setActivePoints([])}
           multiSelectMode={multiSelectMode}
           setMultiSelectMode={setMultiSelectMode}
+          onOpenManualPoint={() => setShowManualPointModal(true)}
         />
 
         <div className="absolute left-4 bottom-18">
@@ -732,6 +753,20 @@ export default function App() {
       )}
 
       {showHelpModal && <HelpModal onClose={() => setShowHelpModal(false)} />}
+      
+      {showManualPointModal && (
+        <ManualPointModal
+          onAdd={(pt) => {
+            handleAddPoint(pt);
+            setSelectedEntityId(pt.id);
+            // Optionally zoom to the new point
+            handleZoomExtents([{ x: pt.x, y: pt.y }]);
+          }}
+          onClose={() => setShowManualPointModal(false)}
+          activeLayerId={activeLayerId}
+          nextPointNumber={points.length + 1}
+        />
+      )}
     </div>
   );
 

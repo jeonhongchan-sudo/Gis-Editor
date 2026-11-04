@@ -16,7 +16,10 @@ import {
   Compass,
   Monitor,
   Tablet,
-  Smartphone
+  Smartphone,
+  Sun,
+  Moon,
+  MapPin
 } from 'lucide-react';
 import { Point2D, SnapPoint } from '../types/cad';
 import { PWAInstallButton } from './PWAInstallButton';
@@ -37,6 +40,9 @@ interface CoordinateBarProps {
   onOpenTable: () => void;
   onToggleLayerPanel: () => void;
   onOpenHelp: () => void;
+  onOpenManualPoint: () => void;
+  theme: 'light' | 'dark';
+  setTheme: (t: 'light' | 'dark') => void;
 }
 
 export const CoordinateBar: React.FC<CoordinateBarProps> = ({
@@ -49,12 +55,15 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
   onOpenExport,
   onOpenTable,
   onToggleLayerPanel,
-  onOpenHelp
+  onOpenHelp,
+  onOpenManualPoint,
+  theme,
+  setTheme
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <header className="relative z-30 flex flex-col border-b border-slate-800 bg-slate-900/95 backdrop-blur-md">
+    <header className="relative z-30 flex flex-col border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md">
       {/* Top Main Navigation Bar */}
       <div className="flex items-center justify-between px-2.5 py-1.5 md:px-4 md:py-2">
         {/* Left: Brand Logo & Title */}
@@ -64,24 +73,24 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
           </div>
           <div>
             <div className="flex items-center gap-1.5">
-              <h1 className="font-semibold text-xs sm:text-base text-slate-100 tracking-tight whitespace-nowrap">
+            <h1 className="font-semibold text-xs sm:text-base text-slate-900 dark:text-slate-100 tracking-tight whitespace-nowrap">
                 Web GIS/CAD
               </h1>
               {/* Responsive Device Indicators */}
-              <div className="hidden lg:flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-800 text-slate-400 border border-slate-700">
-                <Monitor className="w-3 h-3 text-sky-400" />
+              <div className="hidden lg:flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
+                <Monitor className="w-3 h-3 text-sky-600 dark:text-sky-400" />
                 <span>PC</span>
               </div>
-              <div className="hidden sm:max-lg:flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-800 text-slate-400 border border-slate-700">
-                <Tablet className="w-3 h-3 text-sky-400" />
+              <div className="hidden sm:max-lg:flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
+                <Tablet className="w-3 h-3 text-sky-600 dark:text-sky-400" />
                 <span>태블릿</span>
               </div>
-              <div className="flex sm:hidden items-center gap-1 px-1 py-0.5 rounded text-[9px] font-medium bg-slate-800 text-slate-400 border border-slate-700">
-                <Smartphone className="w-2.5 h-2.5 text-sky-400" />
+              <div className="flex sm:hidden items-center gap-1 px-1 py-0.5 rounded text-[9px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
+                <Smartphone className="w-2.5 h-2.5 text-sky-600 dark:text-sky-400" />
                 <span>모바일</span>
               </div>
             </div>
-            <p className="text-[10px] text-slate-400 hidden lg:block">
+            <p className="text-[10px] text-slate-500 dark:text-slate-400 hidden lg:block">
               좌표 CSV · 현장 스냅 드로잉 · GIS SHP 변환 (오프라인 지원)
             </p>
           </div>
@@ -89,22 +98,31 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
 
         {/* Center: Brand Subtitle (Visible on Tablet & PC) */}
         <div className="hidden sm:flex items-center gap-2">
-          <p className="text-[11px] text-slate-500 font-medium bg-slate-800/40 px-3 py-1 rounded-xl border border-slate-800">
+          <p className="text-[11px] text-slate-600 dark:text-slate-500 font-medium bg-slate-100 dark:bg-slate-800/40 px-3 py-1 rounded-xl border border-slate-200 dark:border-slate-800">
             실시간 좌표 연동 및 도면 편집
           </p>
         </div>
 
         {/* Right: Actions & PWA Install Button */}
         <div className="flex items-center gap-1.5 sm:gap-2">
+          {/* Theme Toggle */}
+          <button
+            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            title={theme === 'dark' ? '라이트 모드' : '다크 모드'}
+            className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition"
+          >
+            {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </button>
+
           {/* PWA Install Button */}
           <PWAInstallButton />
 
           {/* Import Button */}
           <button
             onClick={onOpenImport}
-            className="flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition"
+            className="flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium border border-slate-200 dark:border-slate-700 transition"
           >
-            <Upload className="w-3.5 h-3.5 text-sky-400" />
+            <Upload className="w-3.5 h-3.5 text-sky-500 dark:text-sky-400" />
             <span className="hidden md:inline">불러오기</span>
           </button>
 
@@ -122,11 +140,11 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
           <button
             onClick={onOpenTable}
             title="측점 좌표 목록 표"
-            className="hidden sm:flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium border border-slate-700 transition"
+            className="hidden sm:flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium border border-slate-200 dark:border-slate-700 transition"
           >
-            <Table2 className="w-3.5 h-3.5 text-emerald-400" />
+            <Table2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
             <span className="hidden md:inline">측점표</span>
-            <span className="text-[10px] bg-slate-700 text-slate-300 px-1 rounded-full">
+            <span className="text-[10px] bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-1 rounded-full font-mono">
               {pointsCount}
             </span>
           </button>
@@ -135,9 +153,9 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
           <button
             onClick={onToggleLayerPanel}
             title="도면 레이어 관리"
-            className="hidden sm:flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium border border-slate-700 transition"
+            className="hidden sm:flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium border border-slate-200 dark:border-slate-700 transition"
           >
-            <Layers className="w-3.5 h-3.5 text-purple-400" />
+            <Layers className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
             <span className="hidden md:inline">레이어</span>
           </button>
 
@@ -145,7 +163,7 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
           <button
             onClick={onOpenHelp}
             title="사용 방법 및 도움말"
-            className="hidden sm:block p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition"
+            className="hidden sm:block p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition"
           >
             <HelpCircle className="w-4 h-4" />
           </button>
@@ -153,7 +171,7 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
           {/* Mobile Menu Toggle Button (< 640px) */}
           <button
             onClick={() => setMobileMenuOpen(prev => !prev)}
-            className="sm:hidden p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+            className="sm:hidden p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition"
             title="메뉴"
           >
             {mobileMenuOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
@@ -163,9 +181,9 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
 
       {/* Mobile Drawer Dropdown Menu (on < 640px) */}
       {mobileMenuOpen && (
-        <div className="sm:hidden border-t border-slate-800 bg-slate-900 px-3 py-2.5 flex flex-col gap-2 animate-in slide-in-from-top-2 duration-150">
+        <div className="sm:hidden border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2.5 flex flex-col gap-2 animate-in slide-in-from-top-2 duration-150">
           {/* Mobile Info */}
-          <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-center">
+          <div className="p-3 bg-white dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 text-center">
             <span className="text-[11px] text-slate-500 font-medium">현장 측량 및 도면 편집 도구</span>
           </div>
 
@@ -176,9 +194,9 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
                 setMobileMenuOpen(false);
                 onOpenTable();
               }}
-              className="flex items-center justify-center gap-1.5 p-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-200 text-xs font-medium"
+              className="flex items-center justify-center gap-1.5 p-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium shadow-sm"
             >
-              <Table2 className="w-3.5 h-3.5 text-emerald-400" />
+              <Table2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
               <span>측점표 ({pointsCount})</span>
             </button>
 
@@ -187,10 +205,21 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
                 setMobileMenuOpen(false);
                 onToggleLayerPanel();
               }}
-              className="flex items-center justify-center gap-1.5 p-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-200 text-xs font-medium"
+              className="flex items-center justify-center gap-1.5 p-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium shadow-sm"
             >
-              <Layers className="w-3.5 h-3.5 text-purple-400" />
+              <Layers className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
               <span>레이어</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setMobileMenuOpen(false);
+                onOpenManualPoint();
+              }}
+              className="flex items-center justify-center gap-1.5 p-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sky-600 dark:text-sky-400 text-xs font-medium shadow-sm"
+            >
+              <MapPin className="w-3.5 h-3.5" />
+              <span>좌표입력</span>
             </button>
 
             <button
@@ -198,9 +227,9 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
                 setMobileMenuOpen(false);
                 onOpenHelp();
               }}
-              className="flex items-center justify-center gap-1.5 p-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-200 text-xs font-medium"
+              className="flex items-center justify-center gap-1.5 p-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium"
             >
-              <HelpCircle className="w-3.5 h-3.5 text-sky-400" />
+              <HelpCircle className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400" />
               <span>도움말</span>
             </button>
           </div>
@@ -208,12 +237,12 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
       )}
 
       {/* Coordinate & Measurement Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-y-1 gap-x-2 px-2.5 py-1 bg-slate-950/90 border-t border-slate-800 text-[10px] sm:text-[11px] font-mono">
+      <div className="flex flex-wrap items-center justify-between gap-y-1 gap-x-2 px-2.5 py-1 bg-slate-50/90 dark:bg-slate-950/90 border-t border-slate-200 dark:border-slate-800 text-[10px] sm:text-[11px] font-mono">
         {/* Live Drawing Measurement summary if active */}
         {liveMeasurement && liveMeasurement.pointCount > 0 ? (
           <div className="flex items-center gap-2 sm:gap-3 text-sky-400 font-sans">
             <div>
-              구간: <strong className="font-mono text-slate-200">{liveMeasurement.currentSegment.toFixed(3)}m</strong>
+              구간: <strong className="font-mono text-slate-900 dark:text-slate-200">{liveMeasurement.currentSegment.toFixed(3)}m</strong>
             </div>
             <div>
               총 연장: <strong className="font-mono text-white">{liveMeasurement.totalLength.toFixed(3)}m</strong>
@@ -228,32 +257,32 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
             )}
           </div>
         ) : (
-          <div className="flex items-center gap-2 text-slate-400 font-sans">
+          <div className="flex items-center gap-2 text-slate-600 dark:text-slate-400 font-sans">
             <span className="hidden sm:inline">도면 성과:</span>
-            <span>측점 <strong className="text-white">{pointsCount}</strong></span>
-            <span>선 <strong className="text-white">{linesCount}</strong></span>
+            <span>측점 <strong className="text-slate-900 dark:text-white">{pointsCount}</strong></span>
+            <span>선 <strong className="text-slate-900 dark:text-white">{linesCount}</strong></span>
           </div>
         )}
 
         {/* Real-time Cursor Coordinates */}
-        <div className="flex items-center gap-2 sm:gap-3 ml-auto text-slate-300">
+        <div className="flex items-center gap-2 sm:gap-3 ml-auto text-slate-700 dark:text-slate-300">
           {cursorWorld ? (
             <>
               <div className="flex items-center gap-1">
-                <span className="text-slate-500">X:</span>
-                <span className="text-sky-300 font-semibold">{cursorWorld.x.toLocaleString('ko-KR', { minimumFractionDigits: 3, maximumFractionDigits: 3 })}m</span>
+                <span className="text-slate-400 dark:text-slate-500 font-sans">X:</span>
+                <span className="text-sky-600 dark:text-sky-300 font-semibold">{cursorWorld.x.toLocaleString('ko-KR', { minimumFractionDigits: 3, maximumFractionDigits: 3 })}m</span>
               </div>
               <div className="flex items-center gap-1">
-                <span className="text-slate-500">Y:</span>
-                <span className="text-sky-300 font-semibold">{cursorWorld.y.toLocaleString('ko-KR', { minimumFractionDigits: 3, maximumFractionDigits: 3 })}m</span>
+                <span className="text-slate-400 dark:text-slate-500 font-sans">Y:</span>
+                <span className="text-sky-600 dark:text-sky-300 font-semibold">{cursorWorld.y.toLocaleString('ko-KR', { minimumFractionDigits: 3, maximumFractionDigits: 3 })}m</span>
               </div>
             </>
           ) : (
-            <span className="text-slate-500 text-[10px]">화면 터치/이동</span>
+            <span className="text-slate-400 dark:text-slate-500 text-[10px]">화면 터치/이동</span>
           )}
 
           {activeSnap && (
-            <span className="px-1.5 py-0.2 rounded bg-emerald-950 border border-emerald-700 text-emerald-400 text-[9px] sm:text-[10px] font-sans truncate max-w-[120px] sm:max-w-none">
+            <span className="px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400 text-[9px] sm:text-[10px] font-sans truncate max-w-[120px] sm:max-w-none">
               {activeSnap.label}
             </span>
           )}
