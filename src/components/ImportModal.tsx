@@ -12,7 +12,6 @@ import {
   AlertCircle, 
   ArrowLeftRight,
   Check,
-  Languages,
   Loader2,
   Layers,
   Archive,
@@ -48,7 +47,6 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
   // Encoding State
   const [selectedEncoding, setSelectedEncoding] = useState<SupportedEncoding>('auto');
-  const [detectedEncoding, setDetectedEncoding] = useState<'utf-8' | 'euc-kr' | null>(null);
 
   // Progress State
   const [isParsing, setIsParsing] = useState<boolean>(false);
@@ -161,7 +159,6 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         setSelectedSheet(initialSheet);
         const rows = parsed.getSheetRows(initialSheet);
         applyRowsToPreview(rows, 0);
-        setDetectedEncoding('utf-8');
         return;
       } catch (err: any) {
         console.warn('Excel fallback:', err);
@@ -171,8 +168,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     }
 
     // 5. CSV / Text
-    const { text, detectedEncoding: det } = decodeBufferText(buffer, enc);
-    setDetectedEncoding(det);
+    const { text } = decodeBufferText(buffer, enc);
 
     try {
       const res = parseCSVPreview(text, 0);
@@ -220,31 +216,8 @@ export const ImportModal: React.FC<ImportModalProps> = ({
           </button>
         </div>
 
-        {/* Encoding & Merge Mode */}
-        <div className="px-3.5 py-2.5 bg-slate-50/70 dark:bg-slate-950/70 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <Languages className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
-            <span className="text-slate-500 dark:text-slate-400 text-[11px]">텍스트 인코딩:</span>
-            <select
-              value={selectedEncoding}
-              onChange={e => {
-                setSelectedEncoding(e.target.value as any);
-                if (rawBufferRef.current) processBuffer(rawBufferRef.current.buffer, rawBufferRef.current.filename, e.target.value as any);
-              }}
-              disabled={isExcelFile || loadedFormat === 'shp'}
-              className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sky-700 dark:text-sky-300 text-xs rounded-lg px-2 py-1 focus:outline-none shadow-sm"
-            >
-              <option value="auto">자동 감지 (CP949 / UTF-8)</option>
-              <option value="euc-kr">CP949 / EUC-KR (한국 지적/측량 표준)</option>
-              <option value="utf-8">UTF-8 (유니코드)</option>
-            </select>
-            {detectedEncoding && loadedFormat === 'csv' && (
-              <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-50 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400 font-medium uppercase">
-                {detectedEncoding} 적용됨
-              </span>
-            )}
-          </div>
-
+        {/* Merge Mode */}
+        <div className="px-3.5 py-2.5 bg-slate-50/70 dark:bg-slate-950/70 border-b border-slate-100 dark:border-slate-800 flex items-center justify-end gap-2 text-xs">
           <div className="flex items-center gap-3">
             <label className="flex items-center gap-1.5 cursor-pointer text-slate-700 dark:text-slate-200 text-[11px]">
               <input type="radio" checked={appendMode} onChange={() => setAppendMode(true)} className="text-sky-500" />

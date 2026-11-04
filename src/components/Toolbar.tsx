@@ -18,7 +18,6 @@ import {
   Focus, 
   Check, 
   X,
-  Compass,
   ChevronUp,
   ChevronDown,
   CheckSquare
@@ -28,8 +27,6 @@ import { ToolMode } from '../types/cad';
 interface ToolbarProps {
   tool: ToolMode;
   setTool: (tool: ToolMode) => void;
-  ortho: boolean;
-  setOrtho: (val: boolean | ((prev: boolean) => boolean)) => void;
   snapEnabled: boolean;
   setSnapEnabled: (val: boolean | ((prev: boolean) => boolean)) => void;
   canUndo: boolean;
@@ -48,8 +45,6 @@ interface ToolbarProps {
 export const Toolbar: React.FC<ToolbarProps> = ({
   tool,
   setTool,
-  ortho,
-  setOrtho,
   snapEnabled,
   setSnapEnabled,
   canUndo,
@@ -226,18 +221,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <Magnet className="w-5 h-5" />
         </button>
 
-        {/* Ortho 90° Toggle */}
-        <button
-          onClick={() => setOrtho(prev => !prev)}
-          title={`직교 모드 90° (${ortho ? '켜짐' : '꺼짐'})`}
-          className={`p-2.5 rounded-xl transition flex items-center justify-center ${
-            ortho
-              ? 'bg-amber-600 text-white shadow-md shadow-amber-600/30'
-              : 'text-slate-400 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-200'
-          }`}
-        >
-          <Compass className="w-5 h-5" />
-        </button>
+
 
         <button
           onClick={onZoomExtents}
@@ -279,13 +263,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               <Ruler className="w-4 h-4" />
               <span>거리측정</span>
             </button>
-            <button
-              onClick={`() => { setOrtho(prev => !prev); }`}
-              className={`p-2.5 rounded-xl flex flex-col items-center gap-0.5 text-[10px] ${ortho ? 'bg-amber-600 text-white' : 'text-slate-500 dark:text-slate-300'}`}
-            >
-              <Compass className="w-4 h-4" />
-              <span>직교 {ortho ? 'ON' : 'OFF'}</span>
-            </button>
+
             <button
               onClick={() => { onZoomExtents(); setMobileExpanded(false); }}
               className="p-2.5 rounded-xl flex flex-col items-center justify-center text-slate-500 dark:text-slate-300"

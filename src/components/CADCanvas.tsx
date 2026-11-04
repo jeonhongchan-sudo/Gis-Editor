@@ -30,7 +30,6 @@ import {
 interface CADCanvasProps {
   theme?: 'light' | 'dark';
   tool: ToolMode;
-  ortho: boolean;
   snapEnabled: boolean;
   layers: CADLayer[];
   points: CADPoint[];
@@ -58,7 +57,6 @@ interface CADCanvasProps {
 export const CADCanvas: React.FC<CADCanvasProps> = ({
   theme = 'dark',
   tool,
-  ortho,
   snapEnabled,
   layers,
   points,
@@ -536,18 +534,9 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     }
 
     const rawWorld = screenToWorld(screenX, screenY, rect.width, rect.height);
-
-    let effectiveWorld = rawWorld;
-    let snap: SnapPoint | null = null;
-
-    if (activePoints.length > 0 && ortho) {
-      const lastPoint = activePoints[activePoints.length - 1];
-      effectiveWorld = applyOrtho(rawWorld, lastPoint);
-    }
-
-    const snapRes = evaluateSnap(effectiveWorld);
-    effectiveWorld = snapRes.effectiveWorld;
-    snap = snapRes.snap;
+    const snapRes = evaluateSnap(rawWorld);
+    const effectiveWorld = snapRes.effectiveWorld;
+    const snap = snapRes.snap;
 
     setCursorWorld(effectiveWorld);
     setActiveSnap(snap);

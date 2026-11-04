@@ -102,7 +102,6 @@ export default function App() {
 
   // Selection & Tools
   const [tool, setTool] = useState<ToolMode>('pan');
-  const [ortho, setOrtho] = useState<boolean>(false);
   const [snapEnabled, setSnapEnabled] = useState<boolean>(true);
   const [selectedEntityIds, setSelectedEntityIds] = useState<string[]>([]);
   const [multiSelectMode, setMultiSelectMode] = useState<boolean>(false);
@@ -517,7 +516,7 @@ export default function App() {
       <main className="relative flex-1 w-full h-full overflow-hidden bg-slate-50 dark:bg-slate-950">
         <CADCanvas
           theme={theme}
-          tool={tool} ortho={ortho} snapEnabled={snapEnabled}
+          tool={tool} snapEnabled={snapEnabled}
           layers={layers} points={points} lines={lines} polylines={polylines} polygons={polygons} texts={texts}
           activeLayerId={activeLayerId} 
           selectedEntityId={selectedEntityId}
@@ -697,7 +696,7 @@ export default function App() {
         )}
 
         <Toolbar
-          tool={tool} setTool={setTool} ortho={ortho} setOrtho={setOrtho}
+          tool={tool} setTool={setTool}
           snapEnabled={snapEnabled} setSnapEnabled={setSnapEnabled}
           canUndo={historyIndex > 0} canRedo={historyIndex < history.length - 1}
           onUndo={handleUndo} onRedo={handleRedo}
