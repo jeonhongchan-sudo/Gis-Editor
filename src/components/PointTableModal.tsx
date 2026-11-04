@@ -34,12 +34,15 @@ export const PointTableModal: React.FC<PointTableModalProps> = ({
     );
   }, [points, search]);
 
+  const [csvFileName, setCsvFileName] = useState(() => `survey_points_${new Date().toISOString().slice(0, 10)}`);
+
   const handleExportCSV = () => {
     const lines = ['ID,측점명,X(캐드_동향),Y(캐드_북향),고도(Z),레이어'];
     points.forEach((p, i) => {
       lines.push(`${i + 1},"${p.name}",${p.x.toFixed(3)},${p.y.toFixed(3)},${p.z !== undefined ? p.z.toFixed(3) : ''},"${p.layerId}"`);
     });
-    downloadTextFile(lines.join('\n'), 'survey_points_cad.csv', 'text/csv');
+    const cleanName = (csvFileName.trim() || `survey_points_${new Date().toISOString().slice(0, 10)}`).replace(/\.csv$/i, '');
+    downloadTextFile(lines.join('\n'), `${cleanName}.csv`, 'utf-8-bom', 'text/csv');
   };
 
   return (
@@ -80,10 +83,22 @@ export const PointTableModal: React.FC<PointTableModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            <div className="hidden sm:flex items-center gap-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1 text-xs">
+              <span className="text-[11px] text-slate-400">파일명:</span>
+              <input
+                type="text"
+                value={csvFileName}
+                onChange={e => setCsvFileName(e.target.value)}
+                placeholder="CSV 파일명"
+                className="bg-transparent text-slate-900 dark:text-white text-xs outline-none w-36 font-medium"
+              />
+              <span className="text-[10px] text-slate-400 font-mono">.csv</span>
+            </div>
+
             <button
               onClick={handleExportCSV}
               disabled={points.length === 0}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 text-slate-700 dark:text-slate-200 text-xs rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm transition"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs rounded-xl shadow-sm transition font-medium"
             >
               <Download className="w-3.5 h-3.5" />
               CSV 저장

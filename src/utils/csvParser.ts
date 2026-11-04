@@ -214,7 +214,7 @@ export function parseCSVPreview(rawText: string, forcedHeaderRowIndex: number = 
 export function buildCADPointsFromCSV(
   rows: string[][],
   mapping: CSVColumnMapping,
-  layerId: string = 'layer-survey-points'
+  layerId: string = 'layer-0'
 ): CADPoint[] {
   const points: CADPoint[] = [];
 

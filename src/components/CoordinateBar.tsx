@@ -14,12 +14,10 @@ import {
   Menu,
   X,
   Compass,
-  Monitor,
-  Tablet,
-  Smartphone,
   Sun,
   Moon,
-  MapPin
+  MapPin,
+  Database
 } from 'lucide-react';
 import { Point2D, SnapPoint } from '../types/cad';
 import { PWAInstallButton } from './PWAInstallButton';
@@ -38,6 +36,7 @@ interface CoordinateBarProps {
   onOpenImport: () => void;
   onOpenExport: () => void;
   onOpenTable: () => void;
+  onOpenLineOD: () => void;
   onToggleLayerPanel: () => void;
   onOpenHelp: () => void;
   onOpenManualPoint: () => void;
@@ -54,6 +53,7 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
   onOpenImport,
   onOpenExport,
   onOpenTable,
+  onOpenLineOD,
   onToggleLayerPanel,
   onOpenHelp,
   onOpenManualPoint,
@@ -76,31 +76,11 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
             <h1 className="font-semibold text-xs sm:text-base text-slate-900 dark:text-slate-100 tracking-tight whitespace-nowrap">
                 Web GIS/CAD
               </h1>
-              {/* Responsive Device Indicators */}
-              <div className="hidden lg:flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
-                <Monitor className="w-3 h-3 text-sky-600 dark:text-sky-400" />
-                <span>PC</span>
-              </div>
-              <div className="hidden sm:max-lg:flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
-                <Tablet className="w-3 h-3 text-sky-600 dark:text-sky-400" />
-                <span>태블릿</span>
-              </div>
-              <div className="flex sm:hidden items-center gap-1 px-1 py-0.5 rounded text-[9px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
-                <Smartphone className="w-2.5 h-2.5 text-sky-600 dark:text-sky-400" />
-                <span>모바일</span>
-              </div>
             </div>
             <p className="text-[10px] text-slate-500 dark:text-slate-400 hidden lg:block">
               좌표 CSV · 현장 스냅 드로잉 · GIS SHP 변환 (오프라인 지원)
             </p>
           </div>
-        </div>
-
-        {/* Center: Brand Subtitle (Visible on Tablet & PC) */}
-        <div className="hidden sm:flex items-center gap-2">
-          <p className="text-[11px] text-slate-600 dark:text-slate-500 font-medium bg-slate-100 dark:bg-slate-800/40 px-3 py-1 rounded-xl border border-slate-200 dark:border-slate-800">
-            실시간 좌표 연동 및 도면 편집
-          </p>
         </div>
 
         {/* Right: Actions & PWA Install Button */}
@@ -146,6 +126,19 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
             <span className="hidden md:inline">측점표</span>
             <span className="text-[10px] bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-1 rounded-full font-mono">
               {pointsCount}
+            </span>
+          </button>
+
+          {/* Line OD Table Button */}
+          <button
+            onClick={onOpenLineOD}
+            title="선 속성 및 오토캐드 맵(OD) 데이터 관리"
+            className="hidden sm:flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium border border-slate-200 dark:border-slate-700 transition"
+          >
+            <Database className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400" />
+            <span className="hidden md:inline">선(OD)</span>
+            <span className="text-[10px] bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-1 rounded-full font-mono">
+              {linesCount}
             </span>
           </button>
 
@@ -198,6 +191,17 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
             >
               <Table2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
               <span>측점표 ({pointsCount})</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setMobileMenuOpen(false);
+                onOpenLineOD();
+              }}
+              className="flex items-center justify-center gap-1.5 p-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sky-600 dark:text-sky-400 text-xs font-medium shadow-sm"
+            >
+              <Database className="w-3.5 h-3.5" />
+              <span>선/OD ({linesCount})</span>
             </button>
 
             <button

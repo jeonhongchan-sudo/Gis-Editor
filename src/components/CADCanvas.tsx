@@ -756,9 +756,6 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     }
 
     let targetWorld = screenToWorld(screenX, screenY, rect.width, rect.height);
-    if (activePoints.length > 0 && ortho) {
-      targetWorld = applyOrtho(targetWorld, activePoints[activePoints.length - 1]);
-    }
     const snapRes = evaluateSnap(targetWorld);
 
     // 2. POLYLINE TOOL: STRICT NODE REQUIREMENT

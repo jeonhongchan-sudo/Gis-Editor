@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Focus, Trash2, Ruler, X, Check, Layers, CheckSquare } from 'lucide-react';
+import { Focus, Trash2, Ruler, X, Check, Layers, CheckSquare, Database } from 'lucide-react';
 import { distance2D } from './utils/geometry';
 import { 
   CADLayer, 
@@ -24,6 +24,7 @@ import { Toolbar } from './components/Toolbar';
 import { CoordinateBar } from './components/CoordinateBar';
 import { LayerPanel } from './components/LayerPanel';
 import { PointTableModal } from './components/PointTableModal';
+import { LineODModal } from './components/LineODModal';
 import { ImportModal } from './components/ImportModal';
 import { ExportModal } from './components/ExportModal';
 import { ManualPointModal } from './components/ManualPointModal';
@@ -36,34 +37,9 @@ import { SHPParseResult } from './utils/shpParser';
 
 const DEFAULT_LAYERS: CADLayer[] = [
   {
-    id: 'layer-survey-points',
-    name: '현황측점 (Points)',
-    color: '#ef4444',
-    visible: true,
-    locked: false,
-    lineWidth: 2,
-    isSurveyPointsLayer: true
-  },
-  {
-    id: 'layer-boundary',
-    name: '부지경계선 (Boundary)',
-    color: '#38bdf8',
-    visible: true,
-    locked: false,
-    lineWidth: 2.5
-  },
-  {
-    id: 'layer-road',
-    name: '도로현황 (Road)',
-    color: '#eab308',
-    visible: true,
-    locked: false,
-    lineWidth: 2
-  },
-  {
     id: 'layer-0',
-    name: '기본도면 (0)',
-    color: '#ffffff',
+    name: '0 (기본도면)',
+    color: '#38bdf8',
     visible: true,
     locked: false,
     lineWidth: 1.5
@@ -93,7 +69,7 @@ export default function App() {
 
   // Entities & Layers (Cached for fast rendering)
   const [layers, setLayers] = useState<CADLayer[]>(DEFAULT_LAYERS);
-  const [activeLayerId, setActiveLayerId] = useState<string>('layer-boundary');
+  const [activeLayerId, setActiveLayerId] = useState<string>('layer-0');
   const [points, setPoints] = useState<CADPoint[]>([]);
   const [lines, setLines] = useState<CADLine[]>([]);
   const [polylines, setPolylines] = useState<CADPolyline[]>([]);
@@ -131,6 +107,8 @@ export default function App() {
   // Modals & Panels
   const [showLayerPanel, setShowLayerPanel] = useState(false);
   const [showTableModal, setShowTableModal] = useState(false);
+  const [showLineODModal, setShowLineODModal] = useState(false);
+  const [lineODTargetIds, setLineODTargetIds] = useState<string[] | undefined>(undefined);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
@@ -155,7 +133,10 @@ export default function App() {
       const pPolygons = await db.polygons.where('projectId').equals(currentProjectId).toArray();
       const pTexts = await db.texts.where('projectId').equals(currentProjectId).toArray();
 
-      if (pLayers.length > 0) setLayers(pLayers);
+      if (pLayers.length > 0) {
+        setLayers(pLayers);
+        setActiveLayerId(prev => pLayers.some(l => l.id === prev) ? prev : pLayers[0].id);
+      }
       setPoints(pPoints);
       setLines(pLines);
       setPolylines(pPolylines);
@@ -372,6 +353,50 @@ export default function App() {
     pushHistory(`선택 객체 ${selectedEntityIds.length}개 레이어 일괄 변경`);
   };
 
+  const handleUpdateLineAttributes = async (updatedLines: { id: string; name?: string; attributes: Record<string, string | number> }[]) => {
+    if (updatedLines.length === 0) return;
+    const updateMap = new Map(updatedLines.map(u => [u.id, u]));
+
+    setLines(prev => prev.map(l => {
+      const u = updateMap.get(l.id);
+      if (u) {
+        return { ...l, name: u.name || l.name, attributes: u.attributes };
+      }
+      return l;
+    }));
+
+    setPolylines(prev => prev.map(pl => {
+      const u = updateMap.get(pl.id);
+      if (u) {
+        return { ...pl, name: u.name || pl.name, attributes: u.attributes };
+      }
+      return pl;
+    }));
+
+    if (currentProjectId !== null) {
+      const dbLinesToUpdate = lines
+        .filter(l => updateMap.has(l.id))
+        .map(l => {
+          const u = updateMap.get(l.id)!;
+          return { ...l, name: u.name || l.name, attributes: u.attributes, projectId: currentProjectId };
+        });
+
+      const dbPlsToUpdate = polylines
+        .filter(pl => updateMap.has(pl.id))
+        .map(pl => {
+          const u = updateMap.get(pl.id)!;
+          return { ...pl, name: u.name || pl.name, attributes: u.attributes, projectId: currentProjectId };
+        });
+
+      await Promise.all([
+        dbLinesToUpdate.length > 0 ? db.lines.bulkPut(dbLinesToUpdate) : Promise.resolve(),
+        dbPlsToUpdate.length > 0 ? db.polylines.bulkPut(dbPlsToUpdate) : Promise.resolve()
+      ]);
+    }
+
+    pushHistory(`선 OD 속성 ${updatedLines.length}개 수정`);
+  };
+
   const handleDeletePoint = async (id: string) => {
     setPoints(pts => pts.filter(p => p.id !== id));
     await db.points.where('id').equals(id as any).delete();
@@ -508,6 +533,7 @@ export default function App() {
         onOpenImport={() => setShowImportModal(true)}
         onOpenExport={() => setShowExportModal(true)}
         onOpenTable={() => setShowTableModal(true)}
+        onOpenLineOD={() => { setLineODTargetIds(undefined); setShowLineODModal(true); }}
         onToggleLayerPanel={() => setShowLayerPanel(prev => !prev)}
         onOpenHelp={() => setShowHelpModal(true)}
         onOpenManualPoint={() => setShowManualPointModal(true)}
@@ -556,6 +582,22 @@ export default function App() {
               <CheckSquare className="w-3.5 h-3.5" />
               <span>{multiSelectMode ? '누적추가 ON' : '+ 추가선택'}</span>
             </button>
+
+            {/* Line OD Attributes button when lines/polylines are selected */}
+            {selLinesCount > 0 && (
+              <button
+                onClick={() => {
+                  const lineIds = selectedEntityIds.filter(id => lines.some(l => l.id === id) || polylines.some(pl => pl.id === id));
+                  setLineODTargetIds(lineIds);
+                  setShowLineODModal(true);
+                }}
+                title="선택된 선 객체 데이터(OD) 속성 입력 및 편집"
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-sky-50 dark:bg-sky-950/80 hover:bg-sky-100 dark:hover:bg-sky-900 text-sky-600 dark:text-sky-300 border border-sky-200 dark:border-sky-800 text-xs font-semibold transition"
+              >
+                <Database className="w-3.5 h-3.5 text-sky-500" />
+                <span>선 OD 속성 ({selLinesCount}개)</span>
+              </button>
+            )}
 
             {/* Layer batch change selector */}
             <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-700/80 rounded-xl px-2 py-1">
@@ -721,6 +763,7 @@ export default function App() {
             onToggleLock={handleToggleLayerLock}
             onChangeColor={handleChangeLayerColor}
             onAddLayer={handleAddLayer}
+            onDeleteLayer={handleDeleteLayer}
             onClose={() => setShowLayerPanel(false)}
           />
         )}
@@ -766,6 +809,18 @@ export default function App() {
           nextPointNumber={points.length + 1}
         />
       )}
+
+      {showLineODModal && (
+        <LineODModal
+          lines={lines}
+          polylines={polylines}
+          targetLineIds={lineODTargetIds}
+          activeLayerId={activeLayerId}
+          onUpdateLineAttributes={handleUpdateLineAttributes}
+          onFocusLine={(pts) => handleZoomExtents(pts)}
+          onClose={() => setShowLineODModal(false)}
+        />
+      )}
     </div>
   );
 
@@ -808,5 +863,42 @@ export default function App() {
     const newL = { id: `layer-${Date.now()}`, name, color, visible: true, locked: false, lineWidth: 2 };
     setLayers(prev => [...prev, newL]);
     setActiveLayerId(newL.id);
+  }
+  async function handleDeleteLayer(id: string) {
+    if (layers.length <= 1) return;
+    const targetLayer = layers.find(l => l.id === id);
+    const remainingLayers = layers.filter(l => l.id !== id);
+    const fallbackId = remainingLayers[0].id;
+
+    if (activeLayerId === id) {
+      setActiveLayerId(fallbackId);
+    }
+
+    // Safely reassign entities on the deleted layer to the fallback layer
+    setPoints(prev => prev.map(p => p.layerId === id ? { ...p, layerId: fallbackId } : p));
+    setLines(prev => prev.map(l => l.layerId === id ? { ...l, layerId: fallbackId } : l));
+    setPolylines(prev => prev.map(pl => pl.layerId === id ? { ...pl, layerId: fallbackId } : pl));
+    setPolygons(prev => prev.map(pg => pg.layerId === id ? { ...pg, layerId: fallbackId } : pg));
+    setTexts(prev => prev.map(t => t.layerId === id ? { ...t, layerId: fallbackId } : t));
+
+    setLayers(remainingLayers);
+
+    // Persist to IndexedDB
+    try {
+      await db.layers.where('id').equals(id).delete();
+      if (currentProjectId !== null) {
+        await Promise.all([
+          db.points.where('layerId').equals(id).modify({ layerId: fallbackId }),
+          db.lines.where('layerId').equals(id).modify({ layerId: fallbackId }),
+          db.polylines.where('layerId').equals(id).modify({ layerId: fallbackId }),
+          db.polygons.where('layerId').equals(id).modify({ layerId: fallbackId }),
+          db.texts.where('layerId').equals(id).modify({ layerId: fallbackId }),
+        ]);
+      }
+    } catch (err) {
+      console.warn('DB layer delete sync:', err);
+    }
+
+    pushHistory(`레이어 삭제: ${targetLayer?.name || id}`);
   }
 }

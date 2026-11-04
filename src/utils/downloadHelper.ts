@@ -10,7 +10,7 @@ export function downloadTextFile(
   mimeType: string = 'text/plain'
 ) {
   const bytes = encodeText(content, encoding);
-  const blob = new Blob([bytes], { type: mimeType });
+  const blob = new Blob([bytes as unknown as BlobPart], { type: mimeType });
   downloadBlob(blob, filename);
 }
 

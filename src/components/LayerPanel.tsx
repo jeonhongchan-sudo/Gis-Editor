@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { Eye, EyeOff, Lock, Unlock, Plus, X, Palette, CheckCircle2 } from 'lucide-react';
+import { Eye, EyeOff, Lock, Unlock, Plus, X, Palette, CheckCircle2, Trash2 } from 'lucide-react';
 import { CADLayer } from '../types/cad';
 
 interface LayerPanelProps {
@@ -15,6 +15,7 @@ interface LayerPanelProps {
   onToggleLock: (id: string) => void;
   onChangeColor: (id: string, color: string) => void;
   onAddLayer: (name: string, color: string) => void;
+  onDeleteLayer: (id: string) => void;
   onClose: () => void;
 }
 
@@ -39,11 +40,13 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
   onToggleLock,
   onChangeColor,
   onAddLayer,
+  onDeleteLayer,
   onClose
 }) => {
   const [newLayerName, setNewLayerName] = useState('');
   const [newLayerColor, setNewLayerColor] = useState('#38bdf8');
   const [colorPickerLayerId, setColorPickerLayerId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,7 +61,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
       <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
         <div>
           <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">CAD 도면 레이어</h2>
-          <p className="text-[11px] text-slate-500 dark:text-slate-400">도면층 표시/숨김 및 색상 관리</p>
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">도면층 표시/숨김, 색상 및 레이어 삭제</p>
         </div>
         <button
           onClick={onClose}
@@ -69,9 +72,49 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
       </div>
 
       {/* Layer List */}
-      <div className="max-h-64 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+      <div className="max-h-64 overflow-y-auto space-y-1.5 pr-1 custom-scrollbar">
         {layers.map(layer => {
           const isActive = layer.id === activeLayerId;
+
+          if (confirmDeleteId === layer.id) {
+            return (
+              <div
+                key={layer.id}
+                className="p-2.5 rounded-xl bg-red-50 dark:bg-red-950/70 border border-red-200 dark:border-red-800/80 flex flex-col gap-1.5 animate-in fade-in duration-150"
+              >
+                <div className="flex items-center gap-1.5 text-red-700 dark:text-red-300 font-semibold text-xs">
+                  <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">'{layer.name}' 삭제하시겠습니까?</span>
+                </div>
+                <p className="text-[10px] text-red-600/80 dark:text-red-400 leading-tight">
+                  이 레이어에 있는 객체는 기본 레이어로 안전하게 자동 이동됩니다.
+                </p>
+                <div className="flex items-center justify-end gap-1.5 mt-1">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setConfirmDeleteId(null);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[11px] font-medium hover:bg-slate-300 dark:hover:bg-slate-700 transition"
+                  >
+                    취소
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDeleteLayer(layer.id);
+                      setConfirmDeleteId(null);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white text-[11px] font-bold shadow-sm transition"
+                  >
+                    삭제 확정
+                  </button>
+                </div>
+              </div>
+            );
+          }
 
           return (
             <div
@@ -136,6 +179,26 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                   title={layer.locked ? '잠금 해제' : '레이어 잠금'}
                 >
                   {layer.locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+                </button>
+
+                {/* Delete Layer */}
+                <button
+                  type="button"
+                  disabled={layers.length <= 1}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (layers.length > 1) {
+                      setConfirmDeleteId(layer.id);
+                    }
+                  }}
+                  className={`p-1 rounded-lg transition ${
+                    layers.length <= 1
+                      ? 'text-slate-300 dark:text-slate-700 cursor-not-allowed opacity-30'
+                      : 'text-slate-400 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40'
+                  }`}
+                  title={layers.length <= 1 ? '최소 1개의 기본 레이어가 필요합니다' : '레이어 삭제'}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>

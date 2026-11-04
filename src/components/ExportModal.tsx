@@ -13,7 +13,9 @@ import {
   Check, 
   Layers,
   Globe2,
-  Info
+  Info,
+  FileText,
+  Edit3
 } from 'lucide-react';
 import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText, ProjectState } from '../types/cad';
 import { downloadBlob, downloadTextFile, exportToShapefileZip } from '../utils/shpExporter';
@@ -46,6 +48,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [shpEncoding, setShpEncoding] = useState<'utf-8' | 'euc-kr'>('euc-kr');
   const [csvEncoding, setCsvEncoding] = useState<'utf-8' | 'euc-kr' | 'utf-8-bom'>('euc-kr');
 
+  // Custom User Filename States
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const [baseProjectName, setBaseProjectName] = useState<string>(() => `현장성과_${new Date().toISOString().slice(0, 10)}`);
+  const [shpFileName, setShpFileName] = useState<string>(() => `gis_shapefiles_${new Date().toISOString().slice(0, 10)}`);
+  const [csvFileName, setCsvFileName] = useState<string>(() => `survey_coordinates_${new Date().toISOString().slice(0, 10)}`);
+  const [projectFileName, setProjectFileName] = useState<string>(() => `cad_project_${new Date().toISOString().slice(0, 10)}`);
+
   const totalLinesCount = lines.length + polylines.length;
 
   const showSuccess = (msg: string) => {
@@ -65,7 +74,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         crs: selectedCrs,
         encoding: shpEncoding
       });
-      const filename = `gis_shapefiles_${new Date().toISOString().slice(0, 10)}.zip`;
+      const cleanName = (shpFileName.trim() || `gis_shapefiles_${todayStr}`).replace(/\.zip$/i, '');
+      const filename = `${cleanName}.zip`;
       downloadBlob(blob, filename);
       showSuccess(`SHP 압축 파일(${filename})이 정상 생성되었습니다.`);
     } catch (err: any) {
@@ -81,16 +91,18 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     points.forEach((p, idx) => {
       csvLines.push(`${idx + 1},"${p.name}",${p.x.toFixed(3)},${p.y.toFixed(3)},${p.z !== undefined ? p.z.toFixed(3) : ''},"${p.layerId}"`);
     });
-    const filename = `survey_coordinates_${new Date().toISOString().slice(0, 10)}.csv`;
+    const cleanName = (csvFileName.trim() || `survey_coordinates_${todayStr}`).replace(/\.csv$/i, '');
+    const filename = `${cleanName}.csv`;
     downloadTextFile(csvLines.join('\n'), filename, csvEncoding, 'text/csv');
     showSuccess(`${filename} 측점 CSV가 저장되었습니다.`);
   };
 
   // 3. Export Project JSON / CADGIS
   const handleExportProject = () => {
+    const cleanName = (projectFileName.trim() || `cad_project_${todayStr}`).replace(/\.cadgis$/i, '');
     const project: ProjectState = {
       version: '1.0.0',
-      name: '도면작업_' + new Date().toISOString().slice(0, 10),
+      name: cleanName,
       layers,
       points,
       lines,
@@ -99,7 +111,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       texts
     };
     const jsonStr = JSON.stringify(project, null, 2);
-    const filename = `cad_project_${new Date().toISOString().slice(0, 10)}.cadgis`;
+    const filename = `${cleanName}.cadgis`;
     downloadTextFile(jsonStr, filename, 'utf-8', 'application/json');
     showSuccess(`프로젝트 누적 백업 파일(${filename})이 저장되었습니다.`);
   };
@@ -126,14 +138,32 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           </button>
         </div>
 
-        {/* Current Project Summary Badge */}
-        <div className="p-3 bg-slate-50 dark:bg-slate-950/80 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
-          <div className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
-            <Layers className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
-            <span className="text-slate-500 dark:text-slate-400">데이터 구성:</span>
+        {/* Master Project / Base Filename Input & Summary */}
+        <div className="p-3 bg-slate-50 dark:bg-slate-950/80 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
+          <div className="flex items-center gap-2 flex-1">
+            <div className="flex items-center gap-1.5 text-slate-700 dark:text-slate-300 shrink-0 font-semibold">
+              <FileText className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+              <span>기준 파일명:</span>
+            </div>
+            <div className="flex items-center flex-1 max-w-xs sm:max-w-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1 focus-within:ring-1 focus-within:ring-emerald-500">
+              <input
+                type="text"
+                value={baseProjectName}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setBaseProjectName(val);
+                  const sanitized = val.trim();
+                  setShpFileName(`${sanitized || 'gis_shapefiles'}_shp`);
+                  setCsvFileName(`${sanitized || 'survey_coordinates'}_pts`);
+                  setProjectFileName(`${sanitized || 'cad_project'}`);
+                }}
+                placeholder="예: 261104_현장측량성과"
+                className="bg-transparent text-slate-900 dark:text-white font-medium outline-none w-full text-xs"
+              />
+            </div>
           </div>
 
-          <div className="flex items-center gap-3 text-slate-500 dark:text-slate-400">
+          <div className="flex items-center gap-3 text-slate-500 dark:text-slate-400 text-[11px] shrink-0">
             <span>측점: <strong className="text-sky-600 dark:text-sky-400">{points.length}</strong></span>
             <span>선: <strong className="text-amber-600 dark:text-amber-400">{totalLinesCount}</strong></span>
             <span>폴리곤: <strong className="text-emerald-600 dark:text-emerald-400">{polygons.length}</strong></span>
@@ -162,10 +192,23 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                  QGIS, ArcGIS, 국토정보플랫폼 등에서 호환되는 <strong>.shp, .shx, .dbf, .prj</strong> 파일이 압축된 패키지입니다.
-                  측점, 선, 구역 도형이 레이어별로 자동 분리되어 저장됩니다.
+                  QGIS, ArcGIS 및 <strong>AutoCAD Map 3D(MAPIMPORT)</strong>에서 <strong>객체 데이터(OD Table)</strong>로 즉시 연동되는 <strong>.shp, .shx, .dbf, .prj</strong> 파일 패키지입니다.
+                  선/폴리라인에 기록된 시설구분, 규격, 매설심도, 상태 등의 현장 OD 속성이 DBF 테이블로 완전 보존됩니다.
                 </p>
               </div>
+            </div>
+
+            {/* Direct Filename Input */}
+            <div className="flex items-center gap-1.5 p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800 text-xs">
+              <span className="text-slate-500 dark:text-slate-400 font-medium shrink-0">압축 파일명:</span>
+              <input
+                type="text"
+                value={shpFileName}
+                onChange={e => setShpFileName(e.target.value)}
+                placeholder="SHP 파일명 입력"
+                className="bg-transparent text-emerald-700 dark:text-emerald-400 font-semibold outline-none flex-1 min-w-0"
+              />
+              <span className="text-[11px] font-mono text-slate-400 dark:text-slate-500 shrink-0">.zip</span>
             </div>
 
             {/* Coordinate System Selector for .PRJ */}
@@ -214,44 +257,56 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
           {/* Option 2: CSV Coordinates */}
           <div className="p-4 bg-slate-50/50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 hover:border-sky-500/50 rounded-2xl flex flex-col gap-3 transition shadow-sm">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <FileSpreadsheet className="w-5 h-5 text-sky-600 dark:text-sky-400" />
-                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">측점 좌표 목록 CSV</h3>
-                </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  엑셀이나 측량 전용기에서 열어볼 수 있는 표준 CSV 형식 좌표 파일입니다.
-                </p>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <FileSpreadsheet className="w-5 h-5 text-sky-600 dark:text-sky-400" />
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">측점 좌표 목록 CSV</h3>
               </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                엑셀이나 측량 전용기에서 열어볼 수 있는 표준 CSV 형식 좌표 파일입니다.
+              </p>
+            </div>
 
-              <div className="flex flex-col items-end gap-2 w-full sm:w-auto">
-                <div className="flex items-center gap-1.5 text-[11px] text-slate-500 bg-white dark:bg-slate-900 px-2 py-1 rounded-lg border border-slate-100 dark:border-slate-800">
-                  <span>인코딩:</span>
-                  <select
-                    value={csvEncoding}
-                    onChange={e => setCsvEncoding(e.target.value as any)}
-                    className="bg-transparent text-sky-700 dark:text-sky-400 outline-none font-medium"
-                  >
-                    <option value="euc-kr">EUC-KR (CP949)</option>
-                    <option value="utf-8">UTF-8</option>
-                    <option value="utf-8-bom">UTF-8 with BOM (엑셀용)</option>
-                  </select>
-                </div>
-                <button
-                  onClick={handleExportCSV}
-                  disabled={points.length === 0}
-                  className="w-full sm:w-auto px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-md shadow-sky-600/30 flex items-center justify-center gap-1.5 shrink-0 transition"
+            {/* Direct Filename Input & Encoding */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+              <div className="flex-1 flex items-center gap-1.5 p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800 text-xs">
+                <span className="text-slate-500 dark:text-slate-400 font-medium shrink-0">CSV 파일명:</span>
+                <input
+                  type="text"
+                  value={csvFileName}
+                  onChange={e => setCsvFileName(e.target.value)}
+                  placeholder="CSV 파일명 입력"
+                  className="bg-transparent text-sky-700 dark:text-sky-400 font-semibold outline-none flex-1 min-w-0"
+                />
+                <span className="text-[11px] font-mono text-slate-400 dark:text-slate-500 shrink-0">.csv</span>
+              </div>
+              
+              <div className="flex items-center justify-between sm:justify-start gap-1.5 text-[11px] text-slate-500 bg-white dark:bg-slate-900 px-2.5 py-1.5 rounded-xl border border-slate-100 dark:border-slate-800">
+                <span className="shrink-0">인코딩:</span>
+                <select
+                  value={csvEncoding}
+                  onChange={e => setCsvEncoding(e.target.value as any)}
+                  className="bg-transparent text-sky-700 dark:text-sky-400 outline-none font-medium"
                 >
-                  <Download className="w-4 h-4" />
-                  CSV 다운로드
-                </button>
+                  <option value="euc-kr">EUC-KR (CP949)</option>
+                  <option value="utf-8">UTF-8</option>
+                  <option value="utf-8-bom">UTF-8 with BOM (엑셀용)</option>
+                </select>
               </div>
             </div>
+
+            <button
+              onClick={handleExportCSV}
+              disabled={points.length === 0}
+              className="w-full py-2.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-md shadow-sky-600/30 flex items-center justify-center gap-1.5 transition active:scale-98"
+            >
+              <Download className="w-4 h-4" />
+              CSV 다운로드
+            </button>
           </div>
 
           {/* Option 3: Project Save (.cadgis) */}
-          <div className="p-4 bg-slate-50/50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 hover:border-purple-500/50 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 transition shadow-sm">
+          <div className="p-4 bg-slate-50/50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 hover:border-purple-500/50 rounded-2xl flex flex-col gap-3 transition shadow-sm">
             <div className="space-y-1">
               <div className="flex items-center gap-2">
                 <Save className="w-5 h-5 text-purple-600 dark:text-purple-400" />
@@ -262,12 +317,25 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               </p>
             </div>
 
+            {/* Direct Filename Input */}
+            <div className="flex items-center gap-1.5 p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800 text-xs">
+              <span className="text-slate-500 dark:text-slate-400 font-medium shrink-0">백업 파일명:</span>
+              <input
+                type="text"
+                value={projectFileName}
+                onChange={e => setProjectFileName(e.target.value)}
+                placeholder="프로젝트 파일명 입력"
+                className="bg-transparent text-purple-700 dark:text-purple-400 font-semibold outline-none flex-1 min-w-0"
+              />
+              <span className="text-[11px] font-mono text-slate-400 dark:text-slate-500 shrink-0">.cadgis</span>
+            </div>
+
             <button
               onClick={handleExportProject}
-              className="w-full sm:w-auto px-4 py-2.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-xl shadow-md shadow-purple-600/30 flex items-center justify-center gap-1.5 shrink-0 transition"
+              className="w-full py-2.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-xl shadow-md shadow-purple-600/30 flex items-center justify-center gap-1.5 transition active:scale-98"
             >
               <Download className="w-4 h-4" />
-              프로젝트 파일 백업
+              프로젝트 파일 백업 (.cadgis)
             </button>
           </div>
         </div>

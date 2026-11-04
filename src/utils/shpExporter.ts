@@ -55,10 +55,10 @@ function createDbfBuffer(
   // Field descriptors
   let offset = 32;
   fields.forEach(f => {
-    // Field name (up to 10 chars + null)
-    // Field names in DBF are strictly ASCII/ANSI, but we use charCodeAt
+    // Field name in DBF must be at most 10 bytes + null terminator
+    const nameBytes = encodeText(f.name, encoding);
     for (let i = 0; i < 11; i++) {
-      u8[offset + i] = i < f.name.length ? f.name.charCodeAt(i) : 0;
+      u8[offset + i] = i < nameBytes.length && i < 10 ? nameBytes[i] : 0;
     }
     view.setUint8(offset + 11, f.type.charCodeAt(0));
     view.setUint8(offset + 16, f.length);
@@ -415,18 +415,56 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     zip.file('cad_points.cpg', cpgContent);
   }
 
-  // Combine single lines and polylines into polyline features
+  // Combine single lines and polylines into polyline features with Object Data (OD)
+  // Collect all unique custom attribute keys across all lines
+  const standardODKeys = new Set([
+    'ID', 'NAME', 'LAYER', 'LENGTH_M', 'CATEGORY', 'SPEC', 'MATERIAL',
+    'DEPTH', 'SURV_DATE', 'SURVEYOR', 'STATUS', 'REMARK', 'TYPE',
+    '시설구분', '규격', '재질', '매설심도', '조사일자', '조사자', '상태', '비고'
+  ]);
+
+  const customFieldKeysSet = new Set<string>();
+  const collectCustomKeys = (attrs?: Record<string, string | number>) => {
+    if (!attrs) return;
+    Object.keys(attrs).forEach(k => {
+      if (!standardODKeys.has(k) && k.trim()) {
+        customFieldKeysSet.add(k.trim());
+      }
+    });
+  };
+
+  lines.forEach(l => collectCustomKeys(l.attributes));
+  polylines.forEach(pl => collectCustomKeys(pl.attributes));
+
+  // Limit custom keys to prevent DBF header overflow, max 10 custom keys
+  const customFieldKeys = Array.from(customFieldKeysSet).slice(0, 15);
+
   const lineFeatures: ShpFeaturePolyline[] = [];
+
   lines.forEach((l, idx) => {
     const len = Math.sqrt(Math.pow(l.end.x - l.start.x, 2) + Math.pow(l.end.y - l.start.y, 2));
+    const a = l.attributes || {};
+    const props: Record<string, string | number> = {
+      ID: idx + 1,
+      NAME: (l.name || `단일선_${idx + 1}`).slice(0, 30),
+      LAYER: l.layerId.replace(/^layer-/, '').slice(0, 15),
+      LENGTH_M: len.toFixed(3),
+      CATEGORY: (a.CATEGORY || a.시설구분 || '').toString().slice(0, 25),
+      SPEC: (a.SPEC || a.규격 || '').toString().slice(0, 25),
+      MATERIAL: (a.MATERIAL || a.재질 || '').toString().slice(0, 20),
+      DEPTH: a.DEPTH !== undefined ? a.DEPTH : (a.매설심도 !== undefined ? a.매설심도 : 0),
+      SURV_DATE: (a.SURV_DATE || a.조사일자 || '').toString().slice(0, 12),
+      SURVEYOR: (a.SURVEYOR || a.조사자 || '').toString().slice(0, 20),
+      STATUS: (a.STATUS || a.상태 || '').toString().slice(0, 15),
+      REMARK: (a.REMARK || a.비고 || '').toString().slice(0, 40),
+      TYPE: 'LINE'
+    };
+    customFieldKeys.forEach(k => {
+      props[k] = a[k] !== undefined ? a[k] : '';
+    });
     lineFeatures.push({
       points: [l.start, l.end],
-      properties: {
-        ID: idx + 1,
-        LAYER: l.layerId.replace(/^layer-/, '').slice(0, 15),
-        LENGTH_M: len.toFixed(3),
-        TYPE: 'LINE'
-      }
+      properties: props
     });
   });
 
@@ -435,26 +473,61 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     for (let i = 0; i < pl.points.length - 1; i++) {
       len += Math.sqrt(Math.pow(pl.points[i + 1].x - pl.points[i].x, 2) + Math.pow(pl.points[i + 1].y - pl.points[i].y, 2));
     }
+    const a = pl.attributes || {};
+    const props: Record<string, string | number> = {
+      ID: lines.length + idx + 1,
+      NAME: (pl.name || `연속선_${idx + 1}`).slice(0, 30),
+      LAYER: pl.layerId.replace(/^layer-/, '').slice(0, 15),
+      LENGTH_M: len.toFixed(3),
+      CATEGORY: (a.CATEGORY || a.시설구분 || '').toString().slice(0, 25),
+      SPEC: (a.SPEC || a.규격 || '').toString().slice(0, 25),
+      MATERIAL: (a.MATERIAL || a.재질 || '').toString().slice(0, 20),
+      DEPTH: a.DEPTH !== undefined ? a.DEPTH : (a.매설심도 !== undefined ? a.매설심도 : 0),
+      SURV_DATE: (a.SURV_DATE || a.조사일자 || '').toString().slice(0, 12),
+      SURVEYOR: (a.SURVEYOR || a.조사자 || '').toString().slice(0, 20),
+      STATUS: (a.STATUS || a.상태 || '').toString().slice(0, 15),
+      REMARK: (a.REMARK || a.비고 || '').toString().slice(0, 40),
+      TYPE: 'POLYLINE'
+    };
+    customFieldKeys.forEach(k => {
+      props[k] = a[k] !== undefined ? a[k] : '';
+    });
     lineFeatures.push({
       points: pl.points,
-      properties: {
-        ID: lines.length + idx + 1,
-        LAYER: pl.layerId.replace(/^layer-/, '').slice(0, 15),
-        LENGTH_M: len.toFixed(3),
-        TYPE: 'POLYLINE'
-      }
+      properties: props
     });
   });
 
   if (lineFeatures.length > 0) {
     const { shp, shx } = createPolylineShpAndShx(lineFeatures);
+
+    const dbfFields: { name: string; type: 'C' | 'N'; length: number; decimals: number }[] = [
+      { name: 'ID', type: 'N', length: 10, decimals: 0 },
+      { name: 'NAME', type: 'C', length: 30, decimals: 0 },
+      { name: 'LAYER', type: 'C', length: 15, decimals: 0 },
+      { name: 'LENGTH_M', type: 'N', length: 12, decimals: 3 },
+      { name: 'CATEGORY', type: 'C', length: 25, decimals: 0 },
+      { name: 'SPEC', type: 'C', length: 25, decimals: 0 },
+      { name: 'MATERIAL', type: 'C', length: 20, decimals: 0 },
+      { name: 'DEPTH', type: 'N', length: 10, decimals: 3 },
+      { name: 'SURV_DATE', type: 'C', length: 12, decimals: 0 },
+      { name: 'SURVEYOR', type: 'C', length: 20, decimals: 0 },
+      { name: 'STATUS', type: 'C', length: 15, decimals: 0 },
+      { name: 'REMARK', type: 'C', length: 40, decimals: 0 },
+      { name: 'TYPE', type: 'C', length: 10, decimals: 0 }
+    ];
+
+    customFieldKeys.forEach(k => {
+      dbfFields.push({
+        name: k.slice(0, 10),
+        type: 'C',
+        length: 30,
+        decimals: 0
+      });
+    });
+
     const dbf = createDbfBuffer(
-      [
-        { name: 'ID', type: 'N', length: 10, decimals: 0 },
-        { name: 'LAYER', type: 'C', length: 15, decimals: 0 },
-        { name: 'LENGTH_M', type: 'N', length: 12, decimals: 3 },
-        { name: 'TYPE', type: 'C', length: 10, decimals: 0 }
-      ],
+      dbfFields,
       lineFeatures.map(f => f.properties),
       encoding
     );

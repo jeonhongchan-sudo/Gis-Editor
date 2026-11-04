@@ -35,6 +35,7 @@ export interface CADLine {
   layerId: string;
   color?: string;
   name?: string;
+  attributes?: Record<string, string | number>;
 }
 
 export interface CADPolyline {
@@ -44,6 +45,7 @@ export interface CADPolyline {
   layerId: string;
   color?: string;
   name?: string;
+  attributes?: Record<string, string | number>;
 }
 
 export interface CADPolygon {
