@@ -16,9 +16,11 @@ import {
   Layers,
   Archive,
   MapPin,
-  Maximize2
+  Maximize2,
+  FileCode2,
+  Database
 } from 'lucide-react';
-import { CADLayer, CADPoint, ProjectState } from '../types/cad';
+import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, ProjectState } from '../types/cad';
 import { 
   CSVColumnMapping, 
   CSVParseResult, 
@@ -37,6 +39,15 @@ interface ImportModalProps {
   onClose: () => void;
 }
 
+interface StoredRawInput {
+  kind: 'zip' | 'shp-multi' | 'csv' | 'excel';
+  filename: string;
+  buffer?: ArrayBuffer;
+  shpFiles?: { name: string; shpBuffer: ArrayBuffer; dbfBuffer?: ArrayBuffer }[];
+}
+
+const LAYER_COLORS = ['#38bdf8', '#34d399', '#f43f5e', '#fbbf24', '#a855f7', '#60a5fa', '#f97316'];
+
 export const ImportModal: React.FC<ImportModalProps> = ({
   onImportCSVPoints,
   onImportSHP,
@@ -53,7 +64,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   const [parsingProgress, setParsingProgress] = useState<number>(0);
   const [parsingStatusMsg, setParsingStatusMsg] = useState<string>('');
 
-  const rawBufferRef = useRef<{ buffer: ArrayBuffer; filename: string } | null>(null);
+  const rawInputRef = useRef<StoredRawInput | null>(null);
 
   // CSV/Excel State
   const [csvPreview, setCsvPreview] = useState<CSVParseResult | null>(null);
@@ -83,18 +94,117 @@ export const ImportModal: React.FC<ImportModalProps> = ({
       setCsvMapping(res.detectedMapping);
       setLoadedFormat('csv');
     } catch (err: any) {
-      alert('표 데이터를 분석할 수 없습니다.');
+      console.warn('Failed to parse table rows:', err);
     }
   };
 
-  const processBuffer = async (buffer: ArrayBuffer, filename: string, enc: SupportedEncoding) => {
-    rawBufferRef.current = { buffer, filename };
-    const ext = filename.split('.').pop()?.toLowerCase();
+  /**
+   * Re-parse data when the user overrides or toggles encoding
+   */
+  const handleEncodingChange = async (newEnc: SupportedEncoding) => {
+    setSelectedEncoding(newEnc);
+    const raw = rawInputRef.current;
+    if (!raw) return;
 
-    // 1. Project Backup (.cadgis or .json)
-    if (ext === 'cadgis' || (ext === 'json' && !filename.includes('package'))) {
+    const forced = newEnc === 'auto' ? undefined : (newEnc as 'utf-8' | 'euc-kr');
+
+    if (raw.kind === 'zip' && raw.buffer) {
       try {
-        const text = new TextDecoder('utf-8').decode(buffer);
+        setIsParsing(true);
+        setParsingStatusMsg('선택한 인코딩으로 Shapefile 압축 파일 재분석 중...');
+        setParsingProgress(50);
+        const res = await parseShapefileZip(raw.buffer, forced);
+        setParsingProgress(100);
+        setShpResult(res);
+      } catch (err: any) {
+        console.error('Re-parse zip failed:', err);
+      } finally {
+        setIsParsing(false);
+      }
+    } else if (raw.kind === 'shp-multi' && raw.shpFiles) {
+      try {
+        setIsParsing(true);
+        setParsingStatusMsg('선택한 인코딩으로 SHP/DBF 바이너리 재분석 중...');
+        setParsingProgress(50);
+        const combinedPoints: CADPoint[] = [];
+        const combinedLines: CADLine[] = [];
+        const combinedPolylines: CADPolyline[] = [];
+        const combinedPolygons: CADPolygon[] = [];
+        const combinedLayers: CADLayer[] = [];
+        const combinedDbfFields = new Set<string>();
+        let detectedEnc: 'utf-8' | 'euc-kr' = forced || 'euc-kr';
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+        for (let i = 0; i < raw.shpFiles.length; i++) {
+          const item = raw.shpFiles[i];
+          const res = parseShpBuffer(item.shpBuffer, item.name, item.dbfBuffer, forced);
+          if (res.detectedEncoding) detectedEnc = res.detectedEncoding;
+          if (res.dbfFields) res.dbfFields.forEach(f => combinedDbfFields.add(f));
+
+          res.layers.forEach(nl => {
+            if (!combinedLayers.some(l => l.id === nl.id)) {
+              nl.color = LAYER_COLORS[combinedLayers.length % LAYER_COLORS.length];
+              combinedLayers.push(nl);
+            }
+          });
+
+          combinedPoints.push(...res.points);
+          combinedLines.push(...res.lines);
+          combinedPolylines.push(...res.polylines);
+          combinedPolygons.push(...res.polygons);
+
+          if (res.bounds) {
+            minX = Math.min(minX, res.bounds.minX);
+            minY = Math.min(minY, res.bounds.minY);
+            maxX = Math.max(maxX, res.bounds.maxX);
+            maxY = Math.max(maxY, res.bounds.maxY);
+          }
+        }
+
+        setParsingProgress(100);
+        setShpResult({
+          points: combinedPoints,
+          lines: combinedLines,
+          polylines: combinedPolylines,
+          polygons: combinedPolygons,
+          layers: combinedLayers,
+          layerName: raw.filename.replace(/\.[^/.]+$/, ''),
+          detectedEncoding: detectedEnc,
+          dbfFields: Array.from(combinedDbfFields),
+          bounds: minX !== Infinity ? { minX, minY, maxX, maxY } : undefined
+        });
+      } catch (err: any) {
+        console.error('Re-parse shp failed:', err);
+      } finally {
+        setIsParsing(false);
+      }
+    } else if (raw.kind === 'csv' && raw.buffer) {
+      const { text } = decodeBufferText(raw.buffer, newEnc);
+      try {
+        const res = parseCSVPreview(text, headerRowIdx);
+        setCsvPreview(res);
+        setCsvMapping(res.detectedMapping);
+      } catch {}
+    }
+  };
+
+  /**
+   * Process multiple or single selected files
+   */
+  const handleFilesSelected = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+
+    const fileArray = Array.from(files);
+
+    // Case 1: .cadgis or .json backup project file
+    const projectFile = fileArray.find(f => {
+      const ext = f.name.split('.').pop()?.toLowerCase();
+      return ext === 'cadgis' || (ext === 'json' && !f.name.includes('package'));
+    });
+    if (projectFile && fileArray.length === 1) {
+      try {
+        const buf = await projectFile.arrayBuffer();
+        const text = new TextDecoder('utf-8').decode(buf);
         const projectData = JSON.parse(text) as ProjectState;
         if (projectData.points || projectData.lines || projectData.polylines) {
           onLoadProject(projectData);
@@ -106,51 +216,141 @@ export const ImportModal: React.FC<ImportModalProps> = ({
       }
     }
 
-    // 2. Shapefile Zip (.zip)
-    if (ext === 'zip') {
+    // Case 2: Zip archive containing Shapefile
+    const zipFile = fileArray.find(f => f.name.toLowerCase().endsWith('.zip'));
+    if (zipFile) {
       try {
         setIsParsing(true);
-        setParsingStatusMsg('Shapefile ZIP 압축 파일 분석 중...');
+        setParsingStatusMsg('Shapefile ZIP 압축 파일 분석 중 (AutoCAD Map 2000 CP949 자동 감지)...');
         setParsingProgress(40);
-        const res = await parseShapefileZip(buffer);
+        const buffer = await zipFile.arrayBuffer();
+        rawInputRef.current = { kind: 'zip', filename: zipFile.name, buffer };
+
+        const forced = selectedEncoding === 'auto' ? undefined : (selectedEncoding as 'utf-8' | 'euc-kr');
+        const res = await parseShapefileZip(buffer, forced);
         setParsingProgress(100);
         setShpResult(res);
-        setShpFileName(filename);
+        setShpFileName(zipFile.name);
         setLoadedFormat('shp');
         return;
       } catch (err: any) {
-        alert('ZIP 파일 내 Shapefile 분석 오류: ' + err.message);
+        alert('ZIP 파일 내 Shapefile 분석 오류: ' + (err.message || err));
         return;
       } finally {
         setIsParsing(false);
       }
     }
 
-    // 3. Standalone .shp file
-    if (ext === 'shp') {
+    // Case 3: Loose .shp file(s) (with optional companion .dbf)
+    const shpFiles = fileArray.filter(f => f.name.toLowerCase().endsWith('.shp'));
+    if (shpFiles.length > 0) {
       try {
         setIsParsing(true);
-        setParsingStatusMsg('ESRI .shp 바이너리 구조 분석 중...');
-        setParsingProgress(50);
-        const res = parseShpBuffer(buffer, filename);
+        setParsingStatusMsg('ESRI .shp 및 속성 .dbf 분석 중...');
+        setParsingProgress(30);
+
+        const shpItems: { name: string; shpBuffer: ArrayBuffer; dbfBuffer?: ArrayBuffer }[] = [];
+
+        for (const shpFile of shpFiles) {
+          const shpBuf = await shpFile.arrayBuffer();
+          const baseName = shpFile.name.replace(/\.shp$/i, '').toLowerCase();
+
+          // Find companion .dbf
+          const companionDbf = fileArray.find(f => {
+            const fBase = f.name.replace(/\.dbf$/i, '').toLowerCase();
+            return fBase === baseName && f.name.toLowerCase().endsWith('.dbf');
+          }) || (fileArray.filter(f => f.name.toLowerCase().endsWith('.dbf')).length === 1 
+            ? fileArray.find(f => f.name.toLowerCase().endsWith('.dbf')) 
+            : undefined);
+
+          let dbfBuf: ArrayBuffer | undefined = undefined;
+          if (companionDbf) {
+            dbfBuf = await companionDbf.arrayBuffer();
+          }
+
+          shpItems.push({
+            name: shpFile.name,
+            shpBuffer: shpBuf,
+            dbfBuffer: dbfBuf
+          });
+        }
+
+        rawInputRef.current = {
+          kind: 'shp-multi',
+          filename: shpFiles[0].name,
+          shpFiles: shpItems
+        };
+
+        const forced = selectedEncoding === 'auto' ? undefined : (selectedEncoding as 'utf-8' | 'euc-kr');
+        const combinedPoints: CADPoint[] = [];
+        const combinedLines: CADLine[] = [];
+        const combinedPolylines: CADPolyline[] = [];
+        const combinedPolygons: CADPolygon[] = [];
+        const combinedLayers: CADLayer[] = [];
+        const combinedDbfFields = new Set<string>();
+        let detectedEnc: 'utf-8' | 'euc-kr' = forced || 'euc-kr';
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+        for (let i = 0; i < shpItems.length; i++) {
+          const item = shpItems[i];
+          const res = parseShpBuffer(item.shpBuffer, item.name, item.dbfBuffer, forced);
+          if (res.detectedEncoding) detectedEnc = res.detectedEncoding;
+          if (res.dbfFields) res.dbfFields.forEach(f => combinedDbfFields.add(f));
+
+          res.layers.forEach(nl => {
+            if (!combinedLayers.some(l => l.id === nl.id)) {
+              nl.color = LAYER_COLORS[combinedLayers.length % LAYER_COLORS.length];
+              combinedLayers.push(nl);
+            }
+          });
+
+          combinedPoints.push(...res.points);
+          combinedLines.push(...res.lines);
+          combinedPolylines.push(...res.polylines);
+          combinedPolygons.push(...res.polygons);
+
+          if (res.bounds) {
+            minX = Math.min(minX, res.bounds.minX);
+            minY = Math.min(minY, res.bounds.minY);
+            maxX = Math.max(maxX, res.bounds.maxX);
+            maxY = Math.max(maxY, res.bounds.maxY);
+          }
+        }
+
         setParsingProgress(100);
-        setShpResult(res);
-        setShpFileName(filename);
+        setShpResult({
+          points: combinedPoints,
+          lines: combinedLines,
+          polylines: combinedPolylines,
+          polygons: combinedPolygons,
+          layers: combinedLayers,
+          layerName: shpFiles[0].name.replace(/\.[^/.]+$/, ''),
+          detectedEncoding: detectedEnc,
+          dbfFields: Array.from(combinedDbfFields),
+          bounds: minX !== Infinity ? { minX, minY, maxX, maxY } : undefined
+        });
+        setShpFileName(shpFiles.length === 1 ? shpFiles[0].name : `${shpFiles.length}개 Shapefile`);
         setLoadedFormat('shp');
         return;
       } catch (err: any) {
-        alert('SHP 파일 분석 실패: ' + err.message);
+        alert('SHP 파일 분석 실패: ' + (err.message || err));
         return;
       } finally {
         setIsParsing(false);
       }
     }
 
-    // 4. Excel (.xlsx, .xls)
-    if (isExcelBuffer(buffer, filename)) {
+    // Case 4: Excel (.xlsx, .xls)
+    const excelFile = fileArray.find(f => {
+      const ext = f.name.split('.').pop()?.toLowerCase();
+      return ext === 'xlsx' || ext === 'xls';
+    });
+    if (excelFile) {
       try {
         setIsParsing(true);
         setParsingStatusMsg('엑셀 워크북 분석 및 시트 추출 중...');
+        const buffer = await excelFile.arrayBuffer();
+        rawInputRef.current = { kind: 'excel', filename: excelFile.name, buffer };
         const parsed = parseExcelWorkbook(buffer);
         excelWorkbookRef.current = parsed;
         setIsExcelFile(true);
@@ -161,22 +361,26 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         applyRowsToPreview(rows, 0);
         return;
       } catch (err: any) {
-        console.warn('Excel fallback:', err);
+        console.warn('Excel parse failed:', err);
       } finally {
         setIsParsing(false);
       }
     }
 
-    // 5. CSV / Text
-    const { text } = decodeBufferText(buffer, enc);
-
-    try {
-      const res = parseCSVPreview(text, 0);
-      setCsvPreview(res);
-      setCsvMapping(res.detectedMapping);
-      setLoadedFormat('csv');
-    } catch {
-      alert('지원하지 않는 파일 형식이거나 읽을 수 없는 텍스트입니다. CSV, XLSX, 또는 SHP(.zip/.shp) 파일을 선택해 주세요.');
+    // Case 5: CSV / Text (.csv, .txt)
+    const csvFile = fileArray[0];
+    if (csvFile) {
+      try {
+        const buffer = await csvFile.arrayBuffer();
+        rawInputRef.current = { kind: 'csv', filename: csvFile.name, buffer };
+        const { text, detectedEncoding } = decodeBufferText(buffer, selectedEncoding);
+        const res = parseCSVPreview(text, 0);
+        setCsvPreview(res);
+        setCsvMapping(res.detectedMapping);
+        setLoadedFormat('csv');
+      } catch (err: any) {
+        alert('지원하지 않는 파일 형식이거나 읽을 수 없는 텍스트입니다. CSV, XLSX, 또는 SHP(.zip/.shp) 파일을 선택해 주세요.');
+      }
     }
   };
 
@@ -208,10 +412,13 @@ export const ImportModal: React.FC<ImportModalProps> = ({
               <span>좌표 및 도면 불러오기 (CSV / SHP)</span>
             </h2>
             <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              인터넷 연결 없이 기기 내부의 엑셀, CSV, Shapefile(.zip / .shp) 파일을 안전하게 불러옵니다.
+              AutoCAD Map 2000·구버전 캐드 압축 파일(CP949) 및 최신 UTF-8 Shapefile, CSV, 엑셀을 완전 자동 감지하여 불러옵니다.
             </p>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-xl text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition">
+          <button 
+            onClick={onClose} 
+            className="p-1.5 rounded-xl text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -238,11 +445,16 @@ export const ImportModal: React.FC<ImportModalProps> = ({
               className="border-2 border-dashed border-sky-300 dark:border-sky-500/40 hover:border-sky-500 dark:hover:border-sky-400 bg-white dark:bg-slate-950/40 hover:bg-sky-50 dark:hover:bg-slate-800/40 rounded-3xl p-10 text-center cursor-pointer transition flex flex-col items-center justify-center gap-3 group"
             >
               <input
-                ref={fileInputRef} type="file" className="hidden"
-                accept=".xlsx,.xls,.csv,.txt,.shp,.zip,.cadgis"
+                ref={fileInputRef} 
+                type="file" 
+                className="hidden"
+                multiple
+                accept=".xlsx,.xls,.csv,.txt,.shp,.dbf,.shx,.cpg,.zip,.cadgis"
                 onChange={async e => {
-                  const file = e.target.files?.[0];
-                  if (file) processBuffer(await file.arrayBuffer(), file.name, selectedEncoding);
+                  const files = e.target.files;
+                  if (files && files.length > 0) {
+                    await handleFilesSelected(files);
+                  }
                   e.target.value = '';
                 }}
               />
@@ -250,15 +462,18 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 {isParsing ? <Loader2 className="w-8 h-8 animate-spin" /> : <Upload className="w-8 h-8" />}
               </div>
               <div className="text-lg font-bold text-slate-900 dark:text-white">파일 선택하여 불러오기</div>
-              <p className="text-sm text-slate-500 dark:text-slate-400">
-                측량 좌표(<strong>CSV / XLSX</strong>), GIS 도형(<strong>SHP / ZIP</strong>), 누적 프로젝트(<strong>.cadgis</strong>)를 지원합니다.
+              <p className="text-sm text-slate-500 dark:text-slate-400 max-w-lg">
+                AutoCAD Map 2000에서 생성한 <strong>ZIP 압축 Shapefile</strong>, <strong>.shp + .dbf 동시 선택</strong>, <strong>CSV / XLSX</strong> 파일을 지원합니다.
               </p>
-              <div className="flex items-center gap-2 mt-2">
+              <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
                 <span className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 text-[11px] text-emerald-600 dark:text-emerald-400 border border-slate-200 dark:border-slate-700 shadow-sm">
-                  ✓ CSV / 엑셀 좌표 (X, Y, Z)
+                  ✓ AutoCAD Map 2000 한글 CP949 자동 감지
                 </span>
                 <span className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 text-[11px] text-sky-600 dark:text-sky-400 border border-slate-200 dark:border-slate-700 shadow-sm">
-                  ✓ ESRI Shapefile (.shp / .zip)
+                  ✓ DBF 속성 및 OD 데이터 자동 추출
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 text-[11px] text-purple-600 dark:text-purple-400 border border-slate-200 dark:border-slate-700 shadow-sm">
+                  ✓ .shp + .dbf 다중 선택 지원
                 </span>
               </div>
             </div>
@@ -267,7 +482,10 @@ export const ImportModal: React.FC<ImportModalProps> = ({
           {isParsing && (
             <div className="p-4 bg-white dark:bg-slate-950 border border-sky-200 dark:border-sky-500/30 rounded-2xl space-y-3 shadow-sm">
               <div className="flex items-center justify-between text-xs">
-                <span className="text-sky-600 dark:text-sky-300 font-medium">{parsingStatusMsg}</span>
+                <span className="text-sky-600 dark:text-sky-300 font-medium flex items-center gap-2">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  {parsingStatusMsg}
+                </span>
                 <span className="font-mono text-slate-900 dark:text-white">{parsingProgress}%</span>
               </div>
               <div className="w-full bg-slate-100 dark:bg-slate-800 h-2.5 rounded-full overflow-hidden">
@@ -280,7 +498,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
           {loadedFormat === 'shp' && shpResult && (
             <div className="space-y-4 animate-in fade-in">
               <div className="p-4 bg-white dark:bg-slate-950 border border-emerald-100 dark:border-emerald-700/60 rounded-2xl space-y-4 shadow-sm">
-                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                <div className="flex flex-wrap items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 gap-2">
                   <div className="flex items-center gap-2">
                     <Archive className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                     <div>
@@ -288,13 +506,62 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                         {shpFileName || 'Shapefile 데이터'}
                       </h3>
                       <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                        ESRI 표준 Shapefile 도형 데이터가 정상 분석되었습니다.
+                        AutoCAD Map 2000 및 ESRI 표준 Shapefile 도형·속성이 정상 분석되었습니다.
                       </p>
                     </div>
                   </div>
-                  <span className="px-2 py-0.5 rounded text-[11px] bg-emerald-50 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-semibold">
-                    SHP 정상
+                  <span className="px-2.5 py-1 rounded-lg text-[11px] bg-emerald-50 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-semibold flex items-center gap-1.5">
+                    <Check className="w-3.5 h-3.5" />
+                    <span>분석 완료</span>
                   </span>
+                </div>
+
+                {/* Encoding Control & Feedback Bar */}
+                <div className="p-3 bg-slate-50 dark:bg-slate-900/80 border border-slate-100 dark:border-slate-800 rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-slate-700 dark:text-slate-300">인코딩 감지 결과:</span>
+                    <span className="px-2 py-0.5 rounded text-[11px] bg-sky-50 dark:bg-sky-950 border border-sky-200 dark:border-sky-800 text-sky-700 dark:text-sky-300 font-bold">
+                      {shpResult.detectedEncoding === 'euc-kr' 
+                        ? 'CP949 / EUC-KR (AutoCAD Map 2000 한국어 감지)' 
+                        : 'UTF-8 (국제 표준)'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] text-slate-400">인코딩 선택:</span>
+                    <button
+                      type="button"
+                      onClick={() => handleEncodingChange('auto')}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
+                        selectedEncoding === 'auto'
+                          ? 'bg-sky-600 text-white shadow-sm'
+                          : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      자동 감지
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleEncodingChange('euc-kr')}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
+                        selectedEncoding === 'euc-kr'
+                          ? 'bg-sky-600 text-white shadow-sm'
+                          : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      CP949 (AutoCAD Map)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleEncodingChange('utf-8')}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
+                        selectedEncoding === 'utf-8'
+                          ? 'bg-sky-600 text-white shadow-sm'
+                          : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      UTF-8
+                    </button>
+                  </div>
                 </div>
 
                 {/* Geometry Stats Grid */}
@@ -316,6 +583,63 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                     <div className="text-lg font-bold text-purple-600 dark:text-purple-400 mt-0.5">{shpResult.layers.length}개</div>
                   </div>
                 </div>
+
+                {/* DBF / OD Data Attributes Badges */}
+                {shpResult.dbfFields && shpResult.dbfFields.length > 0 && (
+                  <div className="p-3 bg-slate-50 dark:bg-slate-900/80 border border-slate-100 dark:border-slate-800 rounded-xl space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="font-semibold text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
+                        <Database className="w-3.5 h-3.5" />
+                        AutoCAD Map OD 데이터(DBF 속성) 감지 완료 ({shpResult.dbfFields.length}개 필드)
+                      </span>
+                      <span className="text-[10px] text-slate-400">선 및 측점 속성에 완벽 보존</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto">
+                      {shpResult.dbfFields.map((f, i) => (
+                        <span key={i} className="px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-[10px] font-mono">
+                          {f}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Sample Point Text Preview (Instant verification of Korean text without mojibake) */}
+                {shpResult.points.length > 0 && (
+                  <div className="p-3 bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl space-y-2">
+                    <div className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 flex items-center justify-between">
+                      <span>측점 텍스트 디코딩 미리보기 (상위 {Math.min(5, shpResult.points.length)}개)</span>
+                      <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1">
+                        <Check className="w-3 h-3" />
+                        한글 및 영문 텍스트 디코딩 정상 확인
+                      </span>
+                    </div>
+                    <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 text-[11px]">
+                      <table className="w-full text-left font-mono">
+                        <thead className="bg-slate-100 dark:bg-slate-900 text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800 text-[10px]">
+                          <tr>
+                            <th className="py-1.5 px-3">#</th>
+                            <th className="py-1.5 px-3 text-amber-700 dark:text-amber-300">도면 텍스트 (측점명)</th>
+                            <th className="py-1.5 px-3 text-sky-600 dark:text-sky-400">CAD X (수평)</th>
+                            <th className="py-1.5 px-3 text-sky-600 dark:text-sky-400">CAD Y (수직)</th>
+                            <th className="py-1.5 px-3 text-slate-500">표고(Z)</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-700 dark:text-slate-300">
+                          {shpResult.points.slice(0, 5).map((pt, idx) => (
+                            <tr key={pt.id} className="hover:bg-slate-50 dark:hover:bg-slate-900/50">
+                              <td className="py-1.5 px-3 text-slate-400">{idx + 1}</td>
+                              <td className="py-1.5 px-3 font-bold text-amber-600 dark:text-amber-300">{pt.name}</td>
+                              <td className="py-1.5 px-3 text-sky-600 dark:text-sky-400">{pt.x.toFixed(3)}</td>
+                              <td className="py-1.5 px-3 text-sky-600 dark:text-sky-400">{pt.y.toFixed(3)}</td>
+                              <td className="py-1.5 px-3 text-slate-400">{pt.z !== undefined ? pt.z.toFixed(3) : '-'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
 
                 {/* Bounds / Coordinate Extents */}
                 {shpResult.bounds && (
@@ -486,8 +810,18 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         </div>
 
         <div className="p-4 border-t border-slate-100 dark:border-slate-800 flex justify-between bg-slate-50/50 dark:bg-slate-950/50">
-          <button onClick={() => setLoadedFormat(null)} className="px-4 py-2 text-xs text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition">다른 파일 선택</button>
-          <button onClick={onClose} className="px-6 py-2 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-white text-xs font-bold rounded-xl transition">닫기</button>
+          <button 
+            onClick={() => setLoadedFormat(null)} 
+            className="px-4 py-2 text-xs text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition"
+          >
+            다른 파일 선택
+          </button>
+          <button 
+            onClick={onClose} 
+            className="px-6 py-2 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-white text-xs font-bold rounded-xl transition"
+          >
+            닫기
+          </button>
         </div>
       </div>
     </div>

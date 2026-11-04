@@ -191,3 +191,59 @@ export function encodeText(
   // Final fallback to UTF-8 if everything else fails
   return new TextEncoder().encode(text);
 }
+
+/**
+ * Smart decoder for zip entry filenames or byte arrays from Korean Windows/CAD
+ */
+export function smartDecodeKoreanBytes(rawInput: Uint8Array | Buffer | number[] | string[] | any): string {
+  if (!rawInput) return '';
+  let bytes: Uint8Array;
+  if (rawInput instanceof Uint8Array) {
+    bytes = rawInput;
+  } else if (Array.isArray(rawInput)) {
+    bytes = new Uint8Array(rawInput.map(b => (typeof b === 'string' ? b.charCodeAt(0) & 0xff : Number(b) & 0xff)));
+  } else {
+    bytes = new Uint8Array(rawInput);
+  }
+
+  // If pure ASCII, fast return
+  let isAscii = true;
+  for (let i = 0; i < bytes.length; i++) {
+    if (bytes[i] > 0x7F) {
+      isAscii = false;
+      break;
+    }
+  }
+  if (isAscii) {
+    return String.fromCharCode(...bytes);
+  }
+
+  // 1. Try strict UTF-8
+  try {
+    const utf8 = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    if (/[\uAC00-\uD7AF\u1100-\u11FF]/.test(utf8)) {
+      return utf8;
+    }
+  } catch {}
+
+  // 2. Try CP949 / EUC-KR
+  try {
+    const cp949 = iconv.decode(Buffer.from(bytes), 'cp949');
+    if (/[\uAC00-\uD7AF\u1100-\u11FF]/.test(cp949)) {
+      return cp949;
+    }
+  } catch {}
+
+  // 3. Try fatal UTF-8 for other non-Korean scripts
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {}
+
+  // 4. Fallback to CP949 (most common in Korean CAD), then non-fatal UTF-8
+  try {
+    return iconv.decode(Buffer.from(bytes), 'cp949');
+  } catch {
+    return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+  }
+}
+
