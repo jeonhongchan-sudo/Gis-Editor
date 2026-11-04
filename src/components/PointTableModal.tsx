@@ -37,7 +37,7 @@ export const PointTableModal: React.FC<PointTableModalProps> = ({
   const handleExportCSV = () => {
     const lines = ['ID,측점명,X(캐드_동향),Y(캐드_북향),고도(Z),레이어'];
     points.forEach((p, i) => {
-      lines.push(`${i + 1},"${p.name}",${p.x.toFixed(4)},${p.y.toFixed(4)},${p.z !== undefined ? p.z.toFixed(4) : ''},"${p.layerId}"`);
+      lines.push(`${i + 1},"${p.name}",${p.x.toFixed(3)},${p.y.toFixed(3)},${p.z !== undefined ? p.z.toFixed(3) : ''},"${p.layerId}"`);
     });
     downloadTextFile(lines.join('\n'), 'survey_points_cad.csv', 'text/csv');
   };
@@ -129,7 +129,7 @@ export const PointTableModal: React.FC<PointTableModalProps> = ({
                     <td className="py-2 px-3 font-sans font-medium text-white">{pt.name}</td>
                     <td className="py-2 px-3 text-sky-400">{pt.x.toFixed(3)}</td>
                     <td className="py-2 px-3 text-sky-400">{pt.y.toFixed(3)}</td>
-                    <td className="py-2 px-3 text-slate-400">{pt.z !== undefined ? pt.z.toFixed(2) : '-'}</td>
+                    <td className="py-2 px-3 text-slate-400">{pt.z !== undefined ? pt.z.toFixed(3) : '-'}</td>
                     <td className="py-2 px-3 text-right">
                       <div className="flex items-center justify-end gap-1">
                         <button

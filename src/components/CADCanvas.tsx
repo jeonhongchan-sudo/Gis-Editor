@@ -802,7 +802,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     // 4. POINT TOOL
     if (tool === 'point') {
       onAddPoint({
-        id: `pt-${Date.now()}`,
+        id: `point-${Date.now()}`,
         name: `측점_${points.length + 1}`,
         x: snapRes.effectiveWorld.x,
         y: snapRes.effectiveWorld.y,
@@ -1067,7 +1067,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         ctx.fillStyle = isSelected ? '#fbbf24' : '#ffffff';
         ctx.font = '11px Pretendard, sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText(`${area.toFixed(1)}㎡ (${(area / 3.305785).toFixed(1)}평)`, screenC.x, screenC.y);
+        ctx.fillText(`${area.toFixed(3)}㎡ (${(area / 3.305785).toFixed(3)}평)`, screenC.x, screenC.y);
       }
     });
 
@@ -1485,7 +1485,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
           const midS = getScreen(midW);
 
           ctx.font = '10px JetBrains Mono, monospace';
-          const badgeText = `${seg.toFixed(2)}m`;
+          const badgeText = `${seg.toFixed(3)}m`;
           const tw = ctx.measureText(badgeText).width;
 
           ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
@@ -1510,7 +1510,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
           const curSp = getScreen(cursorWorld);
 
           ctx.font = '11px JetBrains Mono, monospace';
-          const label = `+${segDist.toFixed(2)}m (누적: ${totalDist.toFixed(2)}m)`;
+          const label = `+${segDist.toFixed(3)}m (누적: ${totalDist.toFixed(3)}m)`;
           const tw = ctx.measureText(label).width;
 
           ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
@@ -1568,7 +1568,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
           const curSp = getScreen(cursorWorld);
 
           ctx.font = '12px JetBrains Mono, monospace';
-          const label = `${segDist.toFixed(2)}m`;
+          const label = `${segDist.toFixed(3)}m`;
           const tw = ctx.measureText(label).width;
 
           ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
@@ -1726,14 +1726,14 @@ function drawCADGrid(
   for (let x = startX; x <= right; x += spacing * 2) {
     const sx = width / 2 + (x - view.panX) * view.zoom;
     if (sx > 40 && sx < width - 40) {
-      ctx.fillText(`${x.toFixed(0)}m`, sx + 4, height - 8);
+      ctx.fillText(`${x.toFixed(3)}m`, sx + 4, height - 8);
     }
   }
 
   for (let y = startY; y <= top; y += spacing * 2) {
     const sy = height / 2 - (y - view.panY) * view.zoom;
     if (sy > 40 && sy < height - 40) {
-      ctx.fillText(`${y.toFixed(0)}m`, 8, sy - 4);
+      ctx.fillText(`${y.toFixed(3)}m`, 8, sy - 4);
     }
   }
 }
@@ -1835,6 +1835,6 @@ function drawScaleBar(
   ctx.fillStyle = '#f8fafc';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
-  const label = barMeters >= 1000 ? `${(barMeters / 1000).toFixed(1)} km` : `${barMeters.toFixed(0)} m`;
+  const label = barMeters >= 1000 ? `${(barMeters / 1000).toFixed(3)} km` : `${barMeters.toFixed(3)} m`;
   ctx.fillText(label, startX + barPixels / 2, startY - 6);
 }

@@ -633,12 +633,12 @@ export default function App() {
               <span className="text-[10px] text-slate-400 font-medium">총 누적 거리 합계 (Total)</span>
               <div className="flex items-baseline gap-1 mt-0.5">
                 <span className="text-2xl font-bold font-mono text-cyan-400">
-                  {measureCumulative.toFixed(2)}
+                  {measureCumulative.toFixed(3)}
                 </span>
                 <span className="text-xs text-slate-400 font-sans">m</span>
                 {liveMeasurement.currentSegment > 0 && (
                   <span className="ml-auto text-[11px] font-mono text-cyan-300/80">
-                    (+{liveMeasurement.currentSegment.toFixed(2)}m)
+                    (+{liveMeasurement.currentSegment.toFixed(3)}m)
                   </span>
                 )}
               </div>
@@ -651,7 +651,7 @@ export default function App() {
                 {measureSegments.map((seg: { index: number; dist: number }) => (
                   <div key={seg.index} className="flex items-center justify-between py-1 px-2 rounded-lg bg-slate-800/50 text-[11px]">
                     <span className="text-slate-400">P{seg.index} → P{seg.index + 1}</span>
-                    <span className="font-mono text-slate-200 font-semibold">{seg.dist.toFixed(2)} m</span>
+                    <span className="font-mono text-slate-200 font-semibold">{seg.dist.toFixed(3)} m</span>
                   </div>
                 ))}
               </div>

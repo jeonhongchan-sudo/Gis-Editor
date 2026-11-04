@@ -376,7 +376,7 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
         ID: idx + 1,
         NAME: p.name.slice(0, 20),
         LAYER: p.layerId.replace(/^layer-/, '').slice(0, 15),
-        Z: p.z !== undefined ? p.z.toFixed(2) : 0
+        Z: p.z !== undefined ? p.z.toFixed(3) : 0
       }
     }));
 
@@ -386,7 +386,7 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
         { name: 'ID', type: 'N', length: 10, decimals: 0 },
         { name: 'NAME', type: 'C', length: 20, decimals: 0 },
         { name: 'LAYER', type: 'C', length: 15, decimals: 0 },
-        { name: 'Z', type: 'N', length: 10, decimals: 2 }
+        { name: 'Z', type: 'N', length: 10, decimals: 3 }
       ],
       ptFeatures.map(f => f.properties)
     );
@@ -406,7 +406,7 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       properties: {
         ID: idx + 1,
         LAYER: l.layerId.replace(/^layer-/, '').slice(0, 15),
-        LENGTH_M: len.toFixed(2),
+        LENGTH_M: len.toFixed(3),
         TYPE: 'LINE'
       }
     });
@@ -422,7 +422,7 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       properties: {
         ID: lines.length + idx + 1,
         LAYER: pl.layerId.replace(/^layer-/, '').slice(0, 15),
-        LENGTH_M: len.toFixed(2),
+        LENGTH_M: len.toFixed(3),
         TYPE: 'POLYLINE'
       }
     });
@@ -434,7 +434,7 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       [
         { name: 'ID', type: 'N', length: 10, decimals: 0 },
         { name: 'LAYER', type: 'C', length: 15, decimals: 0 },
-        { name: 'LENGTH_M', type: 'N', length: 12, decimals: 2 },
+        { name: 'LENGTH_M', type: 'N', length: 12, decimals: 3 },
         { name: 'TYPE', type: 'C', length: 10, decimals: 0 }
       ],
       lineFeatures.map(f => f.properties)
@@ -462,8 +462,8 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
         properties: {
           ID: idx + 1,
           LAYER: poly.layerId.replace(/^layer-/, '').slice(0, 15),
-          AREA_M2: area.toFixed(2),
-          AREA_PY: (area / 3.305785).toFixed(1)
+          AREA_M2: area.toFixed(3),
+          AREA_PY: (area / 3.305785).toFixed(3)
         }
       };
     });
@@ -473,8 +473,8 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       [
         { name: 'ID', type: 'N', length: 10, decimals: 0 },
         { name: 'LAYER', type: 'C', length: 15, decimals: 0 },
-        { name: 'AREA_M2', type: 'N', length: 14, decimals: 2 },
-        { name: 'AREA_PY', type: 'N', length: 12, decimals: 1 }
+        { name: 'AREA_M2', type: 'N', length: 14, decimals: 3 },
+        { name: 'AREA_PY', type: 'N', length: 12, decimals: 3 }
       ],
       polyFeatures.map(f => f.properties)
     );

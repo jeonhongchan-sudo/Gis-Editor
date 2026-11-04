@@ -74,7 +74,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const handleExportCSV = () => {
     const csvLines = ['번호,측점명,X(Easting),Y(Northing),고도(Z),레이어'];
     points.forEach((p, idx) => {
-      csvLines.push(`${idx + 1},"${p.name}",${p.x.toFixed(4)},${p.y.toFixed(4)},${p.z !== undefined ? p.z.toFixed(4) : ''},"${p.layerId}"`);
+      csvLines.push(`${idx + 1},"${p.name}",${p.x.toFixed(3)},${p.y.toFixed(3)},${p.z !== undefined ? p.z.toFixed(3) : ''},"${p.layerId}"`);
     });
     const filename = `survey_coordinates_${new Date().toISOString().slice(0, 10)}.csv`;
     downloadTextFile(csvLines.join('\n'), filename, 'text/csv');

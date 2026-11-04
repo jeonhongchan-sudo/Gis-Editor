@@ -213,16 +213,16 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
         {liveMeasurement && liveMeasurement.pointCount > 0 ? (
           <div className="flex items-center gap-2 sm:gap-3 text-sky-400 font-sans">
             <div>
-              구간: <strong className="font-mono text-slate-200">{liveMeasurement.currentSegment.toFixed(2)}m</strong>
+              구간: <strong className="font-mono text-slate-200">{liveMeasurement.currentSegment.toFixed(3)}m</strong>
             </div>
             <div>
-              총 연장: <strong className="font-mono text-white">{liveMeasurement.totalLength.toFixed(2)}m</strong>
+              총 연장: <strong className="font-mono text-white">{liveMeasurement.totalLength.toFixed(3)}m</strong>
             </div>
             {liveMeasurement.area !== undefined && liveMeasurement.area > 0 && (
               <div>
-                면적: <strong className="font-mono text-emerald-400">{liveMeasurement.area.toFixed(1)}㎡</strong>
+                면적: <strong className="font-mono text-emerald-400">{liveMeasurement.area.toFixed(3)}㎡</strong>
                 <span className="text-slate-400 ml-0.5">
-                  ({(liveMeasurement.area / 3.305785).toFixed(1)}평)
+                  ({(liveMeasurement.area / 3.305785).toFixed(3)}평)
                 </span>
               </div>
             )}
@@ -241,11 +241,11 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
             <>
               <div className="flex items-center gap-1">
                 <span className="text-slate-500">X:</span>
-                <span className="text-sky-300 font-semibold">{cursorWorld.x.toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}m</span>
+                <span className="text-sky-300 font-semibold">{cursorWorld.x.toLocaleString('ko-KR', { minimumFractionDigits: 3, maximumFractionDigits: 3 })}m</span>
               </div>
               <div className="flex items-center gap-1">
                 <span className="text-slate-500">Y:</span>
-                <span className="text-sky-300 font-semibold">{cursorWorld.y.toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}m</span>
+                <span className="text-sky-300 font-semibold">{cursorWorld.y.toLocaleString('ko-KR', { minimumFractionDigits: 3, maximumFractionDigits: 3 })}m</span>
               </div>
             </>
           ) : (

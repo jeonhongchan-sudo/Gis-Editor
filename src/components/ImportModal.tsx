@@ -66,7 +66,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   const [currentRawRows, setCurrentRawRows] = useState<(string | number)[][] | null>(null);
   const [headerRowIdx, setHeaderRowIdx] = useState<number>(0);
   const [csvMapping, setCsvMapping] = useState<CSVColumnMapping>({
-    xCol: 0, yCol: 1, nameCol: 2, zCol: -1, swapXY: false, includeElevation: false
+    xCol: 0, yCol: 1, nameCol: 2, zCol: -1, includeElevation: false
   });
 
   // SHP State
@@ -352,8 +352,8 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                       <span>도면 영역 (좌표 범위):</span>
                     </div>
                     <span className="font-mono text-slate-200">
-                      X: [{shpResult.bounds.minX.toFixed(1)} ~ {shpResult.bounds.maxX.toFixed(1)}] · 
-                      Y: [{shpResult.bounds.minY.toFixed(1)} ~ {shpResult.bounds.maxY.toFixed(1)}]
+                      X: [{shpResult.bounds.minX.toFixed(3)} ~ {shpResult.bounds.maxX.toFixed(3)}] · 
+                      Y: [{shpResult.bounds.minY.toFixed(3)} ~ {shpResult.bounds.maxY.toFixed(3)}]
                     </span>
                   </div>
                 )}

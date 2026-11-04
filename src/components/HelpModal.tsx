@@ -34,16 +34,13 @@ export const HelpModal: React.FC<HelpModalProps> = ({ onClose }) => {
           <div className="p-3.5 bg-slate-950/60 border border-slate-800 rounded-xl space-y-2">
             <div className="flex items-center gap-2 text-sky-400 font-semibold text-sm">
               <ArrowLeftRight className="w-4 h-4" />
-              <span>1. 측량 좌표와 캐드 좌표의 X / Y 반전 원리</span>
+              <span>1. 좌표계 기준 (X: 동향, Y: 북향)</span>
             </div>
             <p>
-              • 국내 지적 및 토목 현장 측량기기(토탈스테이션, GNSS)는 통상 <strong>X=북향(Northing, 약 50만~60만m)</strong>, <strong>Y=동향(Easting, 약 20만m)</strong>으로 표기합니다.
+              • 본 시스템은 오토캐드(AutoCAD) 및 GIS 표준 직교좌표계를 따릅니다. <strong>가로 방향이 X(동향, Easting)</strong>, <strong>세로 방향이 Y(북향, Northing)</strong>입니다.
             </p>
             <p>
-              • 하지만 오토캐드(AutoCAD) 및 일반 수학 직교좌표계는 <strong>가로가 X(동향)</strong>, <strong>세로가 Y(북향)</strong>입니다.
-            </p>
-            <p className="text-amber-400/90 font-medium">
-              👉 본 시스템은 CSV 업로드 시 좌표 크기를 자동 판별하여 캐드 표준(X=동향, Y=북향)으로 자동 반전해 드립니다. 상단 바의 [측량반전(X↔Y)] 버튼으로 언제든 즉시 반전할 수 있습니다.
+              • CSV 및 엑셀 파일을 불러올 때 각 열을 X와 Y에 맞게 지정하면 도면에 정확한 위치로 배치됩니다. 모든 수치와 좌표는 소수점 3자리까지 정밀하게 관리됩니다.
             </p>
           </div>
 

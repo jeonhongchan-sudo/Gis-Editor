@@ -11,7 +11,6 @@ export interface CSVColumnMapping {
   nameCol?: number;  // Column for item record / remark / description (항목)
   zCol?: number;     // Optional elevation Z
   idCol?: number;    // Deprecated / optional identifier
-  swapXY?: boolean;  // Swap incoming X & Y (default: false, CAD coordinates matched directly)
   includeElevation?: boolean; // Optional: whether to include Z or exclude for 2D drawings (default: false)
 }
 
@@ -183,7 +182,6 @@ export function analyzeTableRows(
     yCol: rawYCol >= 0 ? rawYCol : 1,
     zCol: zCol !== -1 ? zCol : undefined,
     nameCol: nameCol !== -1 ? nameCol : undefined,
-    swapXY: false,
     includeElevation: false
   };
 
@@ -231,10 +229,6 @@ export function buildCADPointsFromCSV(
     // Direct CAD coordinates (X = Horizontal, Y = Vertical)
     let cadX = rawValX;
     let cadY = rawValY;
-    if (mapping.swapXY) {
-      cadX = rawValY;
-      cadY = rawValX;
-    }
 
     // Elevation Z: Only included if includeElevation is true and zCol is specified
     let zVal: number | undefined = undefined;
