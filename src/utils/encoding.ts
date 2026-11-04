@@ -1,7 +1,4 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
+import iconv from 'iconv-lite';
 
 export type SupportedEncoding = 'auto' | 'euc-kr' | 'utf-8';
 
@@ -161,4 +158,36 @@ export function decodeBufferText(
       return { text: utf8Fallback.decode(buffer), detectedEncoding: 'utf-8' };
     }
   }
+}
+/**
+ * Encode string into Uint8Array using specified encoding
+ */
+export function encodeText(
+  text: string, 
+  encoding: 'utf-8' | 'euc-kr' | 'utf-8-bom'
+): Uint8Array {
+  if (encoding === 'utf-8-bom') {
+    const encoder = new TextEncoder();
+    const bytes = encoder.encode(text);
+    const bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
+    const result = new Uint8Array(bom.length + bytes.length);
+    result.set(bom);
+    result.set(bytes, bom.length);
+    return result;
+  }
+
+  if (encoding === 'utf-8') {
+    return new TextEncoder().encode(text);
+  }
+
+  if (encoding === 'euc-kr') {
+    try {
+      return iconv.encode(text, 'euc-kr');
+    } catch (err) {
+      console.warn('Encoding to euc-kr failed, falling back to utf-8', err);
+    }
+  }
+
+  // Final fallback to UTF-8 if everything else fails
+  return new TextEncoder().encode(text);
 }

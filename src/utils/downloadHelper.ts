@@ -1,13 +1,16 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
+import { encodeText } from './encoding';
 
 /**
- * Triggers a text file download in the browser
+ * Triggers a text file download in the browser with optional encoding
  */
-export function downloadTextFile(content: string, filename: string, mimeType: string = 'text/plain') {
-  const blob = new Blob([content], { type: mimeType });
+export function downloadTextFile(
+  content: string, 
+  filename: string, 
+  encoding: 'utf-8' | 'euc-kr' | 'utf-8-bom' = 'utf-8',
+  mimeType: string = 'text/plain'
+) {
+  const bytes = encodeText(content, encoding);
+  const blob = new Blob([bytes], { type: mimeType });
   downloadBlob(blob, filename);
 }
 

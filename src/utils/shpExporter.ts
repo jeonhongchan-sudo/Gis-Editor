@@ -23,12 +23,15 @@ interface ShpFeaturePolygon {
   properties: Record<string, string | number>;
 }
 
+import { encodeText } from './encoding';
+
 /**
  * Creates DBF file buffer from fields and records
  */
 function createDbfBuffer(
   fields: { name: string; type: 'C' | 'N'; length: number; decimals: number }[],
-  records: Record<string, string | number>[]
+  records: Record<string, string | number>[],
+  encoding: 'utf-8' | 'euc-kr' = 'euc-kr'
 ): ArrayBuffer {
   const numRecords = records.length;
   const headerLength = 32 + 32 * fields.length + 1;
@@ -53,6 +56,7 @@ function createDbfBuffer(
   let offset = 32;
   fields.forEach(f => {
     // Field name (up to 10 chars + null)
+    // Field names in DBF are strictly ASCII/ANSI, but we use charCodeAt
     for (let i = 0; i < 11; i++) {
       u8[offset + i] = i < f.name.length ? f.name.charCodeAt(i) : 0;
     }
@@ -67,24 +71,32 @@ function createDbfBuffer(
 
   // Records
   records.forEach(rec => {
-    u8[offset++] = 0x20; // ' ' not deleted
+    u8[offset++] = 0x20; // ' ' not deleted flag
     fields.forEach(f => {
       const val = rec[f.name] !== undefined ? String(rec[f.name]) : '';
-      let str = val;
+      
+      // Encode string based on target encoding
+      // We must be careful about field length (bytes, not chars)
+      const encoded = encodeText(val, encoding);
+      const clipped = encoded.subarray(0, f.length);
+      
       if (f.type === 'N') {
-        str = val.padStart(f.length, ' ').slice(0, f.length);
+        // Numbers: pad left with spaces
+        const str = val.padStart(f.length, ' ').slice(0, f.length);
+        for (let i = 0; i < f.length; i++) {
+          u8[offset + i] = str.charCodeAt(i);
+        }
       } else {
-        str = val.padEnd(f.length, ' ').slice(0, f.length);
-      }
-      for (let i = 0; i < f.length; i++) {
-        u8[offset + i] = i < str.length ? str.charCodeAt(i) : 0x20;
+        // Characters: pad right with spaces
+        u8.fill(0x20, offset, offset + f.length);
+        u8.set(clipped, offset);
       }
       offset += f.length;
     });
   });
 
   // EOF
-  u8[offset] = 0x1A;
+  if (offset < totalLength) u8[offset] = 0x1A;
 
   return buffer;
 }
@@ -356,16 +368,20 @@ export interface SHPExportBundleOptions {
   polylines: CADPolyline[];
   polygons: CADPolygon[];
   crs: string;
+  encoding?: 'utf-8' | 'euc-kr';
 }
 
 /**
  * Export CAD data as complete ESRI Shapefile ZIP bundle with .shp, .shx, .dbf, and .prj
  */
 export async function exportToShapefileZip(options: SHPExportBundleOptions): Promise<Blob> {
-  const { points, lines, polylines, polygons, crs } = options;
+  const { points, lines, polylines, polygons, crs, encoding = 'euc-kr' } = options;
   const zip = new JSZip();
 
   const prjContent = COORDINATE_SYSTEMS[crs]?.wktPrj || COORDINATE_SYSTEMS['EPSG:5186'].wktPrj;
+  
+  // .cpg content
+  const cpgContent = encoding === 'utf-8' ? 'UTF-8' : '949';
 
   // 1. Export Points layer if points exist
   if (points.length > 0) {
@@ -388,13 +404,15 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
         { name: 'LAYER', type: 'C', length: 15, decimals: 0 },
         { name: 'Z', type: 'N', length: 10, decimals: 3 }
       ],
-      ptFeatures.map(f => f.properties)
+      ptFeatures.map(f => f.properties),
+      encoding
     );
 
     zip.file('cad_points.shp', shp);
     zip.file('cad_points.shx', shx);
     zip.file('cad_points.dbf', dbf);
     zip.file('cad_points.prj', prjContent);
+    zip.file('cad_points.cpg', cpgContent);
   }
 
   // Combine single lines and polylines into polyline features
@@ -437,13 +455,15 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
         { name: 'LENGTH_M', type: 'N', length: 12, decimals: 3 },
         { name: 'TYPE', type: 'C', length: 10, decimals: 0 }
       ],
-      lineFeatures.map(f => f.properties)
+      lineFeatures.map(f => f.properties),
+      encoding
     );
 
     zip.file('cad_lines.shp', shp);
     zip.file('cad_lines.shx', shx);
     zip.file('cad_lines.dbf', dbf);
     zip.file('cad_lines.prj', prjContent);
+    zip.file('cad_lines.cpg', cpgContent);
   }
 
   // 3. Export Polygons if any
@@ -476,13 +496,15 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
         { name: 'AREA_M2', type: 'N', length: 14, decimals: 3 },
         { name: 'AREA_PY', type: 'N', length: 12, decimals: 3 }
       ],
-      polyFeatures.map(f => f.properties)
+      polyFeatures.map(f => f.properties),
+      encoding
     );
 
     zip.file('cad_polygons.shp', shp);
     zip.file('cad_polygons.shx', shx);
     zip.file('cad_polygons.dbf', dbf);
     zip.file('cad_polygons.prj', prjContent);
+    zip.file('cad_polygons.cpg', cpgContent);
   }
 
   // Generate and return zip blob

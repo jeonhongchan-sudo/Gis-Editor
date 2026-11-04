@@ -42,6 +42,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [isExportingShp, setIsExportingShp] = useState(false);
   const [exportSuccessMsg, setExportSuccessMsg] = useState<string | null>(null);
 
+  // Encoding states
+  const [shpEncoding, setShpEncoding] = useState<'utf-8' | 'euc-kr'>('euc-kr');
+  const [csvEncoding, setCsvEncoding] = useState<'utf-8' | 'euc-kr' | 'utf-8-bom'>('euc-kr');
+
   const totalLinesCount = lines.length + polylines.length;
 
   const showSuccess = (msg: string) => {
@@ -58,7 +62,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         lines,
         polylines,
         polygons,
-        crs: selectedCrs
+        crs: selectedCrs,
+        encoding: shpEncoding
       });
       const filename = `gis_shapefiles_${new Date().toISOString().slice(0, 10)}.zip`;
       downloadBlob(blob, filename);
@@ -77,7 +82,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       csvLines.push(`${idx + 1},"${p.name}",${p.x.toFixed(3)},${p.y.toFixed(3)},${p.z !== undefined ? p.z.toFixed(3) : ''},"${p.layerId}"`);
     });
     const filename = `survey_coordinates_${new Date().toISOString().slice(0, 10)}.csv`;
-    downloadTextFile(csvLines.join('\n'), filename, 'text/csv');
+    downloadTextFile(csvLines.join('\n'), filename, csvEncoding, 'text/csv');
     showSuccess(`${filename} 측점 CSV가 저장되었습니다.`);
   };
 
@@ -95,7 +100,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     };
     const jsonStr = JSON.stringify(project, null, 2);
     const filename = `cad_project_${new Date().toISOString().slice(0, 10)}.cadgis`;
-    downloadTextFile(jsonStr, filename, 'application/json');
+    downloadTextFile(jsonStr, filename, 'utf-8', 'application/json');
     showSuccess(`프로젝트 누적 백업 파일(${filename})이 저장되었습니다.`);
   };
 
@@ -182,6 +187,21 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               </select>
             </div>
 
+            {/* Encoding Selector for DBF */}
+            <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800 text-xs mt-1">
+              <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
+                <span className="text-slate-500 dark:text-slate-400">속성 인코딩 (DBF):</span>
+              </div>
+              <select
+                value={shpEncoding}
+                onChange={e => setShpEncoding(e.target.value as any)}
+                className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sky-700 dark:text-sky-300 text-xs rounded-lg px-2.5 py-1 focus:outline-none shadow-sm"
+              >
+                <option value="euc-kr">EUC-KR / CP949 (한국 캐드 표준)</option>
+                <option value="utf-8">UTF-8 (유니코드 / 최신 QGIS)</option>
+              </select>
+            </div>
+
             <button
               onClick={handleExportSHP}
               disabled={isExportingShp || (points.length === 0 && totalLinesCount === 0 && polygons.length === 0)}
@@ -193,28 +213,41 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           </div>
 
           {/* Option 2: CSV Coordinates */}
-          <div className="p-4 bg-slate-50/50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 hover:border-sky-500/50 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 transition shadow-sm">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <FileSpreadsheet className="w-5 h-5 text-sky-600 dark:text-sky-400" />
-                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">측점 좌표 목록 CSV</h3>
-                <span className="text-[10px] bg-sky-50 dark:bg-sky-950 text-sky-700 dark:text-sky-400 border border-sky-100 dark:border-sky-800 px-1.5 py-0.5 rounded uppercase font-bold">
-                  좌표 원본
-                </span>
+          <div className="p-4 bg-slate-50/50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 hover:border-sky-500/50 rounded-2xl flex flex-col gap-3 transition shadow-sm">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <FileSpreadsheet className="w-5 h-5 text-sky-600 dark:text-sky-400" />
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">측점 좌표 목록 CSV</h3>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  엑셀이나 측량 전용기에서 열어볼 수 있는 표준 CSV 형식 좌표 파일입니다.
+                </p>
               </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                엑셀이나 측량 전용기에서 열어볼 수 있는 표준 CSV 형식 좌표 파일입니다.
-              </p>
-            </div>
 
-            <button
-              onClick={handleExportCSV}
-              disabled={points.length === 0}
-              className="w-full sm:w-auto px-4 py-2.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-md shadow-sky-600/30 flex items-center justify-center gap-1.5 shrink-0 transition"
-            >
-              <Download className="w-4 h-4" />
-              CSV 다운로드
-            </button>
+              <div className="flex flex-col items-end gap-2 w-full sm:w-auto">
+                <div className="flex items-center gap-1.5 text-[11px] text-slate-500 bg-white dark:bg-slate-900 px-2 py-1 rounded-lg border border-slate-100 dark:border-slate-800">
+                  <span>인코딩:</span>
+                  <select
+                    value={csvEncoding}
+                    onChange={e => setCsvEncoding(e.target.value as any)}
+                    className="bg-transparent text-sky-700 dark:text-sky-400 outline-none font-medium"
+                  >
+                    <option value="euc-kr">EUC-KR (CP949)</option>
+                    <option value="utf-8">UTF-8</option>
+                    <option value="utf-8-bom">UTF-8 with BOM (엑셀용)</option>
+                  </select>
+                </div>
+                <button
+                  onClick={handleExportCSV}
+                  disabled={points.length === 0}
+                  className="w-full sm:w-auto px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-md shadow-sky-600/30 flex items-center justify-center gap-1.5 shrink-0 transition"
+                >
+                  <Download className="w-4 h-4" />
+                  CSV 다운로드
+                </button>
+              </div>
+            </div>
           </div>
 
           {/* Option 3: Project Save (.cadgis) */}
