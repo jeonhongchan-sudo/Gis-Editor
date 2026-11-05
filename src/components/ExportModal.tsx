@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText, ProjectState } from '../types/cad';
 import { downloadBlob, downloadTextFile, exportToShapefileZip } from '../utils/shpExporter';
+import { exportToGeoJson } from '../utils/geoJsonExporter';
 import { COORDINATE_SYSTEMS } from '../utils/projections';
 
 interface ExportModalProps {
@@ -54,12 +55,35 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [shpFileName, setShpFileName] = useState<string>(() => `gis_shapefiles_${new Date().toISOString().slice(0, 10)}`);
   const [csvFileName, setCsvFileName] = useState<string>(() => `survey_coordinates_${new Date().toISOString().slice(0, 10)}`);
   const [projectFileName, setProjectFileName] = useState<string>(() => `cad_project_${new Date().toISOString().slice(0, 10)}`);
+  const [geoJsonFileName, setGeoJsonFileName] = useState<string>(() => `cad_backup_${new Date().toISOString().slice(0, 10)}`);
 
   const totalLinesCount = lines.length + polylines.length;
 
   const showSuccess = (msg: string) => {
     setExportSuccessMsg(msg);
     setTimeout(() => setExportSuccessMsg(null), 3000);
+  };
+
+  // 0. Export GeoJSON (Recommended for Backup & Multi-device)
+  const handleExportGeoJson = async () => {
+    try {
+      const geojson = exportToGeoJson({
+        points,
+        lines,
+        polylines,
+        polygons,
+        texts,
+        layers,
+        crs: selectedCrs
+      });
+      const jsonStr = JSON.stringify(geojson, null, 2);
+      const cleanName = (geoJsonFileName.trim() || `cad_backup_${todayStr}`).replace(/\.geojson$/i, '');
+      const filename = `${cleanName}.geojson`;
+      await downloadTextFile(jsonStr, filename, 'utf-8', 'application/geo+json');
+      showSuccess(`기기 통합 백업 파일(${filename})이 저장되었습니다.`);
+    } catch (err: any) {
+      alert('GeoJSON 생성 중 오류가 발생했습니다: ' + err.message);
+    }
   };
 
   // 1. Export Shapefile ZIP
@@ -97,7 +121,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     showSuccess(`${filename} 측점 CSV가 저장되었습니다.`);
   };
 
-  // 3. Export Project JSON / CADGIS
+  // 3. Export Project JSON / CADGIS (Legacy)
   const handleExportProject = async () => {
     const cleanName = (projectFileName.trim() || `cad_project_${todayStr}`).replace(/\.cadgis$/i, '');
     const project: ProjectState = {
@@ -113,7 +137,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     const jsonStr = JSON.stringify(project, null, 2);
     const filename = `${cleanName}.cadgis`;
     await downloadTextFile(jsonStr, filename, 'utf-8', 'application/json');
-    showSuccess(`프로젝트 누적 백업 파일(${filename})이 저장되었습니다.`);
+    showSuccess(`기존 프로젝트 백업(${filename})이 저장되었습니다.`);
   };
 
   return (
@@ -124,10 +148,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-white flex items-center gap-2">
               <Download className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-              <span>성과물 내보내기 (SHP / CSV)</span>
+              <span>성과물 및 백업 내보내기</span>
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              GIS 표준 Shapefile(.zip) 또는 좌표 CSV 파일로 데이터를 즉시 내보냅니다.
+              기기 간 협업을 위한 <strong>GeoJSON 백업</strong> 또는 GIS 표준 <strong>Shapefile</strong>을 생성합니다.
             </p>
           </div>
           <button
@@ -155,7 +179,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   const sanitized = val.trim();
                   setShpFileName(`${sanitized || 'gis_shapefiles'}_shp`);
                   setCsvFileName(`${sanitized || 'survey_coordinates'}_pts`);
-                  setProjectFileName(`${sanitized || 'cad_project'}`);
+                  setProjectFileName(`${sanitized || 'cad_project'}_legacy`);
+                  setGeoJsonFileName(`${sanitized || 'cad_backup'}`);
                 }}
                 placeholder="예: 261104_현장측량성과"
                 className="bg-transparent text-slate-900 dark:text-white font-medium outline-none w-full text-xs"
@@ -180,6 +205,46 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
         {/* Export Options Grid */}
         <div className="p-4 space-y-3.5 overflow-y-auto max-h-[60vh] custom-scrollbar">
+          
+          {/* Option 0: GeoJSON Project Backup (NEW & RECOMMENDED) */}
+          <div className="p-4 bg-sky-50/30 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-500/40 hover:border-sky-500 rounded-2xl flex flex-col gap-3 transition shadow-sm ring-1 ring-sky-500/10">
+            <div className="flex items-start justify-between gap-2">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Globe2 className="w-5 h-5 text-sky-600 dark:text-sky-400" />
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">기기 통합 GeoJSON 백업 (.GEOJSON)</h3>
+                  <span className="text-[10px] bg-sky-500 text-white px-2 py-0.5 rounded-full font-bold uppercase animate-pulse">
+                    권장 (기기 간 이동용)
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                  Dropbox, Google Drive 등 <strong>개인 클라우드</strong>에 저장하기 가장 좋은 형식입니다.
+                  레이어 정보, 측점명, 속성 데이터가 모두 포함되어 <strong>스마트폰, 태블릿, PC</strong> 어디서든 이어서 작업할 수 있습니다.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800 text-xs">
+              <span className="text-slate-500 dark:text-slate-400 font-medium shrink-0">백업 파일명:</span>
+              <input
+                type="text"
+                value={geoJsonFileName}
+                onChange={e => setGeoJsonFileName(e.target.value)}
+                placeholder="GeoJSON 파일명 입력"
+                className="bg-transparent text-sky-700 dark:text-sky-400 font-semibold outline-none flex-1 min-w-0"
+              />
+              <span className="text-[11px] font-mono text-slate-400 dark:text-slate-500 shrink-0">.geojson</span>
+            </div>
+
+            <button
+              onClick={handleExportGeoJson}
+              className="w-full py-2.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold rounded-xl shadow-md shadow-sky-600/30 flex items-center justify-center gap-1.5 transition active:scale-98"
+            >
+              <Download className="w-4 h-4" />
+              클라우드 공유용 GeoJSON 다운로드
+            </button>
+          </div>
+
           {/* Option 1: ESRI Shapefile ZIP (SHP) */}
           <div className="p-4 bg-slate-50/50 dark:bg-slate-950/80 border border-slate-200 dark:border-emerald-500/40 hover:border-emerald-500 rounded-2xl flex flex-col gap-3 transition shadow-sm">
             <div className="flex items-start justify-between gap-2">
@@ -188,17 +253,15 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   <Archive className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                   <h3 className="text-sm font-semibold text-slate-900 dark:text-white">ESRI Shapefile 압축 번들 (.ZIP)</h3>
                   <span className="text-[10px] bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 px-2 py-0.5 rounded-full font-bold uppercase">
-                    GIS 표준 권장
+                    GIS 표준 (PC 캐드용)
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                  QGIS, ArcGIS 및 <strong>AutoCAD Map 3D(MAPIMPORT)</strong>에서 <strong>객체 데이터(OD Table)</strong>로 즉시 연동되는 <strong>.shp, .shx, .dbf, .prj</strong> 파일 패키지입니다.
-                  선/폴리라인에 기록된 시설구분, 규격, 매설심도, 상태 등의 현장 OD 속성이 DBF 테이블로 완전 보존됩니다.
+                  QGIS, ArcGIS 및 <strong>AutoCAD Map 3D</strong> 전용 형식입니다.
                 </p>
               </div>
             </div>
 
-            {/* Direct Filename Input */}
             <div className="flex items-center gap-1.5 p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800 text-xs">
               <span className="text-slate-500 dark:text-slate-400 font-medium shrink-0">압축 파일명:</span>
               <input
@@ -211,7 +274,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               <span className="text-[11px] font-mono text-slate-400 dark:text-slate-500 shrink-0">.zip</span>
             </div>
 
-            {/* Coordinate System Selector for .PRJ */}
             <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800 text-xs">
               <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
                 <Globe2 className="w-4 h-4 text-sky-600 dark:text-sky-400" />
@@ -227,21 +289,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                     {def.name} ({code})
                   </option>
                 ))}
-              </select>
-            </div>
-
-            {/* Encoding Selector for DBF */}
-            <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800 text-xs mt-1">
-              <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
-                <span className="text-slate-500 dark:text-slate-400">속성 인코딩 (DBF):</span>
-              </div>
-              <select
-                value={shpEncoding}
-                onChange={e => setShpEncoding(e.target.value as any)}
-                className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sky-700 dark:text-sky-300 text-xs rounded-lg px-2.5 py-1 focus:outline-none shadow-sm"
-              >
-                <option value="euc-kr">EUC-KR / CP949 (한국 캐드 표준)</option>
-                <option value="utf-8">UTF-8 (유니코드 / 최신 QGIS)</option>
               </select>
             </div>
 
@@ -263,11 +310,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 <h3 className="text-sm font-semibold text-slate-900 dark:text-white">측점 좌표 목록 CSV</h3>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                엑셀이나 측량 전용기에서 열어볼 수 있는 표준 CSV 형식 좌표 파일입니다.
+                엑셀이나 측량 전용기용 표준 CSV 형식입니다.
               </p>
             </div>
 
-            {/* Direct Filename Input & Encoding */}
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
               <div className="flex-1 flex items-center gap-1.5 p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800 text-xs">
                 <span className="text-slate-500 dark:text-slate-400 font-medium shrink-0">CSV 파일명:</span>
@@ -305,37 +351,23 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             </button>
           </div>
 
-          {/* Option 3: Project Save (.cadgis) */}
-          <div className="p-4 bg-slate-50/50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 hover:border-purple-500/50 rounded-2xl flex flex-col gap-3 transition shadow-sm">
+          {/* Option 3: Legacy Project Save (.cadgis) */}
+          <div className="p-4 bg-slate-50/50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-2xl flex flex-col gap-3 transition shadow-sm opacity-60">
             <div className="space-y-1">
               <div className="flex items-center gap-2">
-                <Save className="w-5 h-5 text-purple-600 dark:text-purple-400" />
-                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">작업 누적 보관 파일 (.cadgis)</h3>
+                <Save className="w-5 h-5 text-slate-600 dark:text-slate-400" />
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">기존 프로젝트 백업 (.CADGIS)</h3>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                작업했던 레이어, 측점, 선, 폴리곤 및 텍스트를 누적 저장하여 다음에 이어서 작업할 때 사용합니다.
+                (이전 방식) 내부 JSON 형식의 백업 파일입니다.
               </p>
-            </div>
-
-            {/* Direct Filename Input */}
-            <div className="flex items-center gap-1.5 p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800 text-xs">
-              <span className="text-slate-500 dark:text-slate-400 font-medium shrink-0">백업 파일명:</span>
-              <input
-                type="text"
-                value={projectFileName}
-                onChange={e => setProjectFileName(e.target.value)}
-                placeholder="프로젝트 파일명 입력"
-                className="bg-transparent text-purple-700 dark:text-purple-400 font-semibold outline-none flex-1 min-w-0"
-              />
-              <span className="text-[11px] font-mono text-slate-400 dark:text-slate-500 shrink-0">.cadgis</span>
             </div>
 
             <button
               onClick={handleExportProject}
-              className="w-full py-2.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-xl shadow-md shadow-purple-600/30 flex items-center justify-center gap-1.5 transition active:scale-98"
+              className="w-full py-2 bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[11px] font-semibold rounded-xl transition"
             >
-              <Download className="w-4 h-4" />
-              프로젝트 파일 백업 (.cadgis)
+              백업 생성
             </button>
           </div>
         </div>
