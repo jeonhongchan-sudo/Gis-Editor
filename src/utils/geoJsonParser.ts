@@ -26,14 +26,19 @@ export function parseGeoJson(
   const layerMap = new Map<string, CADLayer>();
 
   // 0. Pre-load layers from metadata if this is one of our backups
-  const metaLayers = json.metadata?.layers || json.layers;
-  if (Array.isArray(metaLayers)) {
+  // We identify our backups via the metadata.generator field
+  const isOurBackup = json.metadata?.generator === 'Web GIS/CAD App';
+  const metaLayers = json.metadata?.layers;
+  
+  if (isOurBackup && Array.isArray(metaLayers)) {
     metaLayers.forEach((l: any) => {
-      layerMap.set(l.name, {
-        ...l,
-        visible: l.visible ?? true,
-        locked: l.locked ?? false
-      });
+      if (l && typeof l === 'object' && l.id && l.name) {
+        layerMap.set(l.name, {
+          ...l,
+          visible: l.visible ?? true,
+          locked: l.locked ?? false
+        });
+      }
     });
   }
 
@@ -44,8 +49,9 @@ export function parseGeoJson(
     const geom = feature.geometry;
     if (!geom) return;
 
-    // Determine layer name
+    // Determine layer name (fallback to default)
     const layerName = props.layer || props.Layer || props.CADLayer || props.layername || '기본 레이어';
+    
     if (!layerMap.has(layerName)) {
       layerMap.set(layerName, {
         id: props.layerId || `layer-${layerName.replace(/[\s\.]/g, '_')}`,
@@ -61,7 +67,7 @@ export function parseGeoJson(
     // Coordinate transformation helper
     const getPoint = (coords: number[]): Point2D => {
       const [lng, lat] = coords;
-      // If source and target are same (or LOCAL), transformCoords returns as is
+      // transformCoords correctly handles cases where source/target are LOCAL or identical
       const transformed = transformCoords(lng, lat, sourceCrs, targetCrs);
       return {
         x: transformed.x,
@@ -70,39 +76,58 @@ export function parseGeoJson(
       };
     };
 
-    // Point or MultiPoint
+    // 1. Point Geometries
     if (geom.type === 'Point') {
       const pt = getPoint(geom.coordinates);
       
-      // Check if it's actually a Text entity (our backup format or DXF conversion)
-      if (props.dxftype === 'TEXT' || props.entity === 'TEXT') {
-        texts.push({
+      // Recognition logic: distinguish between a Text label and a Survey Point
+      const dxftype = (props.dxftype || props.entity || '').toUpperCase();
+      
+      if (dxftype === 'TEXT') {
+        // Create Text Entity
+        const textEntity: CADText = {
           id: props.id || `gj-txt-${Date.now()}-${idx}`,
           x: pt.x,
           y: pt.y,
           text: props.text || props.TEXTSTRING || '',
-          height: props.height || props.TEXT_SIZE || 2.0,
-          rotation: props.rotation || props.TEXT_ANGLE || 0,
+          height: Number(props.height || props.TEXT_SIZE || 2.0),
+          rotation: Number(props.rotation || props.TEXT_ANGLE || 0),
           layerId: layer.id,
           color: props.color
-        });
+        };
+        texts.push(textEntity);
+
+        // ALSO create a CADPoint if it looks like a survey station (requested by user)
+        if (props.TEXTSTRING || props.text) {
+          points.push({
+            id: props.id ? `pt-${props.id}` : `gj-pt-txt-${Date.now()}-${idx}`,
+            name: String(props.TEXTSTRING || props.text),
+            x: pt.x,
+            y: pt.y,
+            z: pt.z,
+            layerId: layer.id,
+            isSurveyNode: true
+          });
+        }
       } else {
         const name = props.TEXTSTRING || props.text || props.label || props.name || props.PT_NAME || `PT_${idx + 1}`;
         points.push({
           id: props.id || `gj-pt-${Date.now()}-${idx}`,
-          name,
+          name: String(name),
           x: pt.x,
           y: pt.y,
           z: pt.z,
           layerId: layer.id,
-          isSurveyNode: props.isSurveyNode ?? true
+          isSurveyNode: props.isSurveyNode !== undefined ? !!props.isSurveyNode : true
         });
       }
-    } else if (geom.type === 'MultiPoint') {
+    } 
+    // 2. MultiPoint
+    else if (geom.type === 'MultiPoint') {
       geom.coordinates.forEach((c: number[], subIdx: number) => {
         const pt = getPoint(c);
         points.push({
-          id: `gj-mpt-${Date.now()}-${idx}-${subIdx}`,
+          id: props.id ? `${props.id}_${subIdx}` : `gj-mpt-${Date.now()}-${idx}-${subIdx}`,
           name: props.name || `MPT_${idx + 1}_${subIdx + 1}`,
           x: pt.x,
           y: pt.y,
@@ -112,7 +137,7 @@ export function parseGeoJson(
         });
       });
     }
-    // LineString or MultiLineString
+    // 3. Line Geometries
     else if (geom.type === 'LineString') {
       const pts = geom.coordinates.map((c: number[]) => getPoint(c));
       polylines.push({
@@ -120,14 +145,14 @@ export function parseGeoJson(
         name: props.name || `LINE_${idx + 1}`,
         points: pts,
         layerId: layer.id,
-        isClosed: props.isClosed,
+        isClosed: !!props.isClosed,
         attributes: props
       });
     } else if (geom.type === 'MultiLineString') {
       geom.coordinates.forEach((line: number[][], subIdx: number) => {
         const pts = line.map((c: number[]) => getPoint(c));
         polylines.push({
-          id: `gj-mpl-${Date.now()}-${idx}-${subIdx}`,
+          id: props.id ? `${props.id}_${subIdx}` : `gj-mpl-${Date.now()}-${idx}-${subIdx}`,
           name: props.name || `MLINE_${idx + 1}_${subIdx + 1}`,
           points: pts,
           layerId: layer.id,
@@ -135,32 +160,46 @@ export function parseGeoJson(
         });
       });
     }
-    // Polygon or MultiPolygon
+    // 4. Polygon Geometries
     else if (geom.type === 'Polygon') {
       const outerRing = geom.coordinates[0];
-      const pts = outerRing.map((c: number[]) => getPoint(c));
-      polygons.push({
-        id: props.id || `gj-pg-${Date.now()}-${idx}`,
-        name: props.name || `POLY_${idx + 1}`,
-        points: pts.slice(0, -1), // GeoJSON Polygons are closed (first=last), our CAD polygons are point lists
-        layerId: layer.id,
-        fillOpacity: 0.15
-      });
-    } else if (geom.type === 'MultiPolygon') {
-      geom.coordinates.forEach((poly: number[][][], subIdx: number) => {
-        const pts = poly[0].map((c: number[]) => getPoint(c));
+      if (Array.isArray(outerRing) && outerRing.length >= 3) {
+        const pts = outerRing.map((c: number[]) => getPoint(c));
+        // Remove trailing duplicate if it exists (CAD polygons are point lists)
+        const first = pts[0];
+        const last = pts[pts.length - 1];
+        const displayPts = (first.x === last.x && first.y === last.y && pts.length > 2) ? pts.slice(0, -1) : pts;
+        
         polygons.push({
-          id: `gj-mpg-${Date.now()}-${idx}-${subIdx}`,
-          name: props.name || `MPOLY_${idx + 1}_${subIdx + 1}`,
-          points: pts.slice(0, -1),
+          id: props.id || `gj-pg-${Date.now()}-${idx}`,
+          name: props.name || `POLY_${idx + 1}`,
+          points: displayPts,
           layerId: layer.id,
           fillOpacity: 0.15
         });
+      }
+    } else if (geom.type === 'MultiPolygon') {
+      geom.coordinates.forEach((poly: number[][][], subIdx: number) => {
+        const outerRing = poly[0];
+        if (Array.isArray(outerRing) && outerRing.length >= 3) {
+          const pts = outerRing.map((c: number[]) => getPoint(c));
+          const first = pts[0];
+          const last = pts[pts.length - 1];
+          const displayPts = (first.x === last.x && first.y === last.y && pts.length > 2) ? pts.slice(0, -1) : pts;
+          
+          polygons.push({
+            id: props.id ? `${props.id}_${subIdx}` : `gj-mpg-${Date.now()}-${idx}-${subIdx}`,
+            name: props.name || `MPOLY_${idx + 1}_${subIdx + 1}`,
+            points: displayPts,
+            layerId: layer.id,
+            fillOpacity: 0.15
+          });
+        }
       });
     }
   });
 
-  // Calculate bounds
+  // Calculate bounds for auto-zoom
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   [...points, ...polylines.flatMap(p => p.points), ...polygons.flatMap(p => p.points), ...texts].forEach(p => {
     minX = Math.min(minX, p.x);
@@ -176,7 +215,7 @@ export function parseGeoJson(
     polygons,
     texts,
     layers: Array.from(layerMap.values()),
-    layerName: json.name || json.metadata?.name || 'GeoJSON 데이터',
+    layerName: json.metadata?.name || json.name || 'GeoJSON 데이터',
     bounds: minX !== Infinity ? { minX, minY, maxX, maxY } : undefined
   };
 }

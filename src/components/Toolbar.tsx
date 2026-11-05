@@ -68,7 +68,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         {/* Pointer / Select */}
         <button
           onClick={() => setTool('select')}
-          title="객체 다중 선택 (마우스 드래그로 영역 상자 선택 / Shift+클릭)"
+          title="객체 선택 (Shift+클릭)"
           className={`p-2.5 rounded-xl transition flex items-center justify-center ${
             tool === 'select'
               ? 'bg-sky-500 text-white shadow-lg shadow-sky-500/30'
@@ -81,7 +81,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         {/* Pan */}
         <button
           onClick={() => setTool('pan')}
-          title="화면 이동 (Shift+드래그 시 바로 영역 선택)"
+          title="화면 이동"
           className={`p-2.5 rounded-xl transition flex items-center justify-center ${
             tool === 'pan'
               ? 'bg-sky-500 text-white shadow-lg shadow-sky-500/30'
@@ -94,7 +94,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         {/* Multi-Select Mode Toggle (터치/클릭마다 누적 선택) */}
         <button
           onClick={() => setMultiSelectMode?.(prev => !prev)}
-          title={multiSelectMode ? "다중 선택 모드 켜짐 (터치/클릭할 때마다 추가) - 클릭하여 끄기" : "다중 선택 모드 (스마트폰/PC에서 Shift 없이 터치/클릭마다 추가 선택)"}
+          title={multiSelectMode ? "다중 선택 모드 켜짐" : "다중 선택 모드"}
           className={`p-2.5 rounded-xl transition flex items-center justify-center relative ${
             multiSelectMode
               ? 'bg-amber-500 text-slate-950 font-bold shadow-lg shadow-amber-500/30'

@@ -1647,13 +1647,6 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         </button>
       </div>
 
-      {/* Visual Guide Banner for Multi-Select */}
-      {tool === 'select' && (
-        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md text-sky-700 dark:text-sky-300 border border-sky-400 dark:border-sky-500/80 px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-2xl shadow-2xl flex items-center gap-2 text-[11px] sm:text-xs font-medium pointer-events-none animate-in fade-in slide-in-from-top-2 max-w-[90vw] text-center">
-          <span className="w-2 h-2 rounded-full bg-sky-500 dark:bg-sky-400 animate-ping shrink-0" />
-          <span>마우스를 <strong>드래그하여 사각 영역</strong>으로 여러 객체(점/선/면/글자)를 한 번에 선택하세요 (Shift+클릭: 개별 추가/제외)</span>
-        </div>
-      )}
 
       {/* Strict Node Requirement Visual Toast */}
       {nodeHintToast && (

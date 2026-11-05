@@ -7,6 +7,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   X, 
   Upload, 
+  Download,
   FileSpreadsheet, 
   Sparkles, 
   AlertCircle, 
@@ -468,7 +469,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         <div className="flex items-center justify-between p-3.5 sm:p-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/80">
           <div>
             <h2 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white flex items-center gap-2">
-              <Upload className="w-4 h-4 sm:w-5 sm:h-5 text-sky-600 dark:text-sky-400" />
+              <Download className="w-4 h-4 sm:w-5 sm:h-5 text-sky-600 dark:text-sky-400" />
               <span>외부 데이터 불러오기 (SHP / CSV / GeoJSON)</span>
             </h2>
             <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-0.5">
@@ -519,7 +520,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 }}
               />
               <div className="w-16 h-16 rounded-3xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-600 dark:text-sky-400 group-hover:scale-105 transition">
-                {isParsing ? <Loader2 className="w-8 h-8 animate-spin" /> : <Upload className="w-8 h-8" />}
+                {isParsing ? <Loader2 className="w-8 h-8 animate-spin" /> : <Download className="w-8 h-8" />}
               </div>
               <div className="text-lg font-bold text-slate-900 dark:text-white">파일 선택하여 불러오기</div>
               <p className="text-sm text-slate-500 dark:text-slate-400 max-w-lg">

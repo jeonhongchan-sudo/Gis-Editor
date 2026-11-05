@@ -20,17 +20,20 @@ interface GeoJsonExportOptions {
  * Includes layer metadata and all entity properties to serve as a robust project backup.
  */
 export function exportToGeoJson(options: GeoJsonExportOptions): any {
-  const { points, lines, polylines, polygons, texts, layers, crs } = options;
+  const { points = [], lines = [], polylines = [], polygons = [], texts = [], layers = [], crs } = options;
+
+  console.log(`Exporting GeoJSON: ${points.length} pts, ${lines.length} lines, ${polylines.length} pls, ${polygons.length} pgs, ${texts.length} txts`);
 
   const features: any[] = [];
 
   // 1. Export Points
   points.forEach(p => {
+    if (!p) return;
     features.push({
       type: 'Feature',
       geometry: {
         type: 'Point',
-        coordinates: p.z !== undefined ? [p.x, p.y, p.z] : [p.x, p.y]
+        coordinates: [Number(p.x) || 0, Number(p.y) || 0, ...(p.z !== undefined ? [Number(p.z) || 0] : [])]
       },
       properties: {
         id: p.id,
@@ -44,13 +47,14 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
     });
   });
 
-  // 2. Export Texts (as Points with text properties)
+  // 2. Export Texts
   texts.forEach(t => {
+    if (!t) return;
     features.push({
       type: 'Feature',
       geometry: {
         type: 'Point',
-        coordinates: [t.x, t.y]
+        coordinates: [Number(t.x) || 0, Number(t.y) || 0]
       },
       properties: {
         id: t.id,
@@ -66,15 +70,16 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
     });
   });
 
-  // 3. Export Lines (as LineStrings)
+  // 3. Export Lines
   lines.forEach(l => {
+    if (!l || !l.start || !l.end) return;
     features.push({
       type: 'Feature',
       geometry: {
         type: 'LineString',
         coordinates: [
-          [l.start.x, l.start.y],
-          [l.end.x, l.end.y]
+          [Number(l.start.x) || 0, Number(l.start.y) || 0],
+          [Number(l.end.x) || 0, Number(l.end.y) || 0]
         ]
       },
       properties: {
@@ -90,11 +95,12 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
 
   // 4. Export Polylines
   polylines.forEach(pl => {
+    if (!pl || !Array.isArray(pl.points)) return;
     features.push({
       type: 'Feature',
       geometry: {
         type: 'LineString',
-        coordinates: pl.points.map(p => [p.x, p.y])
+        coordinates: pl.points.map(p => [Number(p.x) || 0, Number(p.y) || 0])
       },
       properties: {
         id: pl.id,
@@ -110,10 +116,15 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
 
   // 5. Export Polygons
   polygons.forEach(pg => {
-    const coords = pg.points.map(p => [p.x, p.y]);
-    // Close the loop if not closed
-    if (coords.length > 0 && (coords[0][0] !== coords[coords.length - 1][0] || coords[0][1] !== coords[coords.length - 1][1])) {
-      coords.push([coords[0][0], coords[0][1]]);
+    if (!pg || !Array.isArray(pg.points) || pg.points.length < 3) return;
+    const coords = pg.points.map(p => [Number(p.x) || 0, Number(p.y) || 0]);
+    // Ensure closed ring for standard GeoJSON
+    if (coords.length > 0) {
+      const first = coords[0];
+      const last = coords[coords.length - 1];
+      if (first[0] !== last[0] || first[1] !== last[1]) {
+        coords.push([first[0], first[1]]);
+      }
     }
     features.push({
       type: 'Feature',
@@ -137,12 +148,11 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       generator: 'Web GIS/CAD App',
       version: '1.0.0',
       exportedAt: new Date().toISOString(),
-      layers: layers // Store full layer definitions (colors, etc.)
+      layers: layers
     },
     features: features
   };
 
-  // Standard CRS property for GIS compatibility if not standard WGS84
   if (crs && crs !== 'EPSG:4326') {
     geojson.crs = {
       type: 'name',
