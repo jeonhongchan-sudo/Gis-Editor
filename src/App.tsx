@@ -485,24 +485,14 @@ export default function App() {
       setMultiSelectMode(false);
       setActivePoints([]); 
       
-      // Explicitly set to empty first to force React re-render of clean state
-      setPoints([]);
-      setLines([]);
-      setPolylines([]);
-      setPolygons([]);
-      setTexts([]);
-      setLayers(DEFAULT_LAYERS);
-
-      // 3. Set new state with a tiny delay to ensure "잔상" (ghosting) is cleared
-      setTimeout(() => {
-        setLayers(incomingLayers);
-        setActiveLayerId(incomingLayers[0].id);
-        setPoints(data.points);
-        setLines(data.lines);
-        setPolylines(data.polylines);
-        setPolygons(data.polygons);
-        setTexts(data.texts || []);
-      }, 0);
+      // 3. Set new state directly (atomic update)
+      setLayers(incomingLayers);
+      setActiveLayerId(incomingLayers[0].id);
+      setPoints(data.points);
+      setLines(data.lines);
+      setPolylines(data.polylines);
+      setPolygons(data.polygons);
+      setTexts(data.texts || []);
 
       // For DB save, use the verified incomingLayers list
       data.layers = incomingLayers;
@@ -558,13 +548,20 @@ export default function App() {
     }
 
     // Bulk Save to DB
+    const finalLayers = append ? (data.layers || []) : incomingLayers;
+    const finalPoints = data.points;
+    const finalLines = data.lines;
+    const finalPolylines = data.polylines;
+    const finalPolygons = data.polygons;
+    const finalTexts = data.texts || [];
+
     await Promise.all([
-      data.layers.length > 0 ? db.layers.bulkPut(data.layers.map(l => ({ ...l, projectId: pid! }))) : Promise.resolve(),
-      db.points.bulkPut(data.points.map(p => ({ ...p, projectId: pid! }))),
-      db.lines.bulkPut(data.lines.map(l => ({ ...l, projectId: pid! }))),
-      db.polylines.bulkPut(data.polylines.map(pl => ({ ...pl, projectId: pid! }))),
-      db.polygons.bulkPut(data.polygons.map(pg => ({ ...pg, projectId: pid! }))),
-      data.texts && data.texts.length > 0 ? db.texts.bulkPut(data.texts.map(t => ({ ...t, projectId: pid! }))) : Promise.resolve()
+      finalLayers.length > 0 ? db.layers.bulkPut(finalLayers.map((l: CADLayer) => ({ ...l, projectId: pid! }))) : Promise.resolve(),
+      db.points.bulkPut(finalPoints.map((p: CADPoint) => ({ ...p, projectId: pid! }))),
+      db.lines.bulkPut(finalLines.map((l: CADLine) => ({ ...l, projectId: pid! }))),
+      db.polylines.bulkPut(finalPolylines.map((pl: CADPolyline) => ({ ...pl, projectId: pid! }))),
+      db.polygons.bulkPut(finalPolygons.map((pg: CADPolygon) => ({ ...pg, projectId: pid! }))),
+      finalTexts.length > 0 ? db.texts.bulkPut(finalTexts.map((t: CADText) => ({ ...t, projectId: pid! }))) : Promise.resolve()
     ]);
 
     handleZoomExtents();
@@ -646,7 +643,7 @@ export default function App() {
             {/* Mobile / Desktop Multi-Select Append Mode Toggle */}
             <button
               onClick={() => setMultiSelectMode(prev => !prev)}
-              title="스마트폰/PC 누적 선택 모드 (터치마다 추가)"
+              title="누적 선택 모드"
               className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-medium transition ${
                 multiSelectMode
                   ? 'bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/30'

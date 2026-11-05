@@ -102,7 +102,7 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
             onClick={onOpenImport}
             className="flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium border border-slate-200 dark:border-slate-700 transition"
           >
-            <Download className="w-3.5 h-3.5 text-sky-500 dark:text-sky-400" />
+            <Upload className="w-3.5 h-3.5 text-sky-500 dark:text-sky-400" />
             <span className="hidden md:inline">불러오기</span>
           </button>
 
@@ -111,7 +111,7 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
             onClick={onOpenExport}
             className="flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-medium shadow-md shadow-emerald-600/30 transition whitespace-nowrap"
           >
-            <Upload className="w-3.5 h-3.5" />
+            <Download className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">내보내기 (SHP/CSV)</span>
             <span className="sm:hidden">내보내기</span>
           </button>

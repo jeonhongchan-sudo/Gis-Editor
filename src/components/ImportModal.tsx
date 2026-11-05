@@ -35,6 +35,7 @@ import { isExcelBuffer, parseExcelWorkbook } from '../utils/excelParser';
 import { parseShapefileZip, parseShpBuffer, SHPParseResult } from '../utils/shpParser';
 import { decodeBufferText, SupportedEncoding } from '../utils/encoding';
 import { parseGeoJson } from '../utils/geoJsonParser';
+import { parseDxf } from '../utils/dxfParser';
 import { COORDINATE_SYSTEMS } from '../utils/projections';
 
 interface ImportModalProps {
@@ -45,7 +46,7 @@ interface ImportModalProps {
 }
 
 interface StoredRawInput {
-  kind: 'zip' | 'shp-multi' | 'csv' | 'excel' | 'geojson';
+  kind: 'zip' | 'shp-multi' | 'csv' | 'excel' | 'geojson' | 'dxf';
   filename: string;
   buffer?: ArrayBuffer;
   json?: any;
@@ -89,6 +90,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   // SHP / GeoJSON Result State
   const [shpResult, setShpResult] = useState<SHPParseResult | null>(null);
   const [shpFileName, setShpFileName] = useState<string | null>(null);
+  const [selectedLayerIds, setSelectedLayerIds] = useState<Set<string>>(new Set());
 
   const [loadedFormat, setLoadedFormat] = useState<'csv' | 'shp' | 'project' | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -129,6 +131,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         const res = await parseShapefileZip(raw.buffer, forced);
         setParsingProgress(100);
         setShpResult(res);
+        setSelectedLayerIds(new Set(res.layers.map(l => l.id))); // Default all checked for SHP
       } catch (err: any) {
         console.error('Re-parse zip failed:', err);
       } finally {
@@ -200,8 +203,21 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         setParsingStatusMsg('GeoJSON 좌표 변환 재실행 중...');
         const res = parseGeoJson(raw.json, sCrs, targetCrs);
         setShpResult(res);
+        setSelectedLayerIds(new Set(res.layers.map(l => l.id))); // Default all checked for GeoJSON
       } catch (err: any) {
         console.error('Re-parse geojson failed:', err);
+      } finally {
+        setIsParsing(false);
+      }
+    } else if (raw.kind === 'dxf' && raw.json) {
+      try {
+        setIsParsing(true);
+        setParsingStatusMsg('DXF 데이터 재처리 중...');
+        // but since DXF is usually local, we just re-assign.
+        setShpResult(raw.json);
+        setSelectedLayerIds(new Set());
+      } catch (err: any) {
+        console.error('Re-parse dxf failed:', err);
       } finally {
         setIsParsing(false);
       }
@@ -263,6 +279,8 @@ export const ImportModal: React.FC<ImportModalProps> = ({
             
             const res = parseGeoJson(parsed, detectedSourceCrs, targetCrs);
             setShpResult(res);
+            // SHP/GeoJSON are usually pre-filtered, so default to "Select All"
+            setSelectedLayerIds(new Set(res.layers.map(l => l.id)));
             setShpFileName(jsonFile.name);
             setLoadedFormat('shp');
             setIsParsing(false);
@@ -271,6 +289,36 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         } catch (err) {
           console.warn('JSON parsing failed or not a recognized format:', err);
         }
+      }
+    }
+
+    // Case 1.5: .dxf Drawing File
+    const dxfFile = fileArray.find(f => f.name.toLowerCase().endsWith('.dxf'));
+    if (dxfFile) {
+      try {
+        setIsParsing(true);
+        setParsingStatusMsg('AutoCAD DXF 데이터 분석 중...');
+        setParsingProgress(30);
+
+        const buffer = await dxfFile.arrayBuffer();
+        const { text } = decodeBufferText(buffer, selectedEncoding);
+        
+        setParsingProgress(60);
+        const res = parseDxf(text, dxfFile.name);
+        
+        rawInputRef.current = { kind: 'dxf', filename: dxfFile.name, json: res };
+        setShpResult(res);
+        // DXF usually has too many layers, so default to "Select None" as requested
+        setSelectedLayerIds(new Set());
+        setShpFileName(dxfFile.name);
+        setLoadedFormat('shp');
+        setParsingProgress(100);
+        return;
+      } catch (err: any) {
+        alert('DXF 분석 실패: ' + (err.message || err));
+        return;
+      } finally {
+        setIsParsing(false);
       }
     }
 
@@ -288,6 +336,8 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         const res = await parseShapefileZip(buffer, forced);
         setParsingProgress(100);
         setShpResult(res);
+        // SHP is usually pre-filtered, so default to "Select All"
+        setSelectedLayerIds(new Set(res.layers.map(l => l.id)));
         setShpFileName(zipFile.name);
         setLoadedFormat('shp');
         return;
@@ -378,7 +428,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         }
 
         setParsingProgress(100);
-        setShpResult({
+        const res: SHPParseResult = {
           points: combinedPoints,
           lines: combinedLines,
           polylines: combinedPolylines,
@@ -389,7 +439,10 @@ export const ImportModal: React.FC<ImportModalProps> = ({
           detectedEncoding: detectedEnc,
           dbfFields: Array.from(combinedDbfFields),
           bounds: minX !== Infinity ? { minX, minY, maxX, maxY } : undefined
-        });
+        };
+        setShpResult(res);
+        // Multi-SHP is also usually pre-filtered, default to "Select All"
+        setSelectedLayerIds(new Set(res.layers.map(l => l.id)));
         setShpFileName(shpFiles.length === 1 ? shpFiles[0].name : `${shpFiles.length}개 Shapefile`);
         setLoadedFormat('shp');
         return;
@@ -447,7 +500,24 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
   const handleApplySHP = () => {
     if (!shpResult) return;
-    onImportSHP(shpResult, appendMode);
+    
+    if (selectedLayerIds.size === 0) {
+      alert('변환할 레이어를 최소 하나 이상 선택해 주세요.');
+      return;
+    }
+
+    // Filter results based on selected layers
+    const filteredResult: SHPParseResult = {
+      ...shpResult,
+      layers: shpResult.layers.filter(l => selectedLayerIds.has(l.id)),
+      points: shpResult.points.filter(p => selectedLayerIds.has(p.layerId)),
+      lines: shpResult.lines.filter(l => selectedLayerIds.has(l.layerId)),
+      polylines: shpResult.polylines.filter(pl => selectedLayerIds.has(pl.layerId)),
+      polygons: shpResult.polygons.filter(pg => selectedLayerIds.has(pg.layerId)),
+      texts: shpResult.texts?.filter(t => selectedLayerIds.has(t.layerId))
+    };
+
+    onImportSHP(filteredResult, appendMode);
     onClose();
   };
 
@@ -469,7 +539,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         <div className="flex items-center justify-between p-3.5 sm:p-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950/80">
           <div>
             <h2 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white flex items-center gap-2">
-              <Download className="w-4 h-4 sm:w-5 sm:h-5 text-sky-600 dark:text-sky-400" />
+              <Upload className="w-4 h-4 sm:w-5 sm:h-5 text-sky-600 dark:text-sky-400" />
               <span>외부 데이터 불러오기 (SHP / CSV / GeoJSON)</span>
             </h2>
             <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-0.5">
@@ -510,7 +580,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 type="file" 
                 className="hidden"
                 multiple
-                accept=".xlsx,.xls,.csv,.txt,.shp,.dbf,.shx,.cpg,.zip,.cadgis,.geojson,.json"
+                accept=".xlsx,.xls,.csv,.txt,.shp,.dbf,.shx,.cpg,.zip,.cadgis,.geojson,.json,.dxf"
                 onChange={async e => {
                   const files = e.target.files;
                   if (files && files.length > 0) {
@@ -520,7 +590,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 }}
               />
               <div className="w-16 h-16 rounded-3xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-600 dark:text-sky-400 group-hover:scale-105 transition">
-                {isParsing ? <Loader2 className="w-8 h-8 animate-spin" /> : <Download className="w-8 h-8" />}
+                {isParsing ? <Loader2 className="w-8 h-8 animate-spin" /> : <Upload className="w-8 h-8" />}
               </div>
               <div className="text-lg font-bold text-slate-900 dark:text-white">파일 선택하여 불러오기</div>
               <p className="text-sm text-slate-500 dark:text-slate-400 max-w-lg">
@@ -564,7 +634,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                     <Archive className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                     <div>
                       <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
-                        {rawInputRef.current?.kind === 'geojson' ? 'GeoJSON' : 'Shapefile'} 데이터 감지됨
+                        {rawInputRef.current?.kind === 'geojson' ? 'GeoJSON' : rawInputRef.current?.kind === 'dxf' ? 'AutoCAD DXF' : 'Shapefile'} 데이터 감지됨
                       </h3>
                       <p className="text-[11px] text-slate-500 dark:text-slate-400">
                         {shpFileName || 'GIS 도면 데이터'}
@@ -643,7 +713,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 </div>
 
                 {/* Geometry Stats Grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
                   <div className="p-3 bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl text-center shadow-sm">
                     <div className="text-[10px] text-slate-500 dark:text-slate-400">측점 (Point)</div>
                     <div className="text-lg font-bold text-sky-600 dark:text-sky-400 mt-0.5">{shpResult.points.length}개</div>
@@ -657,9 +727,92 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                     <div className="text-lg font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">{shpResult.polygons.length}개</div>
                   </div>
                   <div className="p-3 bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl text-center shadow-sm">
-                    <div className="text-[10px] text-slate-500 dark:text-slate-400">생성 레이어</div>
+                    <div className="text-[10px] text-slate-500 dark:text-slate-400">텍스트 (Text)</div>
+                    <div className="text-lg font-bold text-fuchsia-600 dark:text-fuchsia-400 mt-0.5">{(shpResult.texts || []).length}개</div>
+                  </div>
+                  <div className="p-3 bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl text-center shadow-sm">
+                    <div className="text-[10px] text-slate-500 dark:text-slate-400">전체 레이어</div>
                     <div className="text-lg font-bold text-purple-600 dark:text-purple-400 mt-0.5">{shpResult.layers.length}개</div>
                   </div>
+                </div>
+
+                {/* Layer Selection Checklist */}
+                <div className="p-3 bg-white dark:bg-slate-950 border border-purple-100 dark:border-purple-800/40 rounded-xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Layers className="w-4 h-4 text-purple-500" />
+                      <span className="text-xs font-bold text-slate-700 dark:text-slate-200">변환할 레이어 선택 (지형도 등 제외 권장)</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => setSelectedLayerIds(new Set(shpResult.layers.map(l => l.id)))}
+                        className="text-[10px] text-sky-600 hover:underline"
+                      >
+                        전체 선택
+                      </button>
+                      <span className="text-slate-300">|</span>
+                      <button 
+                        onClick={() => setSelectedLayerIds(new Set())}
+                        className="text-[10px] text-slate-500 hover:underline"
+                      >
+                        모두 해제
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-1.5 max-h-48 overflow-y-auto pr-1 custom-scrollbar">
+                    {shpResult.layers.map(layer => {
+                      const isChecked = selectedLayerIds.has(layer.id);
+                      // Calculate counts for this layer
+                      const ptCount = shpResult.points.filter(p => p.layerId === layer.id).length;
+                      const lineCount = (shpResult.lines.filter(l => l.layerId === layer.id).length) + (shpResult.polylines.filter(pl => pl.layerId === layer.id).length);
+                      const polyCount = shpResult.polygons.filter(pg => pg.layerId === layer.id).length;
+                      const totalEnts = ptCount + lineCount + polyCount;
+                      
+                      if (totalEnts === 0) return null; // Skip empty layers if any
+
+                      return (
+                        <label 
+                          key={layer.id} 
+                          className={`flex items-center gap-2.5 p-2 rounded-lg border transition cursor-pointer ${
+                            isChecked 
+                              ? 'bg-purple-50 dark:bg-purple-900/30 border-purple-200 dark:border-purple-700/50' 
+                              : 'bg-slate-50 dark:bg-slate-900 border-slate-100 dark:border-slate-800'
+                          }`}
+                        >
+                          <input 
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {
+                              const next = new Set(selectedLayerIds);
+                              if (next.has(layer.id)) next.delete(layer.id);
+                              else next.add(layer.id);
+                              setSelectedLayerIds(next);
+                            }}
+                            className="w-3.5 h-3.5 rounded border-slate-300 text-purple-600 focus:ring-purple-500"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: layer.color }} />
+                              <span className="text-[11px] font-medium text-slate-700 dark:text-slate-200 truncate">{layer.name}</span>
+                            </div>
+                            <div className="text-[9px] text-slate-400 dark:text-slate-500 flex gap-1.5 mt-0.5 ml-3.5">
+                              {ptCount > 0 && <span>점 {ptCount}</span>}
+                              {lineCount > 0 && <span>선 {lineCount}</span>}
+                              {polyCount > 0 && <span>면 {polyCount}</span>}
+                            </div>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  
+                  {selectedLayerIds.size === 0 && (
+                    <div className="flex items-center gap-1.5 p-2 bg-amber-50 dark:bg-amber-950/40 rounded-lg border border-amber-100 dark:border-amber-900/50 text-amber-700 dark:text-amber-400 text-[10px]">
+                      <AlertCircle className="w-3 h-3 shrink-0" />
+                      <span>변환할 레이어를 하나 이상 선택해야 도면에 추가할 수 있습니다.</span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Sample Point Text Preview */}

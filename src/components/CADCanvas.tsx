@@ -1187,7 +1187,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     }
 
     // Step B: QGIS-style Dynamic Label Placement Engine (PAL Collision Avoidance)
-    const showPointLabels = (visiblePoints.length <= 1200 && view.zoom > 0.03) || selectedSet.size > 0;
+    const showPointLabels = (visiblePoints.length <= 2500 && view.zoom > 0.0001) || selectedSet.size > 0;
     if (showPointLabels) {
       ctx.font = '10px Pretendard, sans-serif';
 
@@ -1383,8 +1383,8 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       if (!layer || !layer.visible) continue;
 
       const pxHeight = txt.height * view.zoom;
-      if (pxHeight < 5.0) continue;
-      const renderPxHeight = Math.max(8, pxHeight);
+      if (pxHeight < 1.0) continue; // Lowered from 5.0 for better visibility
+      const renderPxHeight = Math.max(6, pxHeight);
       const sp = getScreen({ x: txt.x, y: txt.y });
       const isSelected = selectedSet.has(txt.id);
 

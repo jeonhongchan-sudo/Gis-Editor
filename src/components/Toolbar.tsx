@@ -68,7 +68,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         {/* Pointer / Select */}
         <button
           onClick={() => setTool('select')}
-          title="객체 선택 (Shift+클릭)"
+          title="객체 선택"
           className={`p-2.5 rounded-xl transition flex items-center justify-center ${
             tool === 'select'
               ? 'bg-sky-500 text-white shadow-lg shadow-sky-500/30'
@@ -166,7 +166,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             if (tool !== 'point') onCancelDrawing();
             setTool('point');
           }}
-          title="측점 생성 (도면 클릭)"
+          title="측점 생성"
           className={`p-2.5 rounded-xl transition flex items-center justify-center ${
             tool === 'point'
               ? 'bg-sky-500 text-white shadow-lg shadow-sky-500/30'

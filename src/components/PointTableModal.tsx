@@ -138,8 +138,13 @@ export const PointTableModal: React.FC<PointTableModalProps> = ({
         {/* Table Body */}
         <div className="flex-1 overflow-auto custom-scrollbar bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">
           {filteredPoints.length === 0 ? (
-            <div className="p-12 text-center text-slate-400 dark:text-slate-500 text-xs">
-              등록된 측점 데이터가 없습니다. CSV 파일 또는 샘플 데이터를 불러와보세요.
+            <div className="p-12 text-center text-slate-400 dark:text-slate-500 text-xs flex flex-col items-center gap-3">
+              <Crosshair className="w-12 h-12 opacity-10" />
+              <div>
+                <p className="font-bold">등록된 측점 데이터가 없습니다.</p>
+                <p className="mt-1 opacity-70">DXF/SHP/CSV 파일을 불러오거나 수동으로 측점을 추가해 주세요.</p>
+                {search && <p className="mt-2 text-sky-500">검색어 "{search}"에 대한 결과가 없습니다.</p>}
+              </div>
             </div>
           ) : (
             <table className="w-full text-left text-xs font-mono">

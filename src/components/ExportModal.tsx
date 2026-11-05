@@ -148,7 +148,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         <div className="flex items-center justify-between p-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50">
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-white flex items-center gap-2">
-              <Upload className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+              <Download className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
               <span>성과물 및 백업 내보내기</span>
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
@@ -242,7 +242,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               disabled={points.length === 0 && totalLinesCount === 0 && polygons.length === 0 && texts.length === 0}
               className="w-full py-2.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-md shadow-sky-600/30 flex items-center justify-center gap-1.5 transition active:scale-98"
             >
-              <Upload className="w-4 h-4" />
+              <Download className="w-4 h-4" />
               클라우드 공유용 GeoJSON 다운로드
             </button>
           </div>
@@ -299,7 +299,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               disabled={isExportingShp || (points.length === 0 && totalLinesCount === 0 && polygons.length === 0)}
               className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-md shadow-emerald-600/30 flex items-center justify-center gap-1.5 transition active:scale-98"
             >
-              <Upload className="w-4 h-4" />
+              <Download className="w-4 h-4" />
               {isExportingShp ? 'Shapefile 생성 중...' : 'SHP 압축 번들 (.ZIP) 다운로드'}
             </button>
           </div>
@@ -348,7 +348,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               disabled={points.length === 0}
               className="w-full py-2.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-md shadow-sky-600/30 flex items-center justify-center gap-1.5 transition active:scale-98"
             >
-              <Upload className="w-4 h-4" />
+              <Download className="w-4 h-4" />
               CSV 다운로드
             </button>
           </div>
