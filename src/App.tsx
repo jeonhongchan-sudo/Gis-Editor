@@ -458,14 +458,7 @@ export default function App() {
     ];
 
     if (!append) {
-      setLayers(incomingLayers);
-      setPoints(data.points);
-      setLines(data.lines);
-      setPolylines(data.polylines);
-      setPolygons(data.polygons);
-      setTexts([]);
-
-      // Clean DB
+      // 1. Clean DB for current project BEFORE state update
       await Promise.all([
         db.layers.where('projectId').equals(pid).delete(),
         db.points.where('projectId').equals(pid).delete(),
@@ -474,27 +467,86 @@ export default function App() {
         db.polygons.where('projectId').equals(pid).delete(),
         db.texts.where('projectId').equals(pid).delete()
       ]);
+
+      // 2. Clear current UI state
+      setSelectedEntityIds([]); 
+      setMultiSelectMode(false);
+      setActivePoints([]); 
+
+      // 3. Set new state
+      setLayers(incomingLayers);
+      setActiveLayerId(incomingLayers[0].id);
+      setPoints(data.points);
+      setLines(data.lines);
+      setPolylines(data.polylines);
+      setPolygons(data.polygons);
+      setTexts(data.texts || []);
+
+      // For DB save, use the verified incomingLayers list
+      data.layers = incomingLayers;
     } else {
-      const existingLayerNames = new Set(layers.map(l => l.name));
-      const newLayersToAdd = incomingLayers.filter(l => !existingLayerNames.has(l.name));
-      setLayers(prev => [...prev, ...newLayersToAdd]);
-      setPoints(prev => [...prev, ...data.points]);
-      setLines(prev => [...prev, ...data.lines]);
-      setPolylines(prev => [...prev, ...data.polylines]);
-      setPolygons(prev => [...prev, ...data.polygons]);
+      // Robust Layer Merging: Map incomingLayerId -> existingLayerId where names match
+      const idMap = new Map<string, string>();
+      const existingLayersByName = new Map(layers.map(l => [l.name.trim(), l]));
+      const layersToAppend: CADLayer[] = [];
+
+      incomingLayers.forEach(newLayer => {
+        const nameKey = newLayer.name.trim();
+        const existing = existingLayersByName.get(nameKey);
+        if (existing) {
+          idMap.set(newLayer.id, existing.id);
+        } else {
+          layersToAppend.push(newLayer);
+          idMap.set(newLayer.id, newLayer.id);
+        }
+      });
+
+      const remap = <T extends { layerId: string }>(items: T[]): T[] => 
+        items.map(item => ({ ...item, layerId: idMap.get(item.layerId) || item.layerId }));
+
+      const remappedPoints = remap(data.points);
+      const remappedLines = remap(data.lines);
+      const remappedPolylines = remap(data.polylines);
+      const remappedPolygons = remap(data.polygons);
+      const remappedTexts = remap(data.texts || []);
+
+      setLayers(prev => {
+        const existingIds = new Set(prev.map(l => l.id));
+        return [...prev, ...layersToAppend.filter(l => !existingIds.has(l.id))];
+      });
+
+      const dedupe = <T extends { id: string }>(prev: T[], next: T[]): T[] => {
+        const idSet = new Set(prev.map(i => i.id));
+        return [...prev, ...next.filter(i => !idSet.has(i.id))];
+      };
+
+      setPoints(prev => dedupe(prev, remappedPoints));
+      setLines(prev => dedupe(prev, remappedLines));
+      setPolylines(prev => dedupe(prev, remappedPolylines));
+      setPolygons(prev => dedupe(prev, remappedPolygons));
+      setTexts(prev => dedupe(prev, remappedTexts));
+
+      // Update data references for DB save (Only the new layers and all remapped entities)
+      data.layers = layersToAppend;
+      data.points = remappedPoints;
+      data.lines = remappedLines;
+      data.polylines = remappedPolylines;
+      data.polygons = remappedPolygons;
+      data.texts = remappedTexts;
     }
 
-    // Bulk Add to DB
+    // Bulk Save to DB
     await Promise.all([
-      db.layers.bulkAdd(incomingLayers.map(l => ({ ...l, projectId: pid! }))),
-      db.points.bulkAdd(data.points.map(p => ({ ...p, projectId: pid! }))),
-      db.lines.bulkAdd(data.lines.map(l => ({ ...l, projectId: pid! }))),
-      db.polylines.bulkAdd(data.polylines.map(pl => ({ ...pl, projectId: pid! }))),
-      db.polygons.bulkAdd(data.polygons.map(pg => ({ ...pg, projectId: pid! })))
+      data.layers.length > 0 ? db.layers.bulkPut(data.layers.map(l => ({ ...l, projectId: pid! }))) : Promise.resolve(),
+      db.points.bulkPut(data.points.map(p => ({ ...p, projectId: pid! }))),
+      db.lines.bulkPut(data.lines.map(l => ({ ...l, projectId: pid! }))),
+      db.polylines.bulkPut(data.polylines.map(pl => ({ ...pl, projectId: pid! }))),
+      db.polygons.bulkPut(data.polygons.map(pg => ({ ...pg, projectId: pid! }))),
+      data.texts && data.texts.length > 0 ? db.texts.bulkPut(data.texts.map(t => ({ ...t, projectId: pid! }))) : Promise.resolve()
     ]);
 
     handleZoomExtents();
-    pushHistory('SHP 데이터 불러오기');
+    pushHistory(append ? 'SHP 데이터 누적 추가' : 'SHP 데이터 새로 시작');
   };
 
   const selPointsCount = points.filter(p => selectedEntityIds.includes(p.id)).length;
@@ -660,21 +712,7 @@ export default function App() {
           </div>
         )}
 
-        {/* Guidance pill when select tool is active without selection */}
-        {tool === 'select' && selectedEntityIds.length === 0 && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-sky-300 dark:border-sky-500/70 px-3.5 py-1.5 rounded-full shadow-xl text-xs text-slate-600 dark:text-slate-300 animate-in fade-in">
-            <span className="w-2 h-2 rounded-full bg-sky-500 dark:bg-sky-400 animate-pulse" />
-            <span>화면을 드래그하여 영역 선택 또는 터치하여 선택</span>
-            <button
-              onClick={() => setMultiSelectMode(prev => !prev)}
-              className={`ml-1 px-2 py-0.5 rounded-md text-[11px] font-semibold transition ${
-                multiSelectMode ? 'bg-amber-500 text-slate-950' : 'bg-slate-100 dark:bg-slate-800 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-500/30'
-              }`}
-            >
-              {multiSelectMode ? '✓ 다중 누적 ON' : '+ 다중 누적 켜기'}
-            </button>
-          </div>
-        )}
+
 
         {/* Floating Multi-Point Distance Measurement Panel (여러 점간 누적 거리 합산) */}
         {tool === 'measure' && activePoints.length >= 1 && (
@@ -762,6 +800,7 @@ export default function App() {
             onToggleVisible={handleToggleLayerVisible}
             onToggleLock={handleToggleLayerLock}
             onChangeColor={handleChangeLayerColor}
+            onRenameLayer={handleRenameLayer}
             onAddLayer={handleAddLayer}
             onDeleteLayer={handleDeleteLayer}
             onClose={() => setShowLayerPanel(false)}
@@ -788,6 +827,7 @@ export default function App() {
       {showTableModal && (
         <PointTableModal
           points={points} onDeletePoint={handleDeletePoint}
+          onUpdatePoint={handleUpdatePoint}
           onClearAllPoints={handleClearAllPoints}
           onFocusPoint={(pt) => setSelectedEntityId(pt.id)}
           onClose={() => setShowTableModal(false)}
@@ -825,28 +865,44 @@ export default function App() {
   );
 
   async function handleLoadProject(state: ProjectState) {
+    // 1. Create a new project entry first
     const pid = await db.projects.add({ 
       name: state.name || '가져온 프로젝트', 
       createdAt: Date.now(), 
       updatedAt: Date.now() 
     });
-    setCurrentProjectId(pid);
     
-    // Convert state arrays to DB entries
-    if (state.layers) await db.layers.bulkAdd(state.layers.map((l: CADLayer) => ({ ...l, projectId: pid })));
-    if (state.points) await db.points.bulkAdd(state.points.map((p: CADPoint) => ({ ...p, projectId: pid })));
-    if (state.lines) await db.lines.bulkAdd(state.lines.map((l: CADLine) => ({ ...l, projectId: pid })));
-    if (state.polylines) await db.polylines.bulkAdd(state.polylines.map((p: CADPolyline) => ({ ...p, projectId: pid })));
-    if (state.polygons) await db.polygons.bulkAdd(state.polygons.map((p: CADPolygon) => ({ ...p, projectId: pid })));
-    if (state.texts) await db.texts.bulkAdd(state.texts.map((t: CADText) => ({ ...t, projectId: pid })));
+    // 2. Perform all bulk DB writes BEFORE updating state/project ID
+    // This ensures that when currentProjectId changes and the useEffect triggers,
+    // the data is already physically present in IndexedDB.
+    const layers = state.layers || DEFAULT_LAYERS;
+    const points = state.points || [];
+    const lines = state.lines || [];
+    const polylines = state.polylines || [];
+    const polygons = state.polygons || [];
+    const texts = state.texts || [];
 
-    setLayers(state.layers || DEFAULT_LAYERS);
-    setPoints(state.points || []);
-    setLines(state.lines || []);
-    setPolylines(state.polylines || []);
-    setPolygons(state.polygons || []);
-    setTexts(state.texts || []);
-    handleZoomExtents();
+    await Promise.all([
+      db.layers.bulkPut(layers.map(l => ({ ...l, projectId: pid }))),
+      db.points.bulkPut(points.map(p => ({ ...p, projectId: pid }))),
+      db.lines.bulkPut(lines.map(l => ({ ...l, projectId: pid }))),
+      db.polylines.bulkPut(polylines.map(p => ({ ...p, projectId: pid }))),
+      db.polygons.bulkPut(polygons.map(p => ({ ...p, projectId: pid }))),
+      db.texts.bulkPut(texts.map(t => ({ ...t, projectId: pid })))
+    ]);
+
+    // 3. Update current project ID (triggers loading useEffect, but data is already there)
+    setCurrentProjectId(pid);
+
+    // 4. Manually update state for immediate UI feedback
+    setLayers(layers);
+    setPoints(points);
+    setLines(lines);
+    setPolylines(polylines);
+    setPolygons(polygons);
+    setTexts(texts);
+    
+    setTimeout(() => handleZoomExtents(points), 150);
     pushHistory('프로젝트 가져오기');
   }
 
@@ -900,5 +956,19 @@ export default function App() {
     }
 
     pushHistory(`레이어 삭제: ${targetLayer?.name || id}`);
+  }
+
+  async function handleRenameLayer(id: string, newName: string) {
+    setLayers(prev => prev.map(l => l.id === id ? { ...l, name: newName } : l));
+    if (currentProjectId !== null) {
+      await db.layers.where('id').equals(id).modify({ name: newName });
+    }
+  }
+
+  async function handleUpdatePoint(id: string, updates: Partial<CADPoint>) {
+    setPoints(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
+    if (currentProjectId !== null) {
+      await db.points.where('id').equals(id).modify(updates);
+    }
   }
 }

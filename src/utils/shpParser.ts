@@ -5,7 +5,7 @@
 
 import JSZip from 'jszip';
 import iconv from 'iconv-lite';
-import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, Point2D } from '../types/cad';
+import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText, Point2D } from '../types/cad';
 import { detectKoreanEncoding, smartDecodeKoreanBytes } from './encoding';
 
 export interface DbfField {
@@ -28,6 +28,7 @@ export interface SHPParseResult {
   lines: CADLine[];
   polylines: CADPolyline[];
   polygons: CADPolygon[];
+  texts?: CADText[];
   layers: CADLayer[];
   layerName: string;
   detectedEncoding?: 'utf-8' | 'euc-kr';
@@ -177,6 +178,7 @@ export function parseShpBuffer(
   buffer: ArrayBuffer,
   filename: string = 'shapefile',
   dbfBuffer?: ArrayBuffer,
+  fileIndex: number = 0,
   forcedEncoding?: 'utf-8' | 'euc-kr'
 ): SHPParseResult {
   const view = new DataView(buffer);
@@ -202,7 +204,7 @@ export function parseShpBuffer(
   const fileLengthBytes = view.getInt32(24, false) * 2;
   let cleanName = filename.replace(/\.[^/.]+$/, '').trim() || 'shapefile';
   cleanName = tryRepairMojibake(cleanName);
-  const layerId = `layer-${cleanName.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+  const layerId = `layer-${cleanName.replace(/[\s\.]/g, '_')}`;
 
   const minXHeader = view.getFloat64(36, true);
   const minYHeader = view.getFloat64(44, true);
@@ -213,17 +215,22 @@ export function parseShpBuffer(
   const lines: CADLine[] = [];
   const polylines: CADPolyline[] = [];
   const polygons: CADPolygon[] = [];
+  const texts: CADText[] = [];
 
   let offset = 100;
   let recordIndex = 1;
 
-  // Candidate fields for point names / labels (case-insensitive)
+  // Candidate fields for point names / labels (case-insensitive, prioritizing QGIS and CAD DXF conversion fields)
   const NAME_KEYS = [
-    'NAME', '측점명', '명칭', 'TEXT', 'LABEL', 'PT_NAME', 'POINT_NAME',
-    'ID', 'CODE', '항목', '비고', 'NO', 'NUMBER', 'FEATURE', 'TITLE', 'FIELD_1'
+    'text', 'textstring', 'text_string', 'txt', 'txtmemo', 'string', 'label', 'name',
+    '측점명', '명칭', 'pt_name', 'point_name', 'entity', 'descr', 'description', 'descriptio',
+    'content', 'annotation', 'val', 'value', 'code', '항목', '비고', 'id', 'no', 'number',
+    'feature', 'title', 'refname', 'blockname', 'field_1'
   ];
-  const ELEV_KEYS = ['Z', 'ELEV', 'ELEVATION', '고도', '표고', 'HEIGHT', 'DEPTH', '심도'];
-  const LAYER_KEYS = ['LAYER', '도면층', '레이어', 'LAYERNAME'];
+  const ELEV_KEYS = ['z', 'elev', 'elevation', '고도', '표고', 'height', 'depth', '심도'];
+  const LAYER_KEYS = ['layer', '도면층', '레이어', 'layername', 'cadlayer'];
+
+  const now = Date.now();
 
   while (offset < Math.min(fileLengthBytes, buffer.byteLength) - 8) {
     const contentLenBytes = view.getInt32(offset + 4, false) * 2;
@@ -266,19 +273,39 @@ export function parseShpBuffer(
 
     // Determine target layer from DBF or default
     const dbfLayer = findDbfValue(LAYER_KEYS);
-    const effectiveLayerId = dbfLayer ? `layer-${dbfLayer.replace(/[^a-zA-Z0-9_-]/g, '_')}` : layerId;
+    const effectiveLayerId = dbfLayer ? `layer-${dbfLayer.trim().replace(/[\s\.]/g, '_')}` : layerId;
 
-    if (recShapeType === 1) {
-      // Point (shape type 1)
+    // 1. Points: Point (1), PointZ (11), PointM (21) - Crucial for QGIS DXF converted text/points!
+    if (recShapeType === 1 || recShapeType === 11 || recShapeType === 21) {
       const x = view.getFloat64(offset + 12, true);
       const y = view.getFloat64(offset + 20, true);
 
-      // Extract point name from DBF or fallback
+      // In PointZ (11), elevation is stored directly as a double at offset + 28
+      let zVal: number | undefined = undefined;
+      if (recShapeType === 11 && offset + 36 <= buffer.byteLength) {
+        const binaryZ = view.getFloat64(offset + 28, true);
+        if (!isNaN(binaryZ) && binaryZ > -1e30) {
+          zVal = binaryZ;
+        }
+      }
+      if (zVal === undefined) {
+        zVal = findDbfElev();
+      }
+
+      // Extract point name from DBF (supports QGIS Text, Label, Name, etc.)
       let ptName = findDbfValue(NAME_KEYS);
       if (!ptName && dbfRec) {
-        // Fallback: use first non-empty string attribute if available
+        // Fallback: search any non-empty string attribute that isn't a technical CAD code
         for (const [k, v] of Object.entries(dbfRec)) {
-          if (typeof v === 'string' && v.trim() !== '' && !k.toLowerCase().includes('id')) {
+          const lk = k.toLowerCase();
+          if (
+            typeof v === 'string' && 
+            v.trim() !== '' && 
+            !lk.includes('color') && 
+            !lk.includes('linetype') && 
+            !lk.includes('thickness') && 
+            !lk.includes('handle')
+          ) {
             ptName = v.trim();
             break;
           }
@@ -288,10 +315,8 @@ export function parseShpBuffer(
         ptName = `${cleanName}_${recordIndex}`;
       }
 
-      const zVal = findDbfElev();
-
       points.push({
-        id: `shp-pt-${Date.now()}-${recordIndex}`,
+        id: `shp-pt-${now}-${fileIndex}-${recordIndex}`,
         name: ptName,
         x,
         y,
@@ -299,8 +324,27 @@ export function parseShpBuffer(
         layerId: effectiveLayerId,
         isSurveyNode: true
       });
-    } else if (recShapeType === 3) {
-      // PolyLine (shape type 3)
+    } 
+    // 2. MultiPoints: MultiPoint (8), MultiPointZ (18), MultiPointM (28)
+    else if (recShapeType === 8 || recShapeType === 18 || recShapeType === 28) {
+      const numPoints = view.getInt32(offset + 44, true);
+      const ptsStart = offset + 48;
+      const ptName = findDbfValue(NAME_KEYS) || `${cleanName}_${recordIndex}`;
+      for (let p = 0; p < numPoints; p++) {
+        const px = view.getFloat64(ptsStart + p * 16, true);
+        const py = view.getFloat64(ptsStart + p * 16 + 8, true);
+        points.push({
+          id: `shp-mpt-${now}-${fileIndex}-${recordIndex}-${p + 1}`,
+          name: `${ptName}_${p + 1}`,
+          x: px,
+          y: py,
+          layerId: effectiveLayerId,
+          isSurveyNode: true
+        });
+      }
+    }
+    // 3. PolyLines: PolyLine (3), PolyLineZ (13), PolyLineM (23)
+    else if (recShapeType === 3 || recShapeType === 13 || recShapeType === 23) {
       const numParts = view.getInt32(offset + 44, true);
       const numPoints = view.getInt32(offset + 48, true);
       const partsStart = offset + 52;
@@ -324,8 +368,9 @@ export function parseShpBuffer(
           attributes: dbfRec ? { ...dbfRec } : undefined
         });
       }
-    } else if (recShapeType === 5) {
-      // Polygon (shape type 5)
+    } 
+    // 4. Polygons: Polygon (5), PolygonZ (15), PolygonM (25)
+    else if (recShapeType === 5 || recShapeType === 15 || recShapeType === 25) {
       const numParts = view.getInt32(offset + 44, true);
       const numPoints = view.getInt32(offset + 48, true);
       const partsStart = offset + 52;
@@ -359,7 +404,8 @@ export function parseShpBuffer(
     layerId,
     ...points.map(p => p.layerId),
     ...polylines.map(pl => pl.layerId),
-    ...polygons.map(pg => pg.layerId)
+    ...polygons.map(pg => pg.layerId),
+    ...texts.map(t => t.layerId)
   ]));
 
   const layers: CADLayer[] = layerIds.map((lid, idx) => ({
@@ -376,6 +422,7 @@ export function parseShpBuffer(
     lines,
     polylines,
     polygons,
+    texts,
     layers,
     layerName: cleanName,
     detectedEncoding: dbfResult?.detectedEncoding,
@@ -429,6 +476,7 @@ export async function parseShapefileZip(
   const combinedLines: CADLine[] = [];
   const combinedPolylines: CADPolyline[] = [];
   const combinedPolygons: CADPolygon[] = [];
+  const combinedTexts: CADText[] = [];
   const combinedLayers: CADLayer[] = [];
   const combinedDbfFields = new Set<string>();
   let detectedEncoding: 'utf-8' | 'euc-kr' = forcedEncoding || cpgEncoding || 'euc-kr';
@@ -466,7 +514,7 @@ export async function parseShapefileZip(
 
     const displayName = shpEntry.name.split('/').pop() || shpEntry.name;
     const effectiveEnc = forcedEncoding || cpgEncoding;
-    const result = parseShpBuffer(shpBuffer, displayName, dbfBuffer, effectiveEnc);
+    const result = parseShpBuffer(shpBuffer, displayName, dbfBuffer, i, effectiveEnc);
 
     if (result.detectedEncoding) {
       detectedEncoding = result.detectedEncoding;
@@ -487,6 +535,9 @@ export async function parseShapefileZip(
     combinedLines.push(...result.lines);
     combinedPolylines.push(...result.polylines);
     combinedPolygons.push(...result.polygons);
+    if (result.texts) {
+      combinedTexts.push(...result.texts);
+    }
 
     if (result.bounds) {
       minX = Math.min(minX, result.bounds.minX);
@@ -505,6 +556,7 @@ export async function parseShapefileZip(
     lines: combinedLines,
     polylines: combinedPolylines,
     polygons: combinedPolygons,
+    texts: combinedTexts,
     layers: combinedLayers,
     layerName: primaryName,
     detectedEncoding,

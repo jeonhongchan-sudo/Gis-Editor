@@ -1124,7 +1124,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 
     linesByLayer.forEach((layerLines, layerId) => {
       const layer = layerMap.current.get(layerId);
-      if (layer && !layer.visible) return;
+      if (!layer || !layer.visible) return;
 
       for (let i = 0; i < layerLines.length; i++) {
         const l = layerLines[i];
@@ -1147,7 +1147,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       const pt = points[i];
       if (pt.x < visMinX || pt.x > visMaxX || pt.y < visMinY || pt.y > visMaxY) continue;
       const layer = layerMap.current.get(pt.layerId);
-      if (layer && !layer.visible) continue;
+      if (!layer || !layer.visible) continue;
       visiblePoints.push(pt);
     }
 
@@ -1380,7 +1380,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       const txt = texts[i];
       if (txt.x < visMinX || txt.x > visMaxX || txt.y < visMinY || txt.y > visMaxY) continue;
       const layer = layerMap.current.get(txt.layerId);
-      if (layer && !layer.visible) continue;
+      if (!layer || !layer.visible) continue;
 
       const pxHeight = txt.height * view.zoom;
       if (pxHeight < 5.0) continue;

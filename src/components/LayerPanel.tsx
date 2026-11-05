@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { Eye, EyeOff, Lock, Unlock, Plus, X, Palette, CheckCircle2, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, Lock, Unlock, Plus, X, Palette, CheckCircle2, Trash2, Edit2, Check } from 'lucide-react';
 import { CADLayer } from '../types/cad';
 
 interface LayerPanelProps {
@@ -14,6 +14,7 @@ interface LayerPanelProps {
   onToggleVisible: (id: string) => void;
   onToggleLock: (id: string) => void;
   onChangeColor: (id: string, color: string) => void;
+  onRenameLayer: (id: string, newName: string) => void;
   onAddLayer: (name: string, color: string) => void;
   onDeleteLayer: (id: string) => void;
   onClose: () => void;
@@ -39,6 +40,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
   onToggleVisible,
   onToggleLock,
   onChangeColor,
+  onRenameLayer,
   onAddLayer,
   onDeleteLayer,
   onClose
@@ -47,6 +49,8 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
   const [newLayerColor, setNewLayerColor] = useState('#38bdf8');
   const [colorPickerLayerId, setColorPickerLayerId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
+  const [tempLayerName, setTempLayerName] = useState('');
 
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,13 +59,25 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
     setNewLayerName('');
   };
 
+  const handleStartEdit = (layer: CADLayer) => {
+    setEditingLayerId(layer.id);
+    setTempLayerName(layer.name);
+  };
+
+  const handleSaveEdit = (id: string) => {
+    if (tempLayerName.trim()) {
+      onRenameLayer(id, tempLayerName.trim());
+    }
+    setEditingLayerId(null);
+  };
+
   return (
     <div className="absolute top-14 sm:top-20 right-2 sm:right-3 z-30 w-80 max-w-[calc(100vw-16px)] bg-white dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200 dark:border-slate-700/80 rounded-2xl shadow-2xl p-3 sm:p-4 flex flex-col gap-3 animate-in fade-in zoom-in-95 duration-150">
       {/* Header */}
       <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
         <div>
           <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">CAD 도면 레이어</h2>
-          <p className="text-[11px] text-slate-500 dark:text-slate-400">도면층 표시/숨김, 색상 및 레이어 삭제</p>
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">도면층 표시/숨김, 이름 변경 및 삭제</p>
         </div>
         <button
           onClick={onClose}
@@ -72,9 +88,10 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
       </div>
 
       {/* Layer List */}
-      <div className="max-h-64 overflow-y-auto space-y-1.5 pr-1 custom-scrollbar">
+      <div className="max-h-64 overflow-y-auto space-y-1.5 pr-1 custom-scrollbar text-slate-900 dark:text-slate-100">
         {layers.map(layer => {
           const isActive = layer.id === activeLayerId;
+          const isEditing = editingLayerId === layer.id;
 
           if (confirmDeleteId === layer.id) {
             return (
@@ -107,9 +124,9 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                       onDeleteLayer(layer.id);
                       setConfirmDeleteId(null);
                     }}
-                    className="px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white text-[11px] font-bold shadow-sm transition"
+                    className="px-2.5 py-1 rounded-lg bg-red-600 text-white text-[11px] font-bold hover:bg-red-500 transition shadow-sm shadow-red-600/20"
                   >
-                    삭제 확정
+                    삭제
                   </button>
                 </div>
               </div>
@@ -120,37 +137,65 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
             <div
               key={layer.id}
               onClick={() => onSetActiveLayerId(layer.id)}
-              className={`flex items-center justify-between p-2 rounded-xl text-xs cursor-pointer transition ${
-                isActive
-                  ? 'bg-sky-50 dark:bg-sky-950/60 border border-sky-200 dark:border-sky-500/50 text-sky-900 dark:text-white'
-                  : 'hover:bg-slate-50 dark:hover:bg-slate-800/80 text-slate-600 dark:text-slate-300 border border-transparent'
+              className={`group flex items-center justify-between p-2 rounded-xl border transition-all cursor-pointer ${
+                isActive 
+                  ? 'bg-sky-50 dark:bg-sky-900/30 border-sky-200 dark:border-sky-500/50 shadow-sm shadow-sky-500/10' 
+                  : 'bg-white dark:bg-slate-800/40 border-slate-100 dark:border-slate-800/60 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-200 dark:hover:border-slate-700'
               }`}
             >
-              {/* Left: Active Check & Color Swatch & Name */}
-              <div className="flex items-center gap-2 min-w-0">
-                <div
-                  className="w-3.5 h-3.5 rounded-full shrink-0 border border-slate-600 shadow-sm relative group cursor-pointer"
-                  style={{ backgroundColor: layer.color }}
+              {/* Left: Indicator & Name */}
+              <div className="flex items-center gap-2.5 overflow-hidden flex-1">
+                <button
+                  type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     setColorPickerLayerId(colorPickerLayerId === layer.id ? null : layer.id);
                   }}
+                  className="w-4 h-4 rounded-full border border-slate-300 dark:border-slate-600 shrink-0 hover:scale-110 transition shadow-inner"
+                  style={{ backgroundColor: layer.color }}
                   title="색상 변경"
                 />
-
-                <span className="truncate font-medium">
-                  {layer.name}
-                </span>
-
-                {isActive && (
-                  <span className="text-[10px] bg-sky-500/20 text-sky-400 px-1 rounded shrink-0">
-                    작업중
-                  </span>
+                
+                {isEditing ? (
+                  <input
+                    autoFocus
+                    type="text"
+                    value={tempLayerName}
+                    onChange={e => setTempLayerName(e.target.value)}
+                    onBlur={() => handleSaveEdit(layer.id)}
+                    onKeyDown={e => e.key === 'Enter' && handleSaveEdit(layer.id)}
+                    onClick={e => e.stopPropagation()}
+                    className="bg-white dark:bg-slate-900 border border-sky-500 text-slate-900 dark:text-slate-100 text-xs rounded px-1.5 py-0.5 outline-none w-full"
+                  />
+                ) : (
+                  <div className="flex flex-col overflow-hidden">
+                    <span className={`text-xs font-semibold truncate ${isActive ? 'text-sky-700 dark:text-sky-300' : 'text-slate-700 dark:text-slate-300'}`}>
+                      {layer.name}
+                    </span>
+                    {isActive && (
+                      <span className="text-[9px] text-sky-500 dark:text-sky-400 font-medium">현재 작업 레이어</span>
+                    )}
+                  </div>
                 )}
               </div>
 
               {/* Right: Actions */}
-              <div className="flex items-center gap-1 shrink-0">
+              <div className="flex items-center gap-1 shrink-0 ml-1">
+                {/* Rename */}
+                {!isEditing && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleStartEdit(layer);
+                    }}
+                    className="p-1 rounded-lg text-slate-400 hover:text-sky-600 dark:hover:text-sky-400 hover:bg-white dark:hover:bg-slate-800 transition opacity-0 group-hover:opacity-100"
+                    title="이름 변경"
+                  >
+                    <Edit2 className="w-3 h-3" />
+                  </button>
+                )}
+
                 {/* Visibility */}
                 <button
                   type="button"
@@ -159,7 +204,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                     onToggleVisible(layer.id);
                   }}
                   className={`p-1 rounded-lg transition ${
-                    layer.visible ? 'text-slate-500 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white' : 'text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400'
+                    layer.visible ? 'text-slate-500 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white' : 'text-slate-300 dark:text-slate-600 hover:text-slate-50 dark:hover:text-slate-400'
                   }`}
                   title={layer.visible ? '레이어 숨기기' : '레이어 표시'}
                 >
@@ -208,7 +253,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
 
       {/* Color picker popup if open */}
       {colorPickerLayerId && (
-        <div className="p-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl flex items-center justify-between gap-1 shadow-lg">
+        <div className="p-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl flex flex-wrap items-center justify-center gap-1 shadow-lg animate-in slide-in-from-top-1 duration-150">
           {PALETTE.map(c => (
             <button
               key={c}
@@ -217,9 +262,15 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                 setColorPickerLayerId(null);
               }}
               style={{ backgroundColor: c }}
-              className="w-5 h-5 rounded-full border border-slate-600 hover:scale-110 transition"
+              className="w-6 h-6 rounded-full border border-slate-200 dark:border-slate-600 hover:scale-110 transition shadow-sm"
             />
           ))}
+          <button 
+            onClick={() => setColorPickerLayerId(null)}
+            className="p-1 text-slate-400 hover:text-slate-900 dark:hover:text-white"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 
@@ -232,13 +283,15 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
           onChange={e => setNewLayerName(e.target.value)}
           className="flex-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-200 text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-sky-500 shadow-sm"
         />
-        <input
-          type="color"
-          value={newLayerColor}
-          onChange={e => setNewLayerColor(e.target.value)}
-          className="w-8 h-8 rounded-xl bg-transparent border-0 cursor-pointer"
-          title="레이어 색상 선택"
-        />
+        <div className="relative">
+          <input
+            type="color"
+            value={newLayerColor}
+            onChange={e => setNewLayerColor(e.target.value)}
+            className="w-8 h-8 rounded-xl bg-transparent border-0 cursor-pointer p-0 overflow-hidden"
+            title="레이어 색상 선택"
+          />
+        </div>
         <button
           type="submit"
           disabled={!newLayerName.trim()}

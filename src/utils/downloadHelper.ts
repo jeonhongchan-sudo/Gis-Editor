@@ -1,9 +1,15 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { encodeText } from './encoding';
 
 /**
- * Triggers a text file download in the browser with optional encoding
+ * Triggers a text file download in the browser with optional encoding.
+ * Attempts to use showSaveFilePicker if available to allow user to pick location.
  */
-export function downloadTextFile(
+export async function downloadTextFile(
   content: string, 
   filename: string, 
   encoding: 'utf-8' | 'euc-kr' | 'utf-8-bom' = 'utf-8',
@@ -11,17 +17,47 @@ export function downloadTextFile(
 ) {
   const bytes = encodeText(content, encoding);
   const blob = new Blob([bytes as unknown as BlobPart], { type: mimeType });
-  downloadBlob(blob, filename);
+  await smartSaveFile(blob, filename);
 }
 
 /**
- * Triggers a Blob download in the browser
+ * Triggers a Blob download in the browser.
+ * Attempts to use showSaveFilePicker if available to allow user to pick location.
  */
-export function downloadBlob(blob: Blob, filename: string) {
+export async function downloadBlob(blob: Blob, filename: string) {
+  await smartSaveFile(blob, filename);
+}
+
+/**
+ * Common logic to either use File System Access API or fallback to standard download
+ */
+async function smartSaveFile(blob: Blob, suggestedName: string) {
+  // Use File System Access API if supported (Chrome, Edge)
+  if ('showSaveFilePicker' in window) {
+    try {
+      const ext = suggestedName.split('.').pop() || '';
+      const handle = await (window as any).showSaveFilePicker({
+        suggestedName,
+        types: [{
+          description: suggestedName,
+          accept: { [blob.type || 'application/octet-stream']: [`.${ext}`] }
+        }]
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return;
+    } catch (err: any) {
+      if (err.name === 'AbortError') return; // User cancelled
+      console.warn('File system picker failed, falling back to legacy download', err);
+    }
+  }
+
+  // Legacy download fallback
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = filename;
+  a.download = suggestedName;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

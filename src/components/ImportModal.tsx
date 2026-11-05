@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   X, 
   Upload, 
@@ -18,9 +18,11 @@ import {
   MapPin,
   Maximize2,
   FileCode2,
-  Database
+  Database,
+  Globe2,
+  Info
 } from 'lucide-react';
-import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, ProjectState } from '../types/cad';
+import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, ProjectState, CADText } from '../types/cad';
 import { 
   CSVColumnMapping, 
   CSVParseResult, 
@@ -31,18 +33,21 @@ import {
 import { isExcelBuffer, parseExcelWorkbook } from '../utils/excelParser';
 import { parseShapefileZip, parseShpBuffer, SHPParseResult } from '../utils/shpParser';
 import { decodeBufferText, SupportedEncoding } from '../utils/encoding';
+import { parseGeoJson } from '../utils/geoJsonParser';
+import { COORDINATE_SYSTEMS } from '../utils/projections';
 
 interface ImportModalProps {
   onImportCSVPoints: (points: CADPoint[], append: boolean) => void;
   onImportSHP: (data: SHPParseResult, append: boolean) => void;
-  onLoadProject: (state: ProjectState) => void;
+  onLoadProject: (state: ProjectState) => Promise<void>;
   onClose: () => void;
 }
 
 interface StoredRawInput {
-  kind: 'zip' | 'shp-multi' | 'csv' | 'excel';
+  kind: 'zip' | 'shp-multi' | 'csv' | 'excel' | 'geojson';
   filename: string;
   buffer?: ArrayBuffer;
+  json?: any;
   shpFiles?: { name: string; shpBuffer: ArrayBuffer; dbfBuffer?: ArrayBuffer }[];
 }
 
@@ -56,8 +61,10 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 }) => {
   const [appendMode, setAppendMode] = useState<boolean>(true);
 
-  // Encoding State
+  // Encoding & CRS State
   const [selectedEncoding, setSelectedEncoding] = useState<SupportedEncoding>('auto');
+  const [sourceCrs, setSourceCrs] = useState<string>('LOCAL');
+  const [targetCrs, setTargetCrs] = useState<string>('EPSG:5186');
 
   // Progress State
   const [isParsing, setIsParsing] = useState<boolean>(false);
@@ -78,7 +85,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     xCol: 0, yCol: 1, nameCol: 2, zCol: -1, includeElevation: false
   });
 
-  // SHP State
+  // SHP / GeoJSON Result State
   const [shpResult, setShpResult] = useState<SHPParseResult | null>(null);
   const [shpFileName, setShpFileName] = useState<string | null>(null);
 
@@ -99,19 +106,24 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   };
 
   /**
-   * Re-parse data when the user overrides or toggles encoding
+   * Re-parse data when the user overrides encoding or CRS
    */
-  const handleEncodingChange = async (newEnc: SupportedEncoding) => {
-    setSelectedEncoding(newEnc);
+  const handleReParse = async (newEnc?: SupportedEncoding, newSourceCrs?: string) => {
+    const enc = newEnc || selectedEncoding;
+    const sCrs = newSourceCrs || sourceCrs;
+    
+    if (newEnc) setSelectedEncoding(newEnc);
+    if (newSourceCrs) setSourceCrs(newSourceCrs);
+
     const raw = rawInputRef.current;
     if (!raw) return;
 
-    const forced = newEnc === 'auto' ? undefined : (newEnc as 'utf-8' | 'euc-kr');
+    const forced = enc === 'auto' ? undefined : (enc as 'utf-8' | 'euc-kr');
 
     if (raw.kind === 'zip' && raw.buffer) {
       try {
         setIsParsing(true);
-        setParsingStatusMsg('선택한 인코딩으로 Shapefile 압축 파일 재분석 중...');
+        setParsingStatusMsg('Shapefile 압축 파일 재분석 중...');
         setParsingProgress(50);
         const res = await parseShapefileZip(raw.buffer, forced);
         setParsingProgress(100);
@@ -124,12 +136,13 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     } else if (raw.kind === 'shp-multi' && raw.shpFiles) {
       try {
         setIsParsing(true);
-        setParsingStatusMsg('선택한 인코딩으로 SHP/DBF 바이너리 재분석 중...');
+        setParsingStatusMsg('SHP/DBF 바이너리 재분석 중...');
         setParsingProgress(50);
         const combinedPoints: CADPoint[] = [];
         const combinedLines: CADLine[] = [];
         const combinedPolylines: CADPolyline[] = [];
         const combinedPolygons: CADPolygon[] = [];
+        const combinedTexts: CADText[] = [];
         const combinedLayers: CADLayer[] = [];
         const combinedDbfFields = new Set<string>();
         let detectedEnc: 'utf-8' | 'euc-kr' = forced || 'euc-kr';
@@ -137,7 +150,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
         for (let i = 0; i < raw.shpFiles.length; i++) {
           const item = raw.shpFiles[i];
-          const res = parseShpBuffer(item.shpBuffer, item.name, item.dbfBuffer, forced);
+          const res = parseShpBuffer(item.shpBuffer, item.name, item.dbfBuffer, i, forced);
           if (res.detectedEncoding) detectedEnc = res.detectedEncoding;
           if (res.dbfFields) res.dbfFields.forEach(f => combinedDbfFields.add(f));
 
@@ -152,6 +165,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
           combinedLines.push(...res.lines);
           combinedPolylines.push(...res.polylines);
           combinedPolygons.push(...res.polygons);
+          if (res.texts) combinedTexts.push(...res.texts);
 
           if (res.bounds) {
             minX = Math.min(minX, res.bounds.minX);
@@ -167,6 +181,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
           lines: combinedLines,
           polylines: combinedPolylines,
           polygons: combinedPolygons,
+          texts: combinedTexts,
           layers: combinedLayers,
           layerName: raw.filename.replace(/\.[^/.]+$/, ''),
           detectedEncoding: detectedEnc,
@@ -178,8 +193,19 @@ export const ImportModal: React.FC<ImportModalProps> = ({
       } finally {
         setIsParsing(false);
       }
+    } else if (raw.kind === 'geojson' && raw.json) {
+      try {
+        setIsParsing(true);
+        setParsingStatusMsg('GeoJSON 좌표 변환 재실행 중...');
+        const res = parseGeoJson(raw.json, sCrs, targetCrs);
+        setShpResult(res);
+      } catch (err: any) {
+        console.error('Re-parse geojson failed:', err);
+      } finally {
+        setIsParsing(false);
+      }
     } else if (raw.kind === 'csv' && raw.buffer) {
-      const { text } = decodeBufferText(raw.buffer, newEnc);
+      const { text } = decodeBufferText(raw.buffer, enc);
       try {
         const res = parseCSVPreview(text, headerRowIdx);
         setCsvPreview(res);
@@ -196,23 +222,54 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
     const fileArray = Array.from(files);
 
-    // Case 1: .cadgis or .json backup project file
-    const projectFile = fileArray.find(f => {
+    // Case 1: .cadgis, .json, or .geojson backup project or GIS file
+    const potentialJsonFiles = fileArray.filter(f => {
       const ext = f.name.split('.').pop()?.toLowerCase();
-      return ext === 'cadgis' || (ext === 'json' && !f.name.includes('package'));
+      return ext === 'cadgis' || ext === 'json' || ext === 'geojson';
     });
-    if (projectFile && fileArray.length === 1) {
-      try {
-        const buf = await projectFile.arrayBuffer();
-        const text = new TextDecoder('utf-8').decode(buf);
-        const projectData = JSON.parse(text) as ProjectState;
-        if (projectData.points || projectData.lines || projectData.polylines) {
-          onLoadProject(projectData);
-          onClose();
-          return;
+
+    if (potentialJsonFiles.length > 0) {
+      for (const jsonFile of potentialJsonFiles) {
+        try {
+          const buf = await jsonFile.arrayBuffer();
+          const text = new TextDecoder('utf-8').decode(buf);
+          const parsed = JSON.parse(text);
+
+          // Check if it's a ProjectState (our internal format)
+          if (parsed.version || parsed.layers || parsed.points || (parsed.texts && Array.isArray(parsed.texts))) {
+            await onLoadProject(parsed as ProjectState);
+            onClose();
+            return;
+          }
+
+          // Check if it's GeoJSON
+          if (parsed.type === 'FeatureCollection' || parsed.type === 'Feature') {
+            setIsParsing(true);
+            setParsingStatusMsg('GeoJSON 데이터 분석 및 좌표 변환 중...');
+            
+            // Try to auto-detect CRS from GeoJSON if available
+            let detectedSourceCrs = 'LOCAL'; // Default to LOCAL (No conversion) as requested
+            const crsName = parsed.crs?.properties?.name || '';
+            if (crsName.includes('5186') || crsName.includes('Central')) detectedSourceCrs = 'EPSG:5186';
+            else if (crsName.includes('5187') || crsName.includes('East')) detectedSourceCrs = 'EPSG:5187';
+            else if (crsName.includes('5185') || crsName.includes('West')) detectedSourceCrs = 'EPSG:5185';
+            else if (crsName.includes('5179')) detectedSourceCrs = 'EPSG:5179';
+            else if (crsName.includes('4326')) detectedSourceCrs = 'EPSG:4326';
+            else if (crsName.includes('3857')) detectedSourceCrs = 'EPSG:3857';
+            
+            setSourceCrs(detectedSourceCrs);
+            rawInputRef.current = { kind: 'geojson', filename: jsonFile.name, json: parsed };
+            
+            const res = parseGeoJson(parsed, detectedSourceCrs, targetCrs);
+            setShpResult(res);
+            setShpFileName(jsonFile.name);
+            setLoadedFormat('shp');
+            setIsParsing(false);
+            return;
+          }
+        } catch (err) {
+          console.warn('JSON parsing failed or not a recognized format:', err);
         }
-      } catch (err) {
-        console.warn('Not a project JSON file, continuing to text analysis', err);
       }
     }
 
@@ -221,7 +278,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     if (zipFile) {
       try {
         setIsParsing(true);
-        setParsingStatusMsg('Shapefile ZIP 압축 파일 분석 중 (AutoCAD Map 2000 CP949 자동 감지)...');
+        setParsingStatusMsg('Shapefile ZIP 압축 파일 분석 중...');
         setParsingProgress(40);
         const buffer = await zipFile.arrayBuffer();
         rawInputRef.current = { kind: 'zip', filename: zipFile.name, buffer };
@@ -286,6 +343,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         const combinedLines: CADLine[] = [];
         const combinedPolylines: CADPolyline[] = [];
         const combinedPolygons: CADPolygon[] = [];
+        const combinedTexts: CADText[] = [];
         const combinedLayers: CADLayer[] = [];
         const combinedDbfFields = new Set<string>();
         let detectedEnc: 'utf-8' | 'euc-kr' = forced || 'euc-kr';
@@ -293,7 +351,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
         for (let i = 0; i < shpItems.length; i++) {
           const item = shpItems[i];
-          const res = parseShpBuffer(item.shpBuffer, item.name, item.dbfBuffer, forced);
+          const res = parseShpBuffer(item.shpBuffer, item.name, item.dbfBuffer, i, forced);
           if (res.detectedEncoding) detectedEnc = res.detectedEncoding;
           if (res.dbfFields) res.dbfFields.forEach(f => combinedDbfFields.add(f));
 
@@ -308,6 +366,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
           combinedLines.push(...res.lines);
           combinedPolylines.push(...res.polylines);
           combinedPolygons.push(...res.polygons);
+          if (res.texts) combinedTexts.push(...res.texts);
 
           if (res.bounds) {
             minX = Math.min(minX, res.bounds.minX);
@@ -323,6 +382,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
           lines: combinedLines,
           polylines: combinedPolylines,
           polygons: combinedPolygons,
+          texts: combinedTexts,
           layers: combinedLayers,
           layerName: shpFiles[0].name.replace(/\.[^/.]+$/, ''),
           detectedEncoding: detectedEnc,
@@ -379,7 +439,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         setCsvMapping(res.detectedMapping);
         setLoadedFormat('csv');
       } catch (err: any) {
-        alert('지원하지 않는 파일 형식이거나 읽을 수 없는 텍스트입니다. CSV, XLSX, 또는 SHP(.zip/.shp) 파일을 선택해 주세요.');
+        alert('지원하지 않는 파일 형식이거나 읽을 수 없는 텍스트입니다. CSV, GeoJSON, SHP 파일을 선택해 주세요.');
       }
     }
   };
@@ -409,10 +469,10 @@ export const ImportModal: React.FC<ImportModalProps> = ({
           <div>
             <h2 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white flex items-center gap-2">
               <Upload className="w-4 h-4 sm:w-5 sm:h-5 text-sky-600 dark:text-sky-400" />
-              <span>좌표 및 도면 불러오기 (CSV / SHP)</span>
+              <span>외부 데이터 불러오기 (SHP / CSV / GeoJSON)</span>
             </h2>
             <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              AutoCAD Map 2000·구버전 캐드 압축 파일(CP949) 및 최신 UTF-8 Shapefile, CSV, 엑셀을 완전 자동 감지하여 불러옵니다.
+              도면 파일(SHP, GeoJSON), 측점(CSV, Excel), 프로젝트 백업(.cadgis) 파일을 안전하게 불러옵니다.
             </p>
           </div>
           <button 
@@ -449,7 +509,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 type="file" 
                 className="hidden"
                 multiple
-                accept=".xlsx,.xls,.csv,.txt,.shp,.dbf,.shx,.cpg,.zip,.cadgis"
+                accept=".xlsx,.xls,.csv,.txt,.shp,.dbf,.shx,.cpg,.zip,.cadgis,.geojson,.json"
                 onChange={async e => {
                   const files = e.target.files;
                   if (files && files.length > 0) {
@@ -463,17 +523,17 @@ export const ImportModal: React.FC<ImportModalProps> = ({
               </div>
               <div className="text-lg font-bold text-slate-900 dark:text-white">파일 선택하여 불러오기</div>
               <p className="text-sm text-slate-500 dark:text-slate-400 max-w-lg">
-                AutoCAD Map 2000에서 생성한 <strong>ZIP 압축 Shapefile</strong>, <strong>.shp + .dbf 동시 선택</strong>, <strong>CSV / XLSX</strong> 파일을 지원합니다.
+                <strong>SHP (ZIP)</strong>, <strong>GeoJSON</strong>, <strong>CSV</strong>, <strong>Excel</strong> 및 프로젝트 백업을 지원합니다.
               </p>
               <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
                 <span className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 text-[11px] text-emerald-600 dark:text-emerald-400 border border-slate-200 dark:border-slate-700 shadow-sm">
-                  ✓ AutoCAD Map 2000 한글 CP949 자동 감지
+                  ✓ SHP / GeoJSON 좌표계 변환 지원
                 </span>
                 <span className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 text-[11px] text-sky-600 dark:text-sky-400 border border-slate-200 dark:border-slate-700 shadow-sm">
-                  ✓ DBF 속성 및 OD 데이터 자동 추출
+                  ✓ AutoCAD DXF 변환 데이터 지원
                 </span>
                 <span className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 text-[11px] text-purple-600 dark:text-purple-400 border border-slate-200 dark:border-slate-700 shadow-sm">
-                  ✓ .shp + .dbf 다중 선택 지원
+                  ✓ 프로젝트 누적 백업 (.cadgis)
                 </span>
               </div>
             </div>
@@ -494,7 +554,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
             </div>
           )}
 
-          {/* SHP Preview & Confirmation */}
+          {/* SHP / GeoJSON Preview & Confirmation */}
           {loadedFormat === 'shp' && shpResult && (
             <div className="space-y-4 animate-in fade-in">
               <div className="p-4 bg-white dark:bg-slate-950 border border-emerald-100 dark:border-emerald-700/60 rounded-2xl space-y-4 shadow-sm">
@@ -503,10 +563,10 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                     <Archive className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                     <div>
                       <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
-                        {shpFileName || 'Shapefile 데이터'}
+                        {rawInputRef.current?.kind === 'geojson' ? 'GeoJSON' : 'Shapefile'} 데이터 감지됨
                       </h3>
                       <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                        AutoCAD Map 2000 및 ESRI 표준 Shapefile 도형·속성이 정상 분석되었습니다.
+                        {shpFileName || 'GIS 도면 데이터'}
                       </p>
                     </div>
                   </div>
@@ -516,51 +576,68 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                   </span>
                 </div>
 
-                {/* Encoding Control & Feedback Bar */}
-                <div className="p-3 bg-slate-50 dark:bg-slate-900/80 border border-slate-100 dark:border-slate-800 rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-slate-700 dark:text-slate-300">인코딩 감지 결과:</span>
-                    <span className="px-2 py-0.5 rounded text-[11px] bg-sky-50 dark:bg-sky-950 border border-sky-200 dark:border-sky-800 text-sky-700 dark:text-sky-300 font-bold">
-                      {shpResult.detectedEncoding === 'euc-kr' 
-                        ? 'CP949 / EUC-KR (AutoCAD Map 2000 한국어 감지)' 
-                        : 'UTF-8 (국제 표준)'}
-                    </span>
+                {/* Encoding & CRS Control Bar */}
+                <div className="p-3 bg-slate-50 dark:bg-slate-900/80 border border-slate-100 dark:border-slate-800 rounded-xl space-y-3">
+                  {/* Encoding (Only for SHP) */}
+                  {rawInputRef.current?.kind !== 'geojson' && (
+                    <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-slate-700 dark:text-slate-300">텍스트 인코딩:</span>
+                        <span className="px-2 py-0.5 rounded text-[11px] bg-sky-50 dark:bg-sky-950 border border-sky-200 dark:border-sky-800 text-sky-700 dark:text-sky-300 font-bold">
+                          {shpResult.detectedEncoding === 'euc-kr' 
+                            ? 'CP949 / EUC-KR (한글 감지)' 
+                            : 'UTF-8 (유니코드)'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleReParse('auto')}
+                          className={`px-2 py-1 rounded-lg text-[11px] font-semibold transition ${selectedEncoding === 'auto' ? 'bg-sky-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'}`}
+                        >
+                          자동
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleReParse('euc-kr')}
+                          className={`px-2 py-1 rounded-lg text-[11px] font-semibold transition ${selectedEncoding === 'euc-kr' ? 'bg-sky-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'}`}
+                        >
+                          CP949
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleReParse('utf-8')}
+                          className={`px-2 py-1 rounded-lg text-[11px] font-semibold transition ${selectedEncoding === 'utf-8' ? 'bg-sky-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'}`}
+                        >
+                          UTF-8
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* CRS Selection */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <div className="flex items-center gap-2">
+                      <Globe2 className="w-3.5 h-3.5 text-sky-500" />
+                      <span className="font-semibold text-slate-700 dark:text-slate-300">원본 좌표계 설정:</span>
+                    </div>
+                    <select
+                      value={sourceCrs}
+                      onChange={e => handleReParse(undefined, e.target.value)}
+                      className="flex-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100 text-[11px] rounded-lg px-2.5 py-1.5 focus:outline-none shadow-sm"
+                    >
+                      <option value="LOCAL">변환 없음 (현재 도면과 동일한 원본 좌표)</option>
+                      {Object.values(COORDINATE_SYSTEMS).filter(cs => cs.code !== 'LOCAL').map(cs => (
+                        <option key={cs.code} value={cs.code}>{cs.code}: {cs.name}</option>
+                      ))}
+                    </select>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] text-slate-400">인코딩 선택:</span>
-                    <button
-                      type="button"
-                      onClick={() => handleEncodingChange('auto')}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
-                        selectedEncoding === 'auto'
-                          ? 'bg-sky-600 text-white shadow-sm'
-                          : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700 hover:text-slate-900 dark:hover:text-white'
-                      }`}
-                    >
-                      자동 감지
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleEncodingChange('euc-kr')}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
-                        selectedEncoding === 'euc-kr'
-                          ? 'bg-sky-600 text-white shadow-sm'
-                          : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700 hover:text-slate-900 dark:hover:text-white'
-                      }`}
-                    >
-                      CP949 (AutoCAD Map)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleEncodingChange('utf-8')}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
-                        selectedEncoding === 'utf-8'
-                          ? 'bg-sky-600 text-white shadow-sm'
-                          : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700 hover:text-slate-900 dark:hover:text-white'
-                      }`}
-                    >
-                      UTF-8
-                    </button>
+                  
+                  <div className="flex items-start gap-2 p-2 bg-sky-50 dark:bg-sky-950/40 rounded-lg border border-sky-100 dark:border-sky-900/50">
+                    <Info className="w-3.5 h-3.5 text-sky-600 shrink-0 mt-0.5" />
+                    <p className="text-[10px] text-sky-700 dark:text-sky-300 leading-normal">
+                      불러온 데이터가 현재 도면 좌표계(<strong>{targetCrs}</strong>)와 다른 경우, 위 목록에서 원본 좌표계를 선택하면 자동으로 위치가 변환됩니다. (GeoJSON은 기본 WGS84 위경도)
+                    </p>
                   </div>
                 </div>
 
@@ -584,55 +661,25 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                   </div>
                 </div>
 
-                {/* DBF / OD Data Attributes Badges */}
-                {shpResult.dbfFields && shpResult.dbfFields.length > 0 && (
-                  <div className="p-3 bg-slate-50 dark:bg-slate-900/80 border border-slate-100 dark:border-slate-800 rounded-xl space-y-1.5">
-                    <div className="flex items-center justify-between text-[11px]">
-                      <span className="font-semibold text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
-                        <Database className="w-3.5 h-3.5" />
-                        AutoCAD Map OD 데이터(DBF 속성) 감지 완료 ({shpResult.dbfFields.length}개 필드)
-                      </span>
-                      <span className="text-[10px] text-slate-400">선 및 측점 속성에 완벽 보존</span>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto">
-                      {shpResult.dbfFields.map((f, i) => (
-                        <span key={i} className="px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-[10px] font-mono">
-                          {f}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Sample Point Text Preview (Instant verification of Korean text without mojibake) */}
+                {/* Sample Point Text Preview */}
                 {shpResult.points.length > 0 && (
                   <div className="p-3 bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl space-y-2">
-                    <div className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 flex items-center justify-between">
-                      <span>측점 텍스트 디코딩 미리보기 (상위 {Math.min(5, shpResult.points.length)}개)</span>
-                      <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1">
-                        <Check className="w-3 h-3" />
-                        한글 및 영문 텍스트 디코딩 정상 확인
-                      </span>
-                    </div>
+                    <div className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">디코딩 미리보기 (상위 {Math.min(3, shpResult.points.length)}개)</div>
                     <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 text-[11px]">
                       <table className="w-full text-left font-mono">
                         <thead className="bg-slate-100 dark:bg-slate-900 text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800 text-[10px]">
                           <tr>
-                            <th className="py-1.5 px-3">#</th>
-                            <th className="py-1.5 px-3 text-amber-700 dark:text-amber-300">도면 텍스트 (측점명)</th>
-                            <th className="py-1.5 px-3 text-sky-600 dark:text-sky-400">CAD X (수평)</th>
-                            <th className="py-1.5 px-3 text-sky-600 dark:text-sky-400">CAD Y (수직)</th>
-                            <th className="py-1.5 px-3 text-slate-500">표고(Z)</th>
+                            <th className="py-1.5 px-3">텍스트 (측점명)</th>
+                            <th className="py-1.5 px-3">CAD X</th>
+                            <th className="py-1.5 px-3">CAD Y</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-700 dark:text-slate-300">
-                          {shpResult.points.slice(0, 5).map((pt, idx) => (
-                            <tr key={pt.id} className="hover:bg-slate-50 dark:hover:bg-slate-900/50">
-                              <td className="py-1.5 px-3 text-slate-400">{idx + 1}</td>
-                              <td className="py-1.5 px-3 font-bold text-amber-600 dark:text-amber-300">{pt.name}</td>
-                              <td className="py-1.5 px-3 text-sky-600 dark:text-sky-400">{pt.x.toFixed(3)}</td>
-                              <td className="py-1.5 px-3 text-sky-600 dark:text-sky-400">{pt.y.toFixed(3)}</td>
-                              <td className="py-1.5 px-3 text-slate-400">{pt.z !== undefined ? pt.z.toFixed(3) : '-'}</td>
+                          {shpResult.points.slice(0, 3).map((pt) => (
+                            <tr key={pt.id}>
+                              <td className="py-1.5 px-3 font-bold text-amber-600">{pt.name}</td>
+                              <td className="py-1.5 px-3 text-sky-600">{pt.x.toFixed(3)}</td>
+                              <td className="py-1.5 px-3 text-sky-600">{pt.y.toFixed(3)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -661,7 +708,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold rounded-xl shadow-lg shadow-emerald-600/30 transition active:scale-95 flex items-center justify-center gap-2"
               >
                 <Check className="w-4 h-4" />
-                <span>SHP 데이터 도면에 배치하기 (화면 자동맞춤)</span>
+                <span>도면에 데이터 배치하기 (화면 자동맞춤)</span>
               </button>
             </div>
           )}
@@ -754,9 +801,6 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                         ))}
                       </select>
                     </div>
-                    <span className="text-[11px] text-slate-400 dark:text-slate-400 italic">
-                      * 측점표 및 SHP/CSV 내보내기 속성에만 저장됩니다.
-                    </span>
                   </div>
                 )}
 
@@ -765,7 +809,6 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                   <div className="pt-2 border-t border-slate-100 dark:border-slate-800/80 space-y-1.5">
                     <div className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold flex items-center justify-between">
                       <span>데이터 미리보기 (상위 {Math.min(3, csvPreview.sampleRows.length)}행)</span>
-                      <span className="text-slate-400 dark:text-slate-500">도면에는 점과 함께 항목 텍스트가 표시됩니다</span>
                     </div>
                     <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 text-[11px] shadow-inner">
                       <table className="w-full text-left font-mono">
@@ -811,7 +854,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
         <div className="p-4 border-t border-slate-100 dark:border-slate-800 flex justify-between bg-slate-50/50 dark:bg-slate-950/50">
           <button 
-            onClick={() => setLoadedFormat(null)} 
+            onClick={() => { setLoadedFormat(null); setShpResult(null); rawInputRef.current = null; }} 
             className="px-4 py-2 text-xs text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition"
           >
             다른 파일 선택

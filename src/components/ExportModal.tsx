@@ -76,7 +76,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       });
       const cleanName = (shpFileName.trim() || `gis_shapefiles_${todayStr}`).replace(/\.zip$/i, '');
       const filename = `${cleanName}.zip`;
-      downloadBlob(blob, filename);
+      await downloadBlob(blob, filename);
       showSuccess(`SHP 압축 파일(${filename})이 정상 생성되었습니다.`);
     } catch (err: any) {
       alert('Shapefile 생성 중 오류가 발생했습니다: ' + err.message);
@@ -86,19 +86,19 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   };
 
   // 2. Export Points CSV
-  const handleExportCSV = () => {
+  const handleExportCSV = async () => {
     const csvLines = ['번호,측점명,X(Easting),Y(Northing),고도(Z),레이어'];
     points.forEach((p, idx) => {
       csvLines.push(`${idx + 1},"${p.name}",${p.x.toFixed(3)},${p.y.toFixed(3)},${p.z !== undefined ? p.z.toFixed(3) : ''},"${p.layerId}"`);
     });
     const cleanName = (csvFileName.trim() || `survey_coordinates_${todayStr}`).replace(/\.csv$/i, '');
     const filename = `${cleanName}.csv`;
-    downloadTextFile(csvLines.join('\n'), filename, csvEncoding, 'text/csv');
+    await downloadTextFile(csvLines.join('\n'), filename, csvEncoding, 'text/csv');
     showSuccess(`${filename} 측점 CSV가 저장되었습니다.`);
   };
 
   // 3. Export Project JSON / CADGIS
-  const handleExportProject = () => {
+  const handleExportProject = async () => {
     const cleanName = (projectFileName.trim() || `cad_project_${todayStr}`).replace(/\.cadgis$/i, '');
     const project: ProjectState = {
       version: '1.0.0',
@@ -112,7 +112,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     };
     const jsonStr = JSON.stringify(project, null, 2);
     const filename = `${cleanName}.cadgis`;
-    downloadTextFile(jsonStr, filename, 'utf-8', 'application/json');
+    await downloadTextFile(jsonStr, filename, 'utf-8', 'application/json');
     showSuccess(`프로젝트 누적 백업 파일(${filename})이 저장되었습니다.`);
   };
 
