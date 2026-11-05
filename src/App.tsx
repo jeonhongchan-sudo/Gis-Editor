@@ -47,16 +47,26 @@ const DEFAULT_LAYERS: CADLayer[] = [
 ];
 
 export default function App() {
-  // Local Project Persistence
-  const [currentProjectId, setCurrentProjectId] = useState<number | null>(() => {
-    const saved = localStorage.getItem('last_project_id');
-    return saved ? parseInt(saved) : null;
-  });
+  // Local Project Persistence (Disabled as per user request: Reset on startup)
+  const [currentProjectId, setCurrentProjectId] = useState<number | null>(null);
 
   // Theme state
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     return (localStorage.getItem('theme') as 'light' | 'dark') || 'dark';
   });
+
+  // On Mount: Clear previous session data to ensure a "Strong Initialization"
+  useEffect(() => {
+    const initApp = async () => {
+      // Clear persistent IDs so we always start fresh
+      localStorage.removeItem('last_project_id');
+      
+      // Optionally clear all IndexedDB data if user wants "absolute" reset
+      // For now, just ensuring we start with currentProjectId = null is enough
+      // to trigger a new project creation upon first action.
+    };
+    initApp();
+  }, []);
 
   useEffect(() => {
     if (theme === 'dark') {
@@ -123,8 +133,6 @@ export default function App() {
   useEffect(() => {
     if (currentProjectId === null) return;
     
-    localStorage.setItem('last_project_id', currentProjectId.toString());
-
     const loadData = async () => {
       const pLayers = await db.layers.where('projectId').equals(currentProjectId).toArray();
       const pPoints = await db.points.where('projectId').equals(currentProjectId).toArray();
@@ -142,7 +150,9 @@ export default function App() {
       setPolylines(pPolylines);
       setPolygons(pPolygons);
       setTexts(pTexts);
-      handleZoomExtents();
+      
+      // Delay zoom slightly to ensure state is committed
+      setTimeout(() => handleZoomExtents(), 50);
     };
 
     loadData();
@@ -459,28 +469,40 @@ export default function App() {
 
     if (!append) {
       // 1. Clean DB for current project BEFORE state update
-      await Promise.all([
-        db.layers.where('projectId').equals(pid).delete(),
-        db.points.where('projectId').equals(pid).delete(),
-        db.lines.where('projectId').equals(pid).delete(),
-        db.polylines.where('projectId').equals(pid).delete(),
-        db.polygons.where('projectId').equals(pid).delete(),
-        db.texts.where('projectId').equals(pid).delete()
-      ]);
+      if (pid !== null) {
+        await Promise.all([
+          db.layers.where('projectId').equals(pid).delete(),
+          db.points.where('projectId').equals(pid).delete(),
+          db.lines.where('projectId').equals(pid).delete(),
+          db.polylines.where('projectId').equals(pid).delete(),
+          db.polygons.where('projectId').equals(pid).delete(),
+          db.texts.where('projectId').equals(pid).delete()
+        ]);
+      }
 
-      // 2. Clear current UI state
+      // 2. Clear current UI state COMPLETELY
       setSelectedEntityIds([]); 
       setMultiSelectMode(false);
       setActivePoints([]); 
+      
+      // Explicitly set to empty first to force React re-render of clean state
+      setPoints([]);
+      setLines([]);
+      setPolylines([]);
+      setPolygons([]);
+      setTexts([]);
+      setLayers(DEFAULT_LAYERS);
 
-      // 3. Set new state
-      setLayers(incomingLayers);
-      setActiveLayerId(incomingLayers[0].id);
-      setPoints(data.points);
-      setLines(data.lines);
-      setPolylines(data.polylines);
-      setPolygons(data.polygons);
-      setTexts(data.texts || []);
+      // 3. Set new state with a tiny delay to ensure "잔상" (ghosting) is cleared
+      setTimeout(() => {
+        setLayers(incomingLayers);
+        setActiveLayerId(incomingLayers[0].id);
+        setPoints(data.points);
+        setLines(data.lines);
+        setPolylines(data.polylines);
+        setPolygons(data.polygons);
+        setTexts(data.texts || []);
+      }, 0);
 
       // For DB save, use the verified incomingLayers list
       data.layers = incomingLayers;
@@ -891,18 +913,32 @@ export default function App() {
       db.texts.bulkPut(texts.map(t => ({ ...t, projectId: pid })))
     ]);
 
-    // 3. Update current project ID (triggers loading useEffect, but data is already there)
-    setCurrentProjectId(pid);
-
-    // 4. Manually update state for immediate UI feedback
-    setLayers(layers);
-    setPoints(points);
-    setLines(lines);
-    setPolylines(polylines);
-    setPolygons(polygons);
-    setTexts(texts);
+    // 3. Perform atomic UI state cleanup
+    setSelectedEntityIds([]);
+    setMultiSelectMode(false);
+    setActivePoints([]);
     
-    setTimeout(() => handleZoomExtents(points), 150);
+    // Explicitly set to empty first to force React re-render of clean state
+    setPoints([]);
+    setLines([]);
+    setPolylines([]);
+    setPolygons([]);
+    setTexts([]);
+    setLayers(DEFAULT_LAYERS);
+
+    // 4. Update current project ID and state with a tiny delay
+    setTimeout(() => {
+      setCurrentProjectId(pid);
+      setLayers(layers);
+      setPoints(points);
+      setLines(lines);
+      setPolylines(polylines);
+      setPolygons(polygons);
+      setTexts(texts);
+      
+      setTimeout(() => handleZoomExtents(points), 100);
+    }, 0);
+
     pushHistory('프로젝트 가져오기');
   }
 

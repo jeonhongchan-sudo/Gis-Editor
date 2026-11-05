@@ -84,31 +84,18 @@ export function parseGeoJson(
       const dxftype = (props.dxftype || props.entity || '').toUpperCase();
       
       if (dxftype === 'TEXT') {
-        // Create Text Entity
-        const textEntity: CADText = {
-          id: props.id || `gj-txt-${Date.now()}-${idx}`,
+        const name = props.text || props.TEXTSTRING || props.label || props.name || `TXT_${idx + 1}`;
+        // Since CADCanvas draws pt.name, we don't need a separate Text entity for survey points.
+        // This prevents the "double name" overlapping issue (잔상 현상).
+        points.push({
+          id: props.id || `gj-pt-txt-${Date.now()}-${idx}`,
+          name: String(name),
           x: pt.x,
           y: pt.y,
-          text: props.text || props.TEXTSTRING || '',
-          height: Number(props.height || props.TEXT_SIZE || 2.0),
-          rotation: Number(props.rotation || props.TEXT_ANGLE || 0),
+          z: pt.z,
           layerId: layer.id,
-          color: props.color
-        };
-        texts.push(textEntity);
-
-        // ALSO create a CADPoint if it looks like a survey station (requested by user)
-        if (props.TEXTSTRING || props.text) {
-          points.push({
-            id: props.id ? `pt-${props.id}` : `gj-pt-txt-${Date.now()}-${idx}`,
-            name: String(props.TEXTSTRING || props.text),
-            x: pt.x,
-            y: pt.y,
-            z: pt.z,
-            layerId: layer.id,
-            isSurveyNode: true
-          });
-        }
+          isSurveyNode: true
+        });
       } else {
         const name = props.TEXTSTRING || props.text || props.label || props.name || props.PT_NAME || `PT_${idx + 1}`;
         points.push({
