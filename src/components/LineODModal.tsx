@@ -199,12 +199,26 @@ export const LineODModal: React.FC<LineODModalProps> = ({
 
   // Total statistics
   const totalLength = useMemo(() => {
+    // JavaScript numbers (64-bit float) already provide ~15-17 significant decimal digits.
     return allLinesList.reduce((sum, l) => sum + l.length, 0);
   }, [allLinesList]);
 
   const targetTotalLength = useMemo(() => {
     return targetLines.reduce((sum, l) => sum + l.length, 0);
   }, [targetLines]);
+
+  // Layer-by-layer summary
+  const layerSummary = useMemo(() => {
+    const summary = new Map<string, { count: number; length: number }>();
+    allLinesList.forEach(l => {
+      const existing = summary.get(l.layerId) || { count: 0, length: 0 };
+      summary.set(l.layerId, {
+        count: existing.count + 1,
+        length: existing.length + l.length
+      });
+    });
+    return Array.from(summary.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [allLinesList]);
 
   const handleAddCustomField = () => {
     setCustomFields(prev => [...prev, { key: '', value: '' }]);
@@ -714,6 +728,29 @@ export const LineODModal: React.FC<LineODModalProps> = ({
                 </button>
               </div>
             </div>
+
+            {/* Layer-by-Layer Length Summary */}
+            {allLinesList.length > 0 && (
+              <div className="px-3 pb-3 bg-white dark:bg-slate-950/40">
+                <div className="p-2.5 bg-slate-50/50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800 rounded-xl flex flex-wrap gap-x-4 gap-y-2 items-center">
+                  <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-500 pr-2 border-r border-slate-200 dark:border-slate-700">
+                    <Layers className="w-3.5 h-3.5" />
+                    <span>레이어별 집계:</span>
+                  </div>
+                  {layerSummary.map(([layerId, stats]) => (
+                    <div key={layerId} className="flex items-center gap-2 text-[11px]">
+                      <span className="text-slate-400 font-mono">{layerId.replace(/^layer-/, '')}:</span>
+                      <span className="font-bold text-sky-600 dark:text-sky-400 font-mono">{stats.length.toFixed(3)}m</span>
+                      <span className="text-[10px] text-slate-400">({stats.count}개)</span>
+                    </div>
+                  ))}
+                  <div className="ml-auto flex items-center gap-2 text-[11px] bg-sky-100 dark:bg-sky-900/40 px-2 py-0.5 rounded-lg border border-sky-200 dark:border-sky-800">
+                    <span className="font-bold text-sky-700 dark:text-sky-300 uppercase">전체 합계:</span>
+                    <strong className="font-mono text-sky-700 dark:text-sky-300">{totalLength.toFixed(3)}m</strong>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Table */}
             <div className="flex-1 overflow-auto custom-scrollbar bg-white dark:bg-slate-900">

@@ -112,7 +112,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         {/* Polyline (연속선 드로잉 - 측점 연결) */}
         <button
           onClick={() => {
-            if (tool !== 'polyline') onCancelDrawing();
             setTool('polyline');
           }}
           title="연속선 / 측점 연결 (Polyline)"
@@ -131,7 +130,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         {/* Line (단일선) */}
         <button
           onClick={() => {
-            if (tool !== 'line') onCancelDrawing();
             setTool('line');
           }}
           title="단일선 (Line)"
@@ -147,7 +145,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         {/* Polygon (면적/폐합 폴리곤) */}
         <button
           onClick={() => {
-            if (tool !== 'polygon') onCancelDrawing();
             setTool('polygon');
           }}
           title="면적 폐합 폴리곤 (Polygon)"
@@ -163,7 +160,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         {/* Add Point (수동 측점) */}
         <button
           onClick={() => {
-            if (tool !== 'point') onCancelDrawing();
             setTool('point');
           }}
           title="측점 생성"
@@ -193,7 +189,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         {/* Measure (거리 측정) */}
         <button
           onClick={() => {
-            if (tool !== 'measure') onCancelDrawing();
             setTool('measure');
           }}
           title="거리/구간 측정 (Measure)"
@@ -313,7 +308,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
           {/* Polyline */}
           <button
-            onClick={() => { if (tool !== 'polyline') onCancelDrawing(); setTool('polyline'); }}
+            onClick={() => { setTool('polyline'); }}
             className={`p-2 rounded-xl transition flex flex-col items-center gap-0.5 relative ${
               tool === 'polyline' ? 'bg-sky-500 text-white' : 'text-slate-500 dark:text-slate-400'
             }`}
@@ -327,7 +322,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
           {/* Line */}
           <button
-            onClick={() => { if (tool !== 'line') onCancelDrawing(); setTool('line'); }}
+            onClick={() => { setTool('line'); }}
             className={`p-2 rounded-xl transition flex flex-col items-center gap-0.5 ${
               tool === 'line' ? 'bg-sky-500 text-white' : 'text-slate-500 dark:text-slate-400'
             }`}
@@ -338,7 +333,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
           {/* Polygon */}
           <button
-            onClick={() => { if (tool !== 'polygon') onCancelDrawing(); setTool('polygon'); }}
+            onClick={() => { setTool('polygon'); }}
             className={`p-2 rounded-xl transition flex flex-col items-center gap-0.5 ${
               tool === 'polygon' ? 'bg-sky-500 text-white' : 'text-slate-500 dark:text-slate-400'
             }`}

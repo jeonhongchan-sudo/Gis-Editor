@@ -39,7 +39,7 @@ import { SHPParseResult } from './utils/shpParser';
 const DEFAULT_LAYERS: CADLayer[] = [
   {
     id: 'layer-0',
-    name: '0 (기본도면)',
+    name: '0',
     color: '#38bdf8',
     visible: true,
     locked: false,
@@ -456,7 +456,7 @@ export default function App() {
     const incomingLayers = data.layers && data.layers.length > 0 ? data.layers : [
       {
         id: `layer-0`,
-        name: data.layerName || '기본 레이어',
+        name: '0',
         color: '#38bdf8',
         visible: true,
         locked: false,

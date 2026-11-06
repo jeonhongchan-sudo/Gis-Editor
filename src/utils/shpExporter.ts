@@ -408,11 +408,11 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       encoding
     );
 
-    zip.file('cad_points.shp', shp);
-    zip.file('cad_points.shx', shx);
-    zip.file('cad_points.dbf', dbf);
-    zip.file('cad_points.prj', prjContent);
-    zip.file('cad_points.cpg', cpgContent);
+    zip.file('points_layer_0.shp', shp);
+    zip.file('points_layer_0.shx', shx);
+    zip.file('points_layer_0.dbf', dbf);
+    zip.file('points_layer_0.prj', prjContent);
+    zip.file('points_layer_0.cpg', cpgContent);
   }
 
   // Combine single lines and polylines into polyline features with Object Data (OD)
