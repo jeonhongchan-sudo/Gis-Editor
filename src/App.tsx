@@ -17,7 +17,8 @@ import {
   Point2D, 
   ProjectState, 
   SnapPoint, 
-  ToolMode 
+  ToolMode,
+  UnifiedCADData 
 } from './types/cad';
 import { CADCanvas } from './components/CADCanvas';
 import { Toolbar } from './components/Toolbar';
@@ -55,15 +56,32 @@ export default function App() {
     return (localStorage.getItem('theme') as 'light' | 'dark') || 'dark';
   });
 
-  // On Mount: Clear previous session data to ensure a "Strong Initialization"
+  // On Mount: Clear previous session data to ensure a "Strong Initialization" as requested
+  // We use sessionStorage to ensure this only happens ONCE per tab session, 
+  // preventing accidental resets during re-renders or temporary reloads.
   useEffect(() => {
     const initApp = async () => {
+      if (sessionStorage.getItem('cad_app_initialized')) return;
+      
       // Clear persistent IDs so we always start fresh
       localStorage.removeItem('last_project_id');
       
-      // Optionally clear all IndexedDB data if user wants "absolute" reset
-      // For now, just ensuring we start with currentProjectId = null is enough
-      // to trigger a new project creation upon first action.
+      // Strong reset: Clear all IndexedDB data on startup
+      try {
+        await Promise.all([
+          db.projects.clear(),
+          db.layers.clear(),
+          db.points.clear(),
+          db.lines.clear(),
+          db.polylines.clear(),
+          db.polygons.clear(),
+          db.texts.clear()
+        ]);
+        sessionStorage.setItem('cad_app_initialized', 'true');
+        console.log('App initialization: Local database cleared for new session.');
+      } catch (err) {
+        console.warn('DB clear failed during init:', err);
+      }
     };
     initApp();
   }, []);
@@ -420,46 +438,25 @@ export default function App() {
     pushHistory('모든 측점 삭제');
   };
 
-  const handleImportCSVPoints = async (newPoints: CADPoint[], append: boolean) => {
+  /**
+   * Centralized Import Logic: Unified Data Management for DXF, SHP, CSV, GeoJSON
+   * This ensures all sources are stored in the same IndexedDB schema and state.
+   */
+  const handleImportUnifiedData = async (data: UnifiedCADData, append: boolean) => {
     let pid = currentProjectId;
-    if (pid === null) {
-      pid = await db.projects.add({ name: '현장 측량 프로젝트', createdAt: Date.now(), updatedAt: Date.now() });
-      setCurrentProjectId(pid);
-      for (const l of DEFAULT_LAYERS) {
-        await db.layers.add({ ...l, projectId: pid });
-      }
-    }
-
-    if (append) {
-      setPoints(prev => [...prev, ...newPoints]);
-    } else {
-      setPoints(newPoints);
-      setLines([]); setPolylines([]); setPolygons([]); setTexts([]);
-      await Promise.all([
-        db.points.where('projectId').equals(pid).delete(),
-        db.lines.where('projectId').equals(pid).delete(),
-        db.polylines.where('projectId').equals(pid).delete(),
-        db.polygons.where('projectId').equals(pid).delete(),
-        db.texts.where('projectId').equals(pid).delete()
-      ]);
-    }
-    
-    await db.points.bulkAdd(newPoints.map(p => ({ ...p, projectId: pid! })));
-    handleZoomExtents();
-    pushHistory('CSV 측점 불러오기');
-  };
-
-  const handleImportSHP = async (data: SHPParseResult, append: boolean) => {
-    let pid = currentProjectId;
-    if (pid === null) {
-      pid = await db.projects.add({ name: 'SHP GIS 프로젝트', createdAt: Date.now(), updatedAt: Date.now() });
-      setCurrentProjectId(pid);
+    const isNewProject = pid === null;
+    if (isNewProject) {
+      pid = await db.projects.add({ 
+        name: data.layerName || '현장 프로젝트', 
+        createdAt: Date.now(), 
+        updatedAt: Date.now() 
+      });
     }
 
     const incomingLayers = data.layers && data.layers.length > 0 ? data.layers : [
       {
-        id: `layer-${data.layerName}`,
-        name: data.layerName,
+        id: `layer-0`,
+        name: data.layerName || '기본 레이어',
         color: '#38bdf8',
         visible: true,
         locked: false,
@@ -467,25 +464,31 @@ export default function App() {
       }
     ];
 
+    let finalPoints = data.points;
+    let finalLines = data.lines;
+    let finalPolylines = data.polylines;
+    let finalPolygons = data.polygons;
+    let finalTexts = data.texts || [];
+    let finalLayers = incomingLayers;
+
     if (!append) {
       // 1. Clean DB for current project BEFORE state update
-      if (pid !== null) {
+      if (!isNewProject) {
         await Promise.all([
-          db.layers.where('projectId').equals(pid).delete(),
-          db.points.where('projectId').equals(pid).delete(),
-          db.lines.where('projectId').equals(pid).delete(),
-          db.polylines.where('projectId').equals(pid).delete(),
-          db.polygons.where('projectId').equals(pid).delete(),
-          db.texts.where('projectId').equals(pid).delete()
+          db.layers.where('projectId').equals(pid!).delete(),
+          db.points.where('projectId').equals(pid!).delete(),
+          db.lines.where('projectId').equals(pid!).delete(),
+          db.polylines.where('projectId').equals(pid!).delete(),
+          db.polygons.where('projectId').equals(pid!).delete(),
+          db.texts.where('projectId').equals(pid!).delete()
         ]);
       }
 
-      // 2. Clear current UI state COMPLETELY
+      // 2. Clear current UI state
       setSelectedEntityIds([]); 
       setMultiSelectMode(false);
       setActivePoints([]); 
       
-      // 3. Set new state directly (atomic update)
       setLayers(incomingLayers);
       setActiveLayerId(incomingLayers[0].id);
       setPoints(data.points);
@@ -493,16 +496,13 @@ export default function App() {
       setPolylines(data.polylines);
       setPolygons(data.polygons);
       setTexts(data.texts || []);
-
-      // For DB save, use the verified incomingLayers list
-      data.layers = incomingLayers;
     } else {
-      // Robust Layer Merging: Map incomingLayerId -> existingLayerId where names match
+      // 3. Robust Append/Merge Logic
       const idMap = new Map<string, string>();
       const existingLayersByName = new Map(layers.map(l => [l.name.trim(), l]));
       const layersToAppend: CADLayer[] = [];
 
-      incomingLayers.forEach(newLayer => {
+      incomingLayers.forEach((newLayer: CADLayer) => {
         const nameKey = newLayer.name.trim();
         const existing = existingLayersByName.get(nameKey);
         if (existing) {
@@ -516,11 +516,12 @@ export default function App() {
       const remap = <T extends { layerId: string }>(items: T[]): T[] => 
         items.map(item => ({ ...item, layerId: idMap.get(item.layerId) || item.layerId }));
 
-      const remappedPoints = remap(data.points);
-      const remappedLines = remap(data.lines);
-      const remappedPolylines = remap(data.polylines);
-      const remappedPolygons = remap(data.polygons);
-      const remappedTexts = remap(data.texts || []);
+      finalPoints = remap(data.points);
+      finalLines = remap(data.lines);
+      finalPolylines = remap(data.polylines);
+      finalPolygons = remap(data.polygons);
+      finalTexts = remap(data.texts || []);
+      finalLayers = layersToAppend;
 
       setLayers(prev => {
         const existingIds = new Set(prev.map(l => l.id));
@@ -532,29 +533,14 @@ export default function App() {
         return [...prev, ...next.filter(i => !idSet.has(i.id))];
       };
 
-      setPoints(prev => dedupe(prev, remappedPoints));
-      setLines(prev => dedupe(prev, remappedLines));
-      setPolylines(prev => dedupe(prev, remappedPolylines));
-      setPolygons(prev => dedupe(prev, remappedPolygons));
-      setTexts(prev => dedupe(prev, remappedTexts));
-
-      // Update data references for DB save (Only the new layers and all remapped entities)
-      data.layers = layersToAppend;
-      data.points = remappedPoints;
-      data.lines = remappedLines;
-      data.polylines = remappedPolylines;
-      data.polygons = remappedPolygons;
-      data.texts = remappedTexts;
+      setPoints(prev => dedupe(prev, finalPoints));
+      setLines(prev => dedupe(prev, finalLines));
+      setPolylines(prev => dedupe(prev, finalPolylines));
+      setPolygons(prev => dedupe(prev, finalPolygons));
+      setTexts(prev => dedupe(prev, finalTexts));
     }
 
-    // Bulk Save to DB
-    const finalLayers = append ? (data.layers || []) : incomingLayers;
-    const finalPoints = data.points;
-    const finalLines = data.lines;
-    const finalPolylines = data.polylines;
-    const finalPolygons = data.polygons;
-    const finalTexts = data.texts || [];
-
+    // 4. Atomic Database Transaction
     await Promise.all([
       finalLayers.length > 0 ? db.layers.bulkPut(finalLayers.map((l: CADLayer) => ({ ...l, projectId: pid! }))) : Promise.resolve(),
       db.points.bulkPut(finalPoints.map((p: CADPoint) => ({ ...p, projectId: pid! }))),
@@ -564,8 +550,28 @@ export default function App() {
       finalTexts.length > 0 ? db.texts.bulkPut(finalTexts.map((t: CADText) => ({ ...t, projectId: pid! }))) : Promise.resolve()
     ]);
 
-    handleZoomExtents();
-    pushHistory(append ? 'SHP 데이터 누적 추가' : 'SHP 데이터 새로 시작');
+    if (isNewProject) {
+      setCurrentProjectId(pid!);
+    }
+
+    handleZoomExtents(finalPoints);
+    pushHistory(`${data.layerName || '데이터'} 불러오기`);
+  };
+
+  const handleImportCSVPoints = async (newPoints: CADPoint[], append: boolean) => {
+    await handleImportUnifiedData({
+      points: newPoints,
+      lines: [],
+      polylines: [],
+      polygons: [],
+      texts: [],
+      layers: [],
+      layerName: 'CSV 데이터'
+    }, append);
+  };
+
+  const handleImportSHP = async (data: UnifiedCADData, append: boolean) => {
+    await handleImportUnifiedData(data, append);
   };
 
   const selPointsCount = points.filter(p => selectedEntityIds.includes(p.id)).length;

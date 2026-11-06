@@ -95,6 +95,20 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   const [loadedFormat, setLoadedFormat] = useState<'csv' | 'shp' | 'project' | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Pre-calculate layer counts to prevent O(N*M) lag in render loop
+  const layerStats = React.useMemo(() => {
+    if (!shpResult) return new Map<string, { pt: number, line: number, poly: number }>();
+    const stats = new Map<string, { pt: number, line: number, poly: number }>();
+    
+    shpResult.layers.forEach(l => stats.set(l.id, { pt: 0, line: 0, poly: 0 }));
+    shpResult.points.forEach(p => { const s = stats.get(p.layerId); if (s) s.pt++; });
+    shpResult.lines.forEach(l => { const s = stats.get(l.layerId); if (s) s.line++; });
+    shpResult.polylines.forEach(pl => { const s = stats.get(pl.layerId); if (s) s.line++; });
+    shpResult.polygons.forEach(pg => { const s = stats.get(pg.layerId); if (s) s.poly++; });
+    
+    return stats;
+  }, [shpResult]);
+
   const applyRowsToPreview = (rows: (string | number)[][], headerIdx: number = 0) => {
     try {
       setCurrentRawRows(rows);
@@ -242,14 +256,15 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     // Case 1: .cadgis, .json, or .geojson backup project or GIS file
     const potentialJsonFiles = fileArray.filter(f => {
       const ext = f.name.split('.').pop()?.toLowerCase();
-      return ext === 'cadgis' || ext === 'json' || ext === 'geojson';
+      return ext === 'json' || ext === 'geojson';
     });
 
     if (potentialJsonFiles.length > 0) {
       for (const jsonFile of potentialJsonFiles) {
         try {
           const buf = await jsonFile.arrayBuffer();
-          const text = new TextDecoder('utf-8').decode(buf);
+          const text = new TextDecoder('utf-8').decode(buf).trim();
+          if (!text) continue;
           const parsed = JSON.parse(text);
 
           // Check if it's a ProjectState (our internal format)
@@ -482,7 +497,10 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     }
 
     // Case 5: CSV / Text (.csv, .txt)
-    const csvFile = fileArray[0];
+    const csvFile = fileArray.find(f => {
+      const ext = f.name.split('.').pop()?.toLowerCase();
+      return ext === 'csv' || ext === 'txt';
+    });
     if (csvFile) {
       try {
         const buffer = await csvFile.arrayBuffer();
@@ -495,6 +513,12 @@ export const ImportModal: React.FC<ImportModalProps> = ({
       } catch (err: any) {
         alert('지원하지 않는 파일 형식이거나 읽을 수 없는 텍스트입니다. CSV, GeoJSON, SHP 파일을 선택해 주세요.');
       }
+      return;
+    }
+
+    // If we reached here and nothing was loaded, show a hint
+    if (!loadedFormat) {
+      alert('선택하신 파일 형식이 지원되지 않거나 분석에 실패했습니다. (지원: .dxf, .shp, .zip, .csv, .xlsx, .json, .geojson)');
     }
   };
 
@@ -540,10 +564,10 @@ export const ImportModal: React.FC<ImportModalProps> = ({
           <div>
             <h2 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white flex items-center gap-2">
               <Upload className="w-4 h-4 sm:w-5 sm:h-5 text-sky-600 dark:text-sky-400" />
-              <span>외부 데이터 불러오기 (SHP / CSV / GeoJSON)</span>
+              <span>외부 데이터 및 통합 백업 불러오기</span>
             </h2>
             <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              도면 파일(SHP, GeoJSON), 측점(CSV, Excel), 프로젝트 백업(.cadgis) 파일을 안전하게 불러옵니다.
+              도면(SHP, DXF), 측점(CSV, Excel), 통합 백업(.geojson) 파일을 안전하게 불러옵니다.
             </p>
           </div>
           <button 
@@ -580,7 +604,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 type="file" 
                 className="hidden"
                 multiple
-                accept=".xlsx,.xls,.csv,.txt,.shp,.dbf,.shx,.cpg,.zip,.cadgis,.geojson,.json,.dxf"
+                accept=".xlsx,.xls,.csv,.txt,.shp,.dbf,.shx,.cpg,.zip,.geojson,.json,.dxf"
                 onChange={async e => {
                   const files = e.target.files;
                   if (files && files.length > 0) {
@@ -604,7 +628,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                   ✓ AutoCAD DXF 변환 데이터 지원
                 </span>
                 <span className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 text-[11px] text-purple-600 dark:text-purple-400 border border-slate-200 dark:border-slate-700 shadow-sm">
-                  ✓ 프로젝트 누적 백업 (.cadgis)
+                  ✓ 통합 백업용 GeoJSON 지원
                 </span>
               </div>
             </div>
@@ -763,11 +787,8 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-1.5 max-h-48 overflow-y-auto pr-1 custom-scrollbar">
                     {shpResult.layers.map(layer => {
                       const isChecked = selectedLayerIds.has(layer.id);
-                      // Calculate counts for this layer
-                      const ptCount = shpResult.points.filter(p => p.layerId === layer.id).length;
-                      const lineCount = (shpResult.lines.filter(l => l.layerId === layer.id).length) + (shpResult.polylines.filter(pl => pl.layerId === layer.id).length);
-                      const polyCount = shpResult.polygons.filter(pg => pg.layerId === layer.id).length;
-                      const totalEnts = ptCount + lineCount + polyCount;
+                      const stats = layerStats.get(layer.id) || { pt: 0, line: 0, poly: 0 };
+                      const totalEnts = stats.pt + stats.line + stats.poly;
                       
                       if (totalEnts === 0) return null; // Skip empty layers if any
 
@@ -797,9 +818,9 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                               <span className="text-[11px] font-medium text-slate-700 dark:text-slate-200 truncate">{layer.name}</span>
                             </div>
                             <div className="text-[9px] text-slate-400 dark:text-slate-500 flex gap-1.5 mt-0.5 ml-3.5">
-                              {ptCount > 0 && <span>점 {ptCount}</span>}
-                              {lineCount > 0 && <span>선 {lineCount}</span>}
-                              {polyCount > 0 && <span>면 {polyCount}</span>}
+                              {stats.pt > 0 && <span>점 {stats.pt}</span>}
+                              {stats.line > 0 && <span>선 {stats.line}</span>}
+                              {stats.poly > 0 && <span>면 {stats.poly}</span>}
                             </div>
                           </div>
                         </label>
@@ -818,24 +839,39 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 {/* Sample Point Text Preview */}
                 {shpResult.points.length > 0 && (
                   <div className="p-3 bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl space-y-2">
-                    <div className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">디코딩 미리보기 (상위 {Math.min(3, shpResult.points.length)}개)</div>
+                    <div className="flex items-center justify-between">
+                      <div className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                        데이터 미리보기 (측점 ID/명칭 {Math.min(10, shpResult.points.length)}개)
+                      </div>
+                      <span className="text-[10px] text-slate-400">데이터가 정상인지 확인 후 하단 버튼을 눌러주세요.</span>
+                    </div>
                     <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 text-[11px]">
                       <table className="w-full text-left font-mono">
                         <thead className="bg-slate-100 dark:bg-slate-900 text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800 text-[10px]">
                           <tr>
-                            <th className="py-1.5 px-3">텍스트 (측점명)</th>
-                            <th className="py-1.5 px-3">CAD X</th>
-                            <th className="py-1.5 px-3">CAD Y</th>
+                            <th className="py-1.5 px-3">측점명 / ID (TextString)</th>
+                            <th className="py-1.5 px-3">CAD X (Easting)</th>
+                            <th className="py-1.5 px-3">CAD Y (Northing)</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-700 dark:text-slate-300">
-                          {shpResult.points.slice(0, 3).map((pt) => (
-                            <tr key={pt.id}>
-                              <td className="py-1.5 px-3 font-bold text-amber-600">{pt.name}</td>
-                              <td className="py-1.5 px-3 text-sky-600">{pt.x.toFixed(3)}</td>
-                              <td className="py-1.5 px-3 text-sky-600">{pt.y.toFixed(3)}</td>
-                            </tr>
-                          ))}
+                          {shpResult.points
+                            // Prioritize showing points that look like actual station IDs (longer or containing dashes)
+                            .slice()
+                            .sort((a, b) => {
+                              const aIsGeneric = a.name.startsWith('PT_') || a.name.startsWith('TEXT_') || a.name.startsWith('BLOCK_');
+                              const bIsGeneric = b.name.startsWith('PT_') || b.name.startsWith('TEXT_') || b.name.startsWith('BLOCK_');
+                              if (aIsGeneric && !bIsGeneric) return 1;
+                              if (!aIsGeneric && bIsGeneric) return -1;
+                              return b.name.length - a.name.length;
+                            })
+                            .slice(0, 10).map((pt) => (
+                              <tr key={pt.id} className="hover:bg-slate-50 dark:hover:bg-slate-900/50 transition">
+                                <td className="py-1.5 px-3 font-bold text-amber-600 truncate max-w-[180px]">{pt.name}</td>
+                                <td className="py-1.5 px-3 text-sky-600">{pt.x.toFixed(3)}</td>
+                                <td className="py-1.5 px-3 text-sky-600">{pt.y.toFixed(3)}</td>
+                              </tr>
+                            ))}
                         </tbody>
                       </table>
                     </div>

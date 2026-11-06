@@ -52,11 +52,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   // Custom User Filename States
   const todayStr = new Date().toISOString().slice(0, 10);
-  const [baseProjectName, setBaseProjectName] = useState<string>(() => `현장성과_${new Date().toISOString().slice(0, 10)}`);
-  const [shpFileName, setShpFileName] = useState<string>(() => `gis_shapefiles_${new Date().toISOString().slice(0, 10)}`);
-  const [csvFileName, setCsvFileName] = useState<string>(() => `survey_coordinates_${new Date().toISOString().slice(0, 10)}`);
-  const [projectFileName, setProjectFileName] = useState<string>(() => `cad_project_${new Date().toISOString().slice(0, 10)}`);
-  const [geoJsonFileName, setGeoJsonFileName] = useState<string>(() => `cad_backup_${new Date().toISOString().slice(0, 10)}`);
+  const [baseProjectName, setBaseProjectName] = useState<string>(() => `현장성과_${todayStr}`);
+  
+  // Specific filenames derived from base or editable
+  const [shpFileName, setShpFileName] = useState<string>(() => `현장성과_${todayStr}`);
+  const [csvFileName, setCsvFileName] = useState<string>(() => `현장성과_${todayStr}`);
+  const [geoJsonFileName, setGeoJsonFileName] = useState<string>(() => `현장성과_${todayStr}`);
 
   const totalLinesCount = lines.length + polylines.length;
 
@@ -112,34 +113,17 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   // 2. Export Points CSV
   const handleExportCSV = async () => {
-    const csvLines = ['번호,측점명,X(Easting),Y(Northing),고도(Z),레이어'];
+    const csvLines = ['번호,측점명,코드,비고,X(Easting),Y(Northing),고도(Z),레이어'];
     points.forEach((p, idx) => {
-      csvLines.push(`${idx + 1},"${p.name}",${p.x.toFixed(3)},${p.y.toFixed(3)},${p.z !== undefined ? p.z.toFixed(3) : ''},"${p.layerId}"`);
+      csvLines.push(`${idx + 1},"${p.name}","${p.code || ''}","${p.remark || ''}",${p.x.toFixed(3)},${p.y.toFixed(3)},${p.z !== undefined ? p.z.toFixed(3) : ''},"${p.layerId}"`);
     });
-    const cleanName = (csvFileName.trim() || `survey_coordinates_${todayStr}`).replace(/\.csv$/i, '');
+    const cleanName = (csvFileName.trim() || `survey_points_${todayStr}`).replace(/\.csv$/i, '');
     const filename = `${cleanName}.csv`;
     await downloadTextFile(csvLines.join('\n'), filename, csvEncoding, 'text/csv');
     showSuccess(`${filename} 측점 CSV가 저장되었습니다.`);
   };
 
-  // 3. Export Project JSON / CADGIS (Legacy)
-  const handleExportProject = async () => {
-    const cleanName = (projectFileName.trim() || `cad_project_${todayStr}`).replace(/\.cadgis$/i, '');
-    const project: ProjectState = {
-      version: '1.0.0',
-      name: cleanName,
-      layers,
-      points,
-      lines,
-      polylines,
-      polygons,
-      texts
-    };
-    const jsonStr = JSON.stringify(project, null, 2);
-    const filename = `${cleanName}.cadgis`;
-    await downloadTextFile(jsonStr, filename, 'utf-8', 'application/json');
-    showSuccess(`기존 프로젝트 백업(${filename})이 저장되었습니다.`);
-  };
+
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
@@ -149,10 +133,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-white flex items-center gap-2">
               <Download className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-              <span>성과물 및 백업 내보내기</span>
+              <span>통합 데이터 내보내기</span>
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              기기 간 협업을 위한 <strong>GeoJSON 백업</strong> 또는 GIS 표준 <strong>Shapefile</strong>을 생성합니다.
+              기기 간 협업 및 통합 관리를 위한 <strong>GeoJSON 백업</strong> 또는 GIS 표준 데이터를 생성합니다.
             </p>
           </div>
           <button
@@ -177,14 +161,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 onChange={(e) => {
                   const val = e.target.value;
                   setBaseProjectName(val);
-                  const sanitized = val.trim();
-                  setShpFileName(`${sanitized || 'gis_shapefiles'}_shp`);
-                  setCsvFileName(`${sanitized || 'survey_coordinates'}_pts`);
-                  setProjectFileName(`${sanitized || 'cad_project'}_legacy`);
-                  setGeoJsonFileName(`${sanitized || 'cad_backup'}`);
+                  const sanitized = val.trim() || `현장성과_${todayStr}`;
+                  setShpFileName(sanitized);
+                  setCsvFileName(sanitized);
+                  setGeoJsonFileName(sanitized);
                 }}
-                placeholder="예: 261104_현장측량성과"
-                className="bg-transparent text-slate-900 dark:text-white font-medium outline-none w-full text-xs"
+                placeholder="파일명 입력..."
+                className="bg-transparent text-slate-900 dark:text-white font-bold outline-none w-full text-xs"
               />
             </div>
           </div>
@@ -353,25 +336,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             </button>
           </div>
 
-          {/* Option 3: Legacy Project Save (.cadgis) */}
-          <div className="p-4 bg-slate-50/50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-2xl flex flex-col gap-3 transition shadow-sm opacity-60">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <Save className="w-5 h-5 text-slate-600 dark:text-slate-400" />
-                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">기존 프로젝트 백업 (.CADGIS)</h3>
-              </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                (이전 방식) 내부 JSON 형식의 백업 파일입니다.
-              </p>
-            </div>
 
-            <button
-              onClick={handleExportProject}
-              className="w-full py-2 bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[11px] font-semibold rounded-xl transition"
-            >
-              백업 생성
-            </button>
-          </div>
         </div>
 
         {/* Footer */}

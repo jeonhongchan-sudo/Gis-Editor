@@ -85,11 +85,14 @@ export function parseGeoJson(
       
       if (dxftype === 'TEXT') {
         const name = props.text || props.TEXTSTRING || props.label || props.name || `TXT_${idx + 1}`;
-        // Since CADCanvas draws pt.name, we don't need a separate Text entity for survey points.
-        // This prevents the "double name" overlapping issue (잔상 현상).
+        const remark = props.remark || props.REMARK || props.비고 || props.DESC || props.설명 || '';
+        const code = props.code || props.CODE || props.지목 || props.코드 || '';
+
         points.push({
           id: props.id || `gj-pt-txt-${Date.now()}-${idx}`,
           name: String(name),
+          remark: String(remark),
+          code: String(code),
           x: pt.x,
           y: pt.y,
           z: pt.z,
@@ -98,9 +101,14 @@ export function parseGeoJson(
         });
       } else {
         const name = props.TEXTSTRING || props.text || props.label || props.name || props.PT_NAME || `PT_${idx + 1}`;
+        const remark = props.remark || props.REMARK || props.비고 || props.DESC || props.설명 || '';
+        const code = props.code || props.CODE || props.지목 || props.코드 || '';
+
         points.push({
           id: props.id || `gj-pt-${Date.now()}-${idx}`,
           name: String(name),
+          remark: String(remark),
+          code: String(code),
           x: pt.x,
           y: pt.y,
           z: pt.z,

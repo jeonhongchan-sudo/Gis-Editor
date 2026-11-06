@@ -22,10 +22,11 @@ export interface Point2D {
 
 export interface CADPoint extends Point2D {
   id: string;
-  name: string;
-  code?: string;
+  name: string; // 항목 / TextString / Point Name
+  code?: string; // 코드
+  remark?: string; // 비고
   layerId: string;
-  isSurveyNode?: boolean; // Originating from CSV survey data
+  isSurveyNode?: boolean;
 }
 
 export interface CADLine {
@@ -94,6 +95,24 @@ export interface CoordinateSystem {
   proj4Def: string;
   wktPrj: string;
   isTM: boolean;
+}
+
+export interface UnifiedCADData {
+  points: CADPoint[];
+  lines: CADLine[];
+  polylines: CADPolyline[];
+  polygons: CADPolygon[];
+  texts: CADText[];
+  layers: CADLayer[];
+  layerName: string;
+  detectedEncoding?: 'utf-8' | 'euc-kr';
+  dbfFields?: string[];
+  bounds?: {
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+  };
 }
 
 export interface ProjectState {

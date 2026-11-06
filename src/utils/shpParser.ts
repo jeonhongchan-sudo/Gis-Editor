@@ -5,7 +5,7 @@
 
 import JSZip from 'jszip';
 import iconv from 'iconv-lite';
-import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText, Point2D } from '../types/cad';
+import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText, Point2D, UnifiedCADData } from '../types/cad';
 import { detectKoreanEncoding, smartDecodeKoreanBytes } from './encoding';
 
 export interface DbfField {
@@ -23,23 +23,7 @@ export interface DbfParseResult {
   detectedEncoding: 'utf-8' | 'euc-kr';
 }
 
-export interface SHPParseResult {
-  points: CADPoint[];
-  lines: CADLine[];
-  polylines: CADPolyline[];
-  polygons: CADPolygon[];
-  texts?: CADText[];
-  layers: CADLayer[];
-  layerName: string;
-  detectedEncoding?: 'utf-8' | 'euc-kr';
-  dbfFields?: string[];
-  bounds?: {
-    minX: number;
-    minY: number;
-    maxX: number;
-    maxY: number;
-  };
-}
+export type SHPParseResult = UnifiedCADData;
 
 const LAYER_COLORS = ['#38bdf8', '#34d399', '#f43f5e', '#fbbf24', '#a855f7', '#60a5fa', '#f97316'];
 

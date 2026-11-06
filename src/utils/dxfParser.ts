@@ -62,6 +62,8 @@ export function parseDxf(dxfString: string, filename: string): SHPParseResult {
 
   const now = Date.now();
 
+  const surveyPointMap = new Map<string, CADPoint>();
+
   // 2. Process Entities
   if (dxf.entities && Array.isArray(dxf.entities)) {
     dxf.entities.forEach((ent: any, idx: number) => {
@@ -74,34 +76,82 @@ export function parseDxf(dxfString: string, filename: string): SHPParseResult {
           const y = Number(pos.y);
           if (isNaN(x) || isNaN(y)) break;
 
-          points.push({
-            id: `dxf-pt-${now}-${idx}`,
-            name: (ent.name || `PT_${idx + 1}`).trim(),
-            x,
-            y,
-            z: pos.z !== undefined ? Number(pos.z) : undefined,
-            layerId: layer.id,
-            isSurveyNode: true
-          });
+          // Coordinate key for deduplication (1mm precision)
+          const coordKey = `${x.toFixed(3)},${y.toFixed(3)}`;
+
+          // Try to find meaningful name, code, remark in attributes
+          let ptName = (ent.name || ent.text || ent.textString || '').trim();
+          let ptCode = '';
+          let ptRemark = '';
+
+          if (ent.attributes && Array.isArray(ent.attributes)) {
+            const nameAttr = ent.attributes.find((a: any) => ['PN', 'NAME', 'ID', '측점', 'NO', 'POINT'].includes((a.tag || '').toUpperCase()));
+            const codeAttr = ent.attributes.find((a: any) => ['CD', 'CODE', '지목', '코드'].includes((a.tag || '').toUpperCase()));
+            const remarkAttr = ent.attributes.find((a: any) => ['RM', 'REMARK', 'NOTE', '비고', 'DESC', '설명'].includes((a.tag || '').toUpperCase()));
+            
+            if (nameAttr) ptName = (nameAttr.text || nameAttr.value || '').trim();
+            if (codeAttr) ptCode = (codeAttr.text || codeAttr.value || '').trim();
+            if (remarkAttr) ptRemark = (remarkAttr.text || remarkAttr.value || '').trim();
+          }
+
+          if (!ptName) ptName = `PT_${idx + 1}`;
+
+          // Only add if not already present at this exact spot
+          if (!surveyPointMap.has(coordKey)) {
+            surveyPointMap.set(coordKey, {
+              id: `dxf-pt-${now}-${idx}`,
+              name: ptName,
+              code: ptCode,
+              remark: ptRemark,
+              x,
+              y,
+              z: pos.z !== undefined ? Number(pos.z) : undefined,
+              layerId: layer.id,
+              isSurveyNode: true
+            });
+          }
           break;
         }
 
         case 'INSERT': {
-          // Survey points are often blocks (INSERT)
           const pos = ent.position || { x: 0, y: 0 };
           const x = Number(pos.x);
           const y = Number(pos.y);
           if (isNaN(x) || isNaN(y)) break;
 
-          points.push({
-            id: `dxf-ins-${now}-${idx}`,
-            name: (ent.name || ent.block || `BLOCK_${idx + 1}`).trim(),
-            x,
-            y,
-            z: pos.z !== undefined ? Number(pos.z) : undefined,
-            layerId: layer.id,
-            isSurveyNode: true
-          });
+          const coordKey = `${x.toFixed(3)},${y.toFixed(3)}`;
+
+          let ptName = '';
+          let ptCode = '';
+          let ptRemark = '';
+
+          if (ent.attributes && Array.isArray(ent.attributes)) {
+            const nameAttr = ent.attributes.find((a: any) => ['PN', 'NAME', 'ID', '측점', 'NO', 'POINT'].includes((a.tag || '').toUpperCase()));
+            const codeAttr = ent.attributes.find((a: any) => ['CD', 'CODE', '지목', '코드'].includes((a.tag || '').toUpperCase()));
+            const remarkAttr = ent.attributes.find((a: any) => ['RM', 'REMARK', 'NOTE', '비고', 'DESC', '설명'].includes((a.tag || '').toUpperCase()));
+            
+            if (nameAttr) ptName = (nameAttr.text || nameAttr.value || '').trim();
+            if (codeAttr) ptCode = (codeAttr.text || codeAttr.value || '').trim();
+            if (remarkAttr) ptRemark = (remarkAttr.text || remarkAttr.value || '').trim();
+          }
+
+          if (!ptName) ptName = (ent.name || ent.block || `BLOCK_${idx + 1}`).trim();
+
+          // Only add or update name if current is generic
+          const existing = surveyPointMap.get(coordKey);
+          if (!existing || existing.name.startsWith('PT_') || existing.name.startsWith('BLOCK_')) {
+            surveyPointMap.set(coordKey, {
+              id: `dxf-ins-${now}-${idx}`,
+              name: ptName,
+              code: ptCode,
+              remark: ptRemark,
+              x,
+              y,
+              z: pos.z !== undefined ? Number(pos.z) : undefined,
+              layerId: layer.id,
+              isSurveyNode: true
+            });
+          }
           break;
         }
 
@@ -159,40 +209,37 @@ export function parseDxf(dxfString: string, filename: string): SHPParseResult {
         case 'TEXT':
         case 'MTEXT': {
           const textStr = (ent.text || ent.textString || '').trim();
-          const pos = ent.position || ent.startPoint || (ent.columnAt ? { x: ent.columnAt[0], y: ent.columnAt[1] } : { x: 0, y: 0 });
-          const tx = Number(pos.x || 0);
-          const ty = Number(pos.y || 0);
+          const pos = ent.position || ent.startPoint || ent.insertionPoint || (ent.columnAt ? { x: ent.columnAt[0], y: ent.columnAt[1] } : { x: 0, y: 0 });
+          const tx = Number(pos.x ?? 0);
+          const ty = Number(pos.y ?? 0);
           const tz = pos.z !== undefined ? Number(pos.z) : undefined;
           if (isNaN(tx) || isNaN(ty)) break;
 
+          const coordKey = `${tx.toFixed(3)},${ty.toFixed(3)}`;
           const ptName = textStr || `TEXT_${idx + 1}`;
 
-          // As per previous logic for survey points: if it's text, it's often a node label
-          // Create a CADPoint for it so it shows up in the survey table
-          points.push({
+          // UNIFIED LOGIC: If it's a survey-relevant text in a CAD drawing, 
+          // we treat it as a Point (Survey Node) for the Unified DB.
+          // The Dynamic Label Engine in CADCanvas will handle the QGIS-style display.
+          surveyPointMap.set(coordKey, {
             id: `dxf-txt-pt-${now}-${idx}`,
             name: ptName,
+            code: '',
+            remark: '',
             x: tx,
             y: ty,
             z: tz,
             layerId: layer.id,
             isSurveyNode: true
           });
-
-          // Also keep it as a text entity for visual rendering
-          texts.push({
-            id: `dxf-txt-${now}-${idx}`,
-            x: tx,
-            y: ty,
-            text: ptName,
-            height: Math.max(0.1, Number(ent.textHeight || 2.0)),
-            rotation: Number(ent.rotation || 0),
-            layerId: layer.id
-          });
+          
+          // DO NOT push to 'texts' array. This prevents the "ghosting" double-render.
           break;
         }
       }
     });
+
+    points.push(...Array.from(surveyPointMap.values()));
   }
 
   // Calculate bounds safely without spread (prevents stack overflow on huge files)
@@ -205,6 +252,7 @@ export function parseDxf(dxfString: string, filename: string): SHPParseResult {
     maxY = Math.max(maxY, p.y);
   };
   points.forEach((p: Point2D) => updateBounds(p));
+  // Note: texts array is now empty for survey-type DXFs, but kept for future general CAD support
   texts.forEach((p: Point2D) => updateBounds(p));
   polylines.forEach(pl => pl.points.forEach((p: Point2D) => updateBounds(p)));
   polygons.forEach(pg => pg.points.forEach((p: Point2D) => updateBounds(p)));

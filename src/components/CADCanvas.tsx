@@ -1383,8 +1383,8 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       if (!layer || !layer.visible) continue;
 
       const pxHeight = txt.height * view.zoom;
-      if (pxHeight < 1.0) continue; // Lowered from 5.0 for better visibility
-      const renderPxHeight = Math.max(6, pxHeight);
+      if (pxHeight < 0.2) continue; // Further lowered for extreme visibility
+      const renderPxHeight = Math.max(12, pxHeight); // Increased from 6 to 12 for 2x visibility
       const sp = getScreen({ x: txt.x, y: txt.y });
       const isSelected = selectedSet.has(txt.id);
 

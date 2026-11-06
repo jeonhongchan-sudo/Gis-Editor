@@ -11,6 +11,8 @@ export interface CSVColumnMapping {
   nameCol?: number;  // Column for item record / remark / description (항목)
   zCol?: number;     // Optional elevation Z
   idCol?: number;    // Deprecated / optional identifier
+  remarkCol?: number; // Column for remark / note (비고)
+  codeCol?: number;   // Column for code (코드)
   includeElevation?: boolean; // Optional: whether to include Z or exclude for 2D drawings (default: false)
 }
 
@@ -105,6 +107,8 @@ export function analyzeTableRows(
   let rawYCol = -1;
   let zCol = -1;
   let nameCol = -1;
+  let remarkCol = -1;
+  let codeCol = -1;
 
   headers.forEach((h, idx) => {
     const lower = h.toLowerCase().trim();
@@ -144,6 +148,22 @@ export function analyzeTableRows(
     ) {
       nameCol = idx;
     }
+    // Specific Remark
+    else if (
+      remarkCol === -1 && (
+        ['비고', 'remark', 'note', '설명'].some(k => lower.includes(k))
+      )
+    ) {
+      remarkCol = idx;
+    }
+    // Specific Code
+    else if (
+      codeCol === -1 && (
+        ['코드', 'code', '지목'].some(k => lower.includes(k))
+      )
+    ) {
+      codeCol = idx;
+    }
   });
 
   // Fallback heuristic by sample row numeric values
@@ -182,6 +202,8 @@ export function analyzeTableRows(
     yCol: rawYCol >= 0 ? rawYCol : 1,
     zCol: zCol !== -1 ? zCol : undefined,
     nameCol: nameCol !== -1 ? nameCol : undefined,
+    remarkCol: remarkCol !== -1 ? remarkCol : undefined,
+    codeCol: codeCol !== -1 ? codeCol : undefined,
     includeElevation: false
   };
 
@@ -239,7 +261,7 @@ export function buildCADPointsFromCSV(
       }
     }
 
-    // Item record text (항목) - Pure string without any 'PT-' prefix
+    // Item record text (항목)
     let nameVal = '';
     if (mapping.nameCol !== undefined && mapping.nameCol >= 0 && row[mapping.nameCol] !== undefined) {
       nameVal = row[mapping.nameCol].trim();
@@ -251,9 +273,21 @@ export function buildCADPointsFromCSV(
       nameVal = String(idx + 1);
     }
 
+    let remarkVal = '';
+    if (mapping.remarkCol !== undefined && mapping.remarkCol >= 0 && row[mapping.remarkCol] !== undefined) {
+      remarkVal = row[mapping.remarkCol].trim();
+    }
+
+    let codeVal = '';
+    if (mapping.codeCol !== undefined && mapping.codeCol >= 0 && row[mapping.codeCol] !== undefined) {
+      codeVal = row[mapping.codeCol].trim();
+    }
+
     points.push({
       id: `point-${idx + 1}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       name: nameVal,
+      remark: remarkVal,
+      code: codeVal,
       x: cadX,
       y: cadY,
       z: zVal,
