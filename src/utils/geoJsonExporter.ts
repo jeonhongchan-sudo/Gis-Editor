@@ -12,7 +12,6 @@ interface GeoJsonExportOptions {
   polygons: CADPolygon[];
   texts: CADText[];
   layers: CADLayer[];
-  crs?: string;
 }
 
 /**
@@ -20,12 +19,13 @@ interface GeoJsonExportOptions {
  * Includes layer metadata and all entity properties to serve as a robust project backup.
  */
 export function exportToGeoJson(options: GeoJsonExportOptions): any {
-  const { points = [], lines = [], polylines = [], polygons = [], texts = [], layers = [], crs } = options;
+  const { points = [], lines = [], polylines = [], polygons = [], texts = [], layers = [] } = options;
 
   console.log(`Exporting GeoJSON: ${points.length} pts, ${lines.length} lines, ${polylines.length} pls, ${polygons.length} pgs, ${texts.length} txts`);
 
   const features: any[] = [];
-
+  
+  // (Point, Text, Line, Polyline, Polygon loops remain same...)
   // 1. Export Points
   points.forEach(p => {
     if (!p) return;
@@ -152,15 +152,6 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
     },
     features: features
   };
-
-  if (crs && crs !== 'EPSG:4326') {
-    geojson.crs = {
-      type: 'name',
-      properties: {
-        name: `urn:ogc:def:crs:EPSG::${crs.replace('EPSG:', '')}`
-      }
-    };
-  }
 
   return geojson;
 }

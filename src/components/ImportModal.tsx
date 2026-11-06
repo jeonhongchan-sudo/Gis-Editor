@@ -63,10 +63,8 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 }) => {
   const [appendMode, setAppendMode] = useState<boolean>(true);
 
-  // Encoding & CRS State
+  // Encoding State
   const [selectedEncoding, setSelectedEncoding] = useState<SupportedEncoding>('auto');
-  const [sourceCrs, setSourceCrs] = useState<string>('LOCAL');
-  const [targetCrs, setTargetCrs] = useState<string>('EPSG:5186');
 
   // Progress State
   const [isParsing, setIsParsing] = useState<boolean>(false);
@@ -125,12 +123,10 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   /**
    * Re-parse data when the user overrides encoding or CRS
    */
-  const handleReParse = async (newEnc?: SupportedEncoding, newSourceCrs?: string) => {
+  const handleReParse = async (newEnc?: SupportedEncoding) => {
     const enc = newEnc || selectedEncoding;
-    const sCrs = newSourceCrs || sourceCrs;
     
     if (newEnc) setSelectedEncoding(newEnc);
-    if (newSourceCrs) setSourceCrs(newSourceCrs);
 
     const raw = rawInputRef.current;
     if (!raw) return;
@@ -151,71 +147,11 @@ export const ImportModal: React.FC<ImportModalProps> = ({
       } finally {
         setIsParsing(false);
       }
-    } else if (raw.kind === 'shp-multi' && raw.shpFiles) {
-      try {
-        setIsParsing(true);
-        setParsingStatusMsg('SHP/DBF 바이너리 재분석 중...');
-        setParsingProgress(50);
-        const combinedPoints: CADPoint[] = [];
-        const combinedLines: CADLine[] = [];
-        const combinedPolylines: CADPolyline[] = [];
-        const combinedPolygons: CADPolygon[] = [];
-        const combinedTexts: CADText[] = [];
-        const combinedLayers: CADLayer[] = [];
-        const combinedDbfFields = new Set<string>();
-        let detectedEnc: 'utf-8' | 'euc-kr' = forced || 'euc-kr';
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-
-        for (let i = 0; i < raw.shpFiles.length; i++) {
-          const item = raw.shpFiles[i];
-          const res = parseShpBuffer(item.shpBuffer, item.name, item.dbfBuffer, i, forced);
-          if (res.detectedEncoding) detectedEnc = res.detectedEncoding;
-          if (res.dbfFields) res.dbfFields.forEach(f => combinedDbfFields.add(f));
-
-          res.layers.forEach(nl => {
-            if (!combinedLayers.some(l => l.id === nl.id)) {
-              nl.color = LAYER_COLORS[combinedLayers.length % LAYER_COLORS.length];
-              combinedLayers.push(nl);
-            }
-          });
-
-          combinedPoints.push(...res.points);
-          combinedLines.push(...res.lines);
-          combinedPolylines.push(...res.polylines);
-          combinedPolygons.push(...res.polygons);
-          if (res.texts) combinedTexts.push(...res.texts);
-
-          if (res.bounds) {
-            minX = Math.min(minX, res.bounds.minX);
-            minY = Math.min(minY, res.bounds.minY);
-            maxX = Math.max(maxX, res.bounds.maxX);
-            maxY = Math.max(maxY, res.bounds.maxY);
-          }
-        }
-
-        setParsingProgress(100);
-        setShpResult({
-          points: combinedPoints,
-          lines: combinedLines,
-          polylines: combinedPolylines,
-          polygons: combinedPolygons,
-          texts: combinedTexts,
-          layers: combinedLayers,
-          layerName: raw.filename.replace(/\.[^/.]+$/, ''),
-          detectedEncoding: detectedEnc,
-          dbfFields: Array.from(combinedDbfFields),
-          bounds: minX !== Infinity ? { minX, minY, maxX, maxY } : undefined
-        });
-      } catch (err: any) {
-        console.error('Re-parse shp failed:', err);
-      } finally {
-        setIsParsing(false);
-      }
     } else if (raw.kind === 'geojson' && raw.json) {
       try {
         setIsParsing(true);
-        setParsingStatusMsg('GeoJSON 좌표 변환 재실행 중...');
-        const res = parseGeoJson(raw.json, sCrs, targetCrs);
+        setParsingStatusMsg('GeoJSON 데이터 분석 중...');
+        const res = parseGeoJson(raw.json, 'LOCAL', 'LOCAL');
         setShpResult(res);
         setSelectedLayerIds(new Set(res.layers.map(l => l.id))); // Default all checked for GeoJSON
       } catch (err: any) {
@@ -277,22 +213,11 @@ export const ImportModal: React.FC<ImportModalProps> = ({
           // Check if it's GeoJSON
           if (parsed.type === 'FeatureCollection' || parsed.type === 'Feature') {
             setIsParsing(true);
-            setParsingStatusMsg('GeoJSON 데이터 분석 및 좌표 변환 중...');
+            setParsingStatusMsg('GeoJSON 데이터 분석 중...');
             
-            // Try to auto-detect CRS from GeoJSON if available
-            let detectedSourceCrs = 'LOCAL'; // Default to LOCAL (No conversion) as requested
-            const crsName = parsed.crs?.properties?.name || '';
-            if (crsName.includes('5186') || crsName.includes('Central')) detectedSourceCrs = 'EPSG:5186';
-            else if (crsName.includes('5187') || crsName.includes('East')) detectedSourceCrs = 'EPSG:5187';
-            else if (crsName.includes('5185') || crsName.includes('West')) detectedSourceCrs = 'EPSG:5185';
-            else if (crsName.includes('5179')) detectedSourceCrs = 'EPSG:5179';
-            else if (crsName.includes('4326')) detectedSourceCrs = 'EPSG:4326';
-            else if (crsName.includes('3857')) detectedSourceCrs = 'EPSG:3857';
-            
-            setSourceCrs(detectedSourceCrs);
             rawInputRef.current = { kind: 'geojson', filename: jsonFile.name, json: parsed };
             
-            const res = parseGeoJson(parsed, detectedSourceCrs, targetCrs);
+            const res = parseGeoJson(parsed, 'LOCAL', 'LOCAL');
             setShpResult(res);
             // SHP/GeoJSON are usually pre-filtered, so default to "Select All"
             setSelectedLayerIds(new Set(res.layers.map(l => l.id)));
@@ -710,28 +635,10 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                     </div>
                   )}
 
-                  {/* CRS Selection */}
-                  <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
-                    <div className="flex items-center gap-2">
-                      <Globe2 className="w-3.5 h-3.5 text-sky-500" />
-                      <span className="font-semibold text-slate-700 dark:text-slate-300">원본 좌표계 설정:</span>
-                    </div>
-                    <select
-                      value={sourceCrs}
-                      onChange={e => handleReParse(undefined, e.target.value)}
-                      className="flex-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100 text-[11px] rounded-lg px-2.5 py-1.5 focus:outline-none shadow-sm"
-                    >
-                      <option value="LOCAL">변환 없음 (현재 도면과 동일한 원본 좌표)</option>
-                      {Object.values(COORDINATE_SYSTEMS).filter(cs => cs.code !== 'LOCAL').map(cs => (
-                        <option key={cs.code} value={cs.code}>{cs.code}: {cs.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  
                   <div className="flex items-start gap-2 p-2 bg-sky-50 dark:bg-sky-950/40 rounded-lg border border-sky-100 dark:border-sky-900/50">
                     <Info className="w-3.5 h-3.5 text-sky-600 shrink-0 mt-0.5" />
                     <p className="text-[10px] text-sky-700 dark:text-sky-300 leading-normal">
-                      불러온 데이터가 현재 도면 좌표계(<strong>{targetCrs}</strong>)와 다른 경우, 위 목록에서 원본 좌표계를 선택하면 자동으로 위치가 변환됩니다. (GeoJSON은 기본 WGS84 위경도)
+                      데이터를 불러올 때 좌표 변환을 수행하지 않습니다. 원본 파일의 좌표값이 그대로 도면에 유지됩니다.
                     </p>
                   </div>
                 </div>

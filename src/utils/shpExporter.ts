@@ -365,7 +365,6 @@ export interface SHPExportBundleOptions {
   lines: CADLine[];
   polylines: CADPolyline[];
   polygons: CADPolygon[];
-  crs: string;
   encoding?: 'utf-8' | 'euc-kr';
 }
 
@@ -373,11 +372,9 @@ export interface SHPExportBundleOptions {
  * Export CAD data as complete ESRI Shapefile ZIP bundle with .shp, .shx, .dbf, and .prj
  */
 export async function exportToShapefileZip(options: SHPExportBundleOptions): Promise<Blob> {
-  const { points, lines, polylines, polygons, crs, encoding = 'euc-kr' } = options;
+  const { points, lines, polylines, polygons, encoding = 'euc-kr' } = options;
   const zip = new JSZip();
 
-  const prjContent = COORDINATE_SYSTEMS[crs]?.wktPrj || COORDINATE_SYSTEMS['EPSG:5186'].wktPrj;
-  
   // .cpg content
   const cpgContent = encoding === 'utf-8' ? 'UTF-8' : '949';
 
@@ -409,7 +406,6 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     zip.file('points_layer_0.shp', shp);
     zip.file('points_layer_0.shx', shx);
     zip.file('points_layer_0.dbf', dbf);
-    zip.file('points_layer_0.prj', prjContent);
     zip.file('points_layer_0.cpg', cpgContent);
   }
 
@@ -533,7 +529,6 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     zip.file('cad_lines.shp', shp);
     zip.file('cad_lines.shx', shx);
     zip.file('cad_lines.dbf', dbf);
-    zip.file('cad_lines.prj', prjContent);
     zip.file('cad_lines.cpg', cpgContent);
   }
 
@@ -574,7 +569,6 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     zip.file('cad_polygons.shp', shp);
     zip.file('cad_polygons.shx', shx);
     zip.file('cad_polygons.dbf', dbf);
-    zip.file('cad_polygons.prj', prjContent);
     zip.file('cad_polygons.cpg', cpgContent);
   }
 

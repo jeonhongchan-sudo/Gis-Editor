@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { 
   X, 
   Download, 
@@ -42,7 +42,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   texts,
   onClose
 }) => {
-  const [selectedCrs, setSelectedCrs] = useState<string>('EPSG:5186');
   const [isExportingShp, setIsExportingShp] = useState(false);
   const [exportSuccessMsg, setExportSuccessMsg] = useState<string | null>(null);
 
@@ -60,6 +59,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [geoJsonFileName, setGeoJsonFileName] = useState<string>(() => `현장성과_${todayStr}`);
 
   const totalLinesCount = lines.length + polylines.length;
+  const isProcessingRef = useRef(false);
 
   const showSuccess = (msg: string) => {
     setExportSuccessMsg(msg);
@@ -68,15 +68,16 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   // 0. Export GeoJSON (Recommended for Backup & Multi-device)
   const handleExportGeoJson = async () => {
+    if (isProcessingRef.current) return;
     try {
+      isProcessingRef.current = true;
       const geojson = exportToGeoJson({
         points,
         lines,
         polylines,
         polygons,
         texts,
-        layers,
-        crs: selectedCrs
+        layers
       });
       const jsonStr = JSON.stringify(geojson, null, 2);
       const cleanName = (geoJsonFileName.trim() || `cad_backup_${todayStr}`).replace(/\.geojson$/i, '');
@@ -85,19 +86,22 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       showSuccess(`기기 통합 백업 파일(${filename})이 저장되었습니다.`);
     } catch (err: any) {
       alert('GeoJSON 생성 중 오류가 발생했습니다: ' + err.message);
+    } finally {
+      isProcessingRef.current = false;
     }
   };
 
   // 1. Export Shapefile ZIP
   const handleExportSHP = async () => {
+    if (isProcessingRef.current || isExportingShp) return;
     try {
+      isProcessingRef.current = true;
       setIsExportingShp(true);
       const blob = await exportToShapefileZip({
         points,
         lines,
         polylines,
         polygons,
-        crs: selectedCrs,
         encoding: shpEncoding
       });
       const cleanName = (shpFileName.trim() || `gis_shapefiles_${todayStr}`).replace(/\.zip$/i, '');
@@ -108,19 +112,26 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       alert('Shapefile 생성 중 오류가 발생했습니다: ' + err.message);
     } finally {
       setIsExportingShp(false);
+      isProcessingRef.current = false;
     }
   };
 
   // 2. Export Points CSV
   const handleExportCSV = async () => {
-    const csvLines = ['번호,측점명,코드,비고,X(Easting),Y(Northing),고도(Z),레이어'];
-    points.forEach((p, idx) => {
-      csvLines.push(`${idx + 1},"${p.name}","${p.code || ''}","${p.remark || ''}",${p.x.toFixed(3)},${p.y.toFixed(3)},${p.z !== undefined ? p.z.toFixed(3) : ''},"${p.layerId}"`);
-    });
-    const cleanName = (csvFileName.trim() || `survey_points_${todayStr}`).replace(/\.csv$/i, '');
-    const filename = `${cleanName}.csv`;
-    await downloadTextFile(csvLines.join('\n'), filename, csvEncoding, 'text/csv');
-    showSuccess(`${filename} 측점 CSV가 저장되었습니다.`);
+    if (isProcessingRef.current) return;
+    try {
+      isProcessingRef.current = true;
+      const csvLines = ['번호,측점명,코드,비고,X(Easting),Y(Northing),고도(Z),레이어'];
+      points.forEach((p, idx) => {
+        csvLines.push(`${idx + 1},"${p.name}","${p.code || ''}","${p.remark || ''}",${p.x.toFixed(3)},${p.y.toFixed(3)},${p.z !== undefined ? p.z.toFixed(3) : ''},"${p.layerId}"`);
+      });
+      const cleanName = (csvFileName.trim() || `survey_points_${todayStr}`).replace(/\.csv$/i, '');
+      const filename = `${cleanName}.csv`;
+      await downloadTextFile(csvLines.join('\n'), filename, csvEncoding, 'text/csv');
+      showSuccess(`${filename} 측점 CSV가 저장되었습니다.`);
+    } finally {
+      isProcessingRef.current = false;
+    }
   };
 
 
@@ -261,20 +272,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
             <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800 text-xs">
               <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
-                <Globe2 className="w-4 h-4 text-sky-600 dark:text-sky-400" />
-                <span className="text-slate-500 dark:text-slate-400">좌표계 정의(PRJ):</span>
+                <Info className="w-4 h-4 text-sky-600 dark:text-sky-400" />
+                <span className="text-slate-500 dark:text-slate-400">좌표계 정보(PRJ)는 포함되지 않습니다. (외부 앱에서 설정 권장)</span>
               </div>
-              <select
-                value={selectedCrs}
-                onChange={e => setSelectedCrs(e.target.value)}
-                className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sky-700 dark:text-sky-300 text-xs rounded-lg px-2.5 py-1 focus:outline-none shadow-sm"
-              >
-                {Object.entries(COORDINATE_SYSTEMS).map(([code, def]) => (
-                  <option key={code} value={code}>
-                    {def.name} ({code})
-                  </option>
-                ))}
-              </select>
             </div>
 
             <button
