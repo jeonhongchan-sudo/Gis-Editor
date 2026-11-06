@@ -23,7 +23,7 @@ interface ShpFeaturePolygon {
   properties: Record<string, string | number>;
 }
 
-import { encodeText } from './encoding';
+import { encodeText, safeByteClip } from './encoding';
 
 /**
  * Creates DBF file buffer from fields and records
@@ -56,9 +56,9 @@ function createDbfBuffer(
   let offset = 32;
   fields.forEach(f => {
     // Field name in DBF must be at most 10 bytes + null terminator
-    const nameBytes = encodeText(f.name, encoding);
+    const clippedName = safeByteClip(f.name, 10, encoding === 'euc-kr' ? 'euc-kr' : 'utf-8');
     for (let i = 0; i < 11; i++) {
-      u8[offset + i] = i < nameBytes.length && i < 10 ? nameBytes[i] : 0;
+      u8[offset + i] = i < clippedName.length ? clippedName[i] : 0;
     }
     view.setUint8(offset + 11, f.type.charCodeAt(0));
     view.setUint8(offset + 16, f.length);
@@ -75,10 +75,8 @@ function createDbfBuffer(
     fields.forEach(f => {
       const val = rec[f.name] !== undefined ? String(rec[f.name]) : '';
       
-      // Encode string based on target encoding
-      // We must be careful about field length (bytes, not chars)
-      const encoded = encodeText(val, encoding);
-      const clipped = encoded.subarray(0, f.length);
+      // Encode and clip string based on target encoding to prevent broken multibyte sequences
+      const clipped = safeByteClip(val, f.length, encoding === 'euc-kr' ? 'euc-kr' : 'utf-8');
       
       if (f.type === 'N') {
         // Numbers: pad left with spaces

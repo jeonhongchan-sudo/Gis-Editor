@@ -369,7 +369,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         <div className="fixed bottom-20 sm:bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-sky-400 dark:border-sky-500/70 px-3.5 py-2 sm:px-4 sm:py-2.5 rounded-2xl shadow-2xl animate-in fade-in slide-in-from-bottom-3 duration-200 w-auto max-w-[90vw]">
           <div className="flex flex-col mr-1.5 sm:mr-2 shrink-0">
             <span className="text-xs font-semibold text-sky-600 dark:text-sky-400">
-              {tool === 'polyline' ? '연속선 입력' : tool === 'polygon' ? '폴리곤 입력' : '측정 입력'}
+              {tool === 'polyline' ? '연속선 입력' : tool === 'polygon' ? '폴리곤 입력' : tool === 'measure' ? '측정 입력' : '그리기 일시중단 (이동중)'}
             </span>
             <span className="text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400">
               측점: <strong className="text-slate-900 dark:text-white">{activePointsCount}</strong>개

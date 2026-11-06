@@ -193,6 +193,68 @@ export function encodeText(
 }
 
 /**
+ * Clips a string by its byte length in a specific encoding without splitting multibyte characters.
+ * Useful for fixed-byte formats like DBF.
+ */
+export function safeByteClip(
+  text: string,
+  maxBytes: number,
+  encoding: 'utf-8' | 'euc-kr'
+): Uint8Array {
+  const bytes = encodeText(text, encoding === 'euc-kr' ? 'euc-kr' : 'utf-8');
+  if (bytes.length <= maxBytes) return bytes;
+
+  // If UTF-8, we check from the end for continuation bytes (10xxxxxx)
+  if (encoding === 'utf-8') {
+    let i = maxBytes;
+    // UTF-8 continuation bytes are 0x80 to 0xBF (10xxxxxx)
+    while (i > 0 && (bytes[i] & 0xC0) === 0x80) {
+      i--;
+    }
+    // Now i points to the start of a multibyte char that might be split
+    // Check if the whole char fits
+    let charLen = 0;
+    const firstByte = bytes[i];
+    if (firstByte <= 0x7F) charLen = 1;
+    else if ((firstByte & 0xE0) === 0xC0) charLen = 2;
+    else if ((firstByte & 0xF0) === 0xE0) charLen = 3;
+    else if ((firstByte & 0xF8) === 0xF0) charLen = 4;
+
+    if (i + charLen <= maxBytes) {
+      return bytes.slice(0, i + charLen);
+    } else {
+      return bytes.slice(0, i);
+    }
+  }
+
+  // If EUC-KR / CP949: 2-byte Korean characters
+  if (encoding === 'euc-kr') {
+    let i = 0;
+    while (i < maxBytes) {
+      const byte = bytes[i];
+      if (byte <= 0x7F) {
+        // ASCII
+        i += 1;
+      } else if (byte >= 0x81 && byte <= 0xFE) {
+        // Lead byte of 2-byte char
+        if (i + 2 <= maxBytes) {
+          i += 2;
+        } else {
+          // Would be split
+          break;
+        }
+      } else {
+        // Unknown/Invalid - treat as 1 byte to avoid infinite loops
+        i += 1;
+      }
+    }
+    return bytes.slice(0, i);
+  }
+
+  return bytes.slice(0, maxBytes);
+}
+
+/**
  * Smart decoder for zip entry filenames or byte arrays from Korean Windows/CAD
  */
 export function smartDecodeKoreanBytes(rawInput: Uint8Array | Buffer | number[] | string[] | any): string {
