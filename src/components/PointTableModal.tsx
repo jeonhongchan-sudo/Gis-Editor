@@ -27,7 +27,7 @@ export const PointTableModal: React.FC<PointTableModalProps> = ({
 }) => {
   const [search, setSearch] = useState('');
   const [editingPtId, setEditingPtId] = useState<string | null>(null);
-  const [editingField, setEditingField] = useState<'name' | 'code' | 'remark' | null>(null);
+  const [editingField, setEditingField] = useState<'name' | null>(null);
   const [tempVal, setTempVal] = useState('');
 
   const filteredPoints = useMemo(() => {
@@ -35,8 +35,6 @@ export const PointTableModal: React.FC<PointTableModalProps> = ({
     const q = search.toLowerCase();
     return points.filter(p => 
       p.name.toLowerCase().includes(q) || 
-      (p.code || '').toLowerCase().includes(q) ||
-      (p.remark || '').toLowerCase().includes(q) ||
       p.id.toLowerCase().includes(q)
     );
   }, [points, search]);
@@ -44,15 +42,15 @@ export const PointTableModal: React.FC<PointTableModalProps> = ({
   const [csvFileName, setCsvFileName] = useState(() => `survey_points_${new Date().toISOString().slice(0, 10)}`);
 
   const handleExportCSV = () => {
-    const lines = ['번호,측점명,코드,비고,X(캐드_동향),Y(캐드_북향),고도(Z),레이어'];
+    const lines = ['번호,측점명,X(캐드_동향),Y(캐드_북향),고도(Z),레이어'];
     points.forEach((p, i) => {
-      lines.push(`${i + 1},"${p.name}","${p.code || ''}","${p.remark || ''}",${p.x.toFixed(3)},${p.y.toFixed(3)},${p.z !== undefined ? p.z.toFixed(3) : ''},"${p.layerId}"`);
+      lines.push(`${i + 1},"${p.name}",${p.x.toFixed(3)},${p.y.toFixed(3)},${p.z !== undefined ? p.z.toFixed(3) : ''},"${p.layerId}"`);
     });
     const cleanName = (csvFileName.trim() || `survey_points_${new Date().toISOString().slice(0, 10)}`).replace(/\.csv$/i, '');
     downloadTextFile(lines.join('\n'), `${cleanName}.csv`, 'utf-8-bom', 'text/csv');
   };
 
-  const handleStartEdit = (pt: CADPoint, field: 'name' | 'code' | 'remark') => {
+  const handleStartEdit = (pt: CADPoint, field: 'name') => {
     setEditingPtId(pt.id);
     setEditingField(field);
     setTempVal((pt as any)[field] || '');
@@ -79,7 +77,7 @@ export const PointTableModal: React.FC<PointTableModalProps> = ({
               </span>
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              DXF/SHP/CSV 통합 데이터: 측점명, 코드, 비고 편집 및 검색
+              DXF/SHP/CSV 통합 데이터: 측점명 편집 및 검색
             </p>
           </div>
           <button
@@ -96,7 +94,7 @@ export const PointTableModal: React.FC<PointTableModalProps> = ({
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
-              placeholder="측점명, 코드, 비고 검색..."
+              placeholder="측점명 검색..."
               value={search}
               onChange={e => setSearch(e.target.value)}
               className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-200 text-xs rounded-xl pl-9 pr-3 py-2 focus:outline-none focus:ring-1 focus:ring-sky-500 shadow-sm"
@@ -157,8 +155,6 @@ export const PointTableModal: React.FC<PointTableModalProps> = ({
                 <tr>
                   <th className="py-2.5 px-3 w-12 text-center">No.</th>
                   <th className="py-2.5 px-3 font-sans min-w-[140px]">측점명 (Name)</th>
-                  <th className="py-2.5 px-3 font-sans min-w-[100px]">코드 (Code)</th>
-                  <th className="py-2.5 px-3 font-sans min-w-[140px]">비고 (Remark)</th>
                   <th className="py-2.5 px-3">X (Easting)</th>
                   <th className="py-2.5 px-3">Y (Northing)</th>
                   <th className="py-2.5 px-3">Z (Elev)</th>
@@ -188,46 +184,6 @@ export const PointTableModal: React.FC<PointTableModalProps> = ({
                         <div className="flex items-center justify-between group/cell">
                           <span className="truncate max-w-[150px]">{pt.name}</span>
                           <button onClick={() => handleStartEdit(pt, 'name')} className="p-1 text-slate-300 hover:text-sky-500 opacity-0 group-hover/cell:opacity-100 transition"><Edit2 className="w-3 h-3"/></button>
-                        </div>
-                      )}
-                    </td>
-
-                    {/* Code Cell */}
-                    <td className="py-2 px-3 font-sans text-slate-600 dark:text-slate-400">
-                      {editingPtId === pt.id && editingField === 'code' ? (
-                        <input
-                          autoFocus
-                          type="text"
-                          value={tempVal}
-                          onChange={e => setTempVal(e.target.value)}
-                          onBlur={() => handleSaveEdit(pt.id)}
-                          onKeyDown={e => e.key === 'Enter' && handleSaveEdit(pt.id)}
-                          className="bg-white dark:bg-slate-950 border border-sky-500 text-xs rounded px-1.5 py-0.5 outline-none w-full shadow-sm"
-                        />
-                      ) : (
-                        <div className="flex items-center justify-between group/cell">
-                          <span className="truncate max-w-[80px]">{pt.code || '-'}</span>
-                          <button onClick={() => handleStartEdit(pt, 'code')} className="p-1 text-slate-300 hover:text-sky-500 opacity-0 group-hover/cell:opacity-100 transition"><Edit2 className="w-3 h-3"/></button>
-                        </div>
-                      )}
-                    </td>
-
-                    {/* Remark Cell */}
-                    <td className="py-2 px-3 font-sans text-slate-500 dark:text-slate-500 italic text-[10px]">
-                      {editingPtId === pt.id && editingField === 'remark' ? (
-                        <input
-                          autoFocus
-                          type="text"
-                          value={tempVal}
-                          onChange={e => setTempVal(e.target.value)}
-                          onBlur={() => handleSaveEdit(pt.id)}
-                          onKeyDown={e => e.key === 'Enter' && handleSaveEdit(pt.id)}
-                          className="bg-white dark:bg-slate-950 border border-sky-500 text-xs rounded px-1.5 py-0.5 outline-none w-full shadow-sm"
-                        />
-                      ) : (
-                        <div className="flex items-center justify-between group/cell">
-                          <span className="truncate max-w-[150px]">{pt.remark || '-'}</span>
-                          <button onClick={() => handleStartEdit(pt, 'remark')} className="p-1 text-slate-300 hover:text-sky-500 opacity-0 group-hover/cell:opacity-100 transition"><Edit2 className="w-3 h-3"/></button>
                         </div>
                       )}
                     </td>

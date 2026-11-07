@@ -306,7 +306,8 @@ export function parseShpBuffer(
         y,
         z: zVal,
         layerId: effectiveLayerId,
-        isSurveyNode: true
+        isSurveyNode: true,
+        attributes: dbfRec ? { ...dbfRec } : undefined
       });
     } 
     // 2. MultiPoints: MultiPoint (8), MultiPointZ (18), MultiPointM (28)
@@ -323,7 +324,8 @@ export function parseShpBuffer(
           x: px,
           y: py,
           layerId: effectiveLayerId,
-          isSurveyNode: true
+          isSurveyNode: true,
+          attributes: dbfRec ? { ...dbfRec } : undefined
         });
       }
     }
@@ -374,7 +376,8 @@ export function parseShpBuffer(
           points: polyPoints,
           layerId: effectiveLayerId,
           name: polyName,
-          fillOpacity: 0.15
+          fillOpacity: 0.15,
+          attributes: dbfRec ? { ...dbfRec } : undefined
         });
       }
     }

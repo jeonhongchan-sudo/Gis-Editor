@@ -15,8 +15,7 @@ import {
   Layers,
   Globe2,
   Info,
-  FileText,
-  Edit3
+  FileText
 } from 'lucide-react';
 import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText, ProjectState } from '../types/cad';
 import { downloadBlob, downloadTextFile, exportToShapefileZip } from '../utils/shpExporter';
@@ -102,6 +101,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         lines,
         polylines,
         polygons,
+        layers,
         encoding: shpEncoding
       });
       const cleanName = (shpFileName.trim() || `gis_shapefiles_${todayStr}`).replace(/\.zip$/i, '');
@@ -121,10 +121,41 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     if (isProcessingRef.current) return;
     try {
       isProcessingRef.current = true;
-      const csvLines = ['번호,측점명,코드,비고,X(Easting),Y(Northing),고도(Z),레이어'];
-      points.forEach((p, idx) => {
-        csvLines.push(`${idx + 1},"${p.name}","${p.code || ''}","${p.remark || ''}",${p.x.toFixed(3)},${p.y.toFixed(3)},${p.z !== undefined ? p.z.toFixed(3) : ''},"${p.layerId}"`);
+      
+      // Collect all dynamic attribute keys from points
+      const customPtKeysSet = new Set<string>();
+      points.forEach(p => {
+        if (p.attributes) {
+          Object.keys(p.attributes).forEach(k => {
+            if (k.trim()) customPtKeysSet.add(k.trim());
+          });
+        }
       });
+      const customPtKeys = Array.from(customPtKeysSet);
+      
+      // Build CSV Header
+      const headers = ['번호', '측점명', 'X(Easting)', 'Y(Northing)', '고도(Z)', '레이어', ...customPtKeys];
+      const csvLines = [headers.join(',')];
+      
+      points.forEach((p, idx) => {
+        const row = [
+          idx + 1,
+          `"${p.name || ''}"`,
+          p.x.toFixed(3),
+          p.y.toFixed(3),
+          p.z !== undefined ? p.z.toFixed(3) : '',
+          `"${layers.find(l => l.id === p.layerId)?.name || '0'}"`
+        ];
+        
+        // Add dynamic attributes
+        customPtKeys.forEach(k => {
+          const val = p.attributes?.[k];
+          row.push(val !== undefined ? `"${val}"` : '""');
+        });
+        
+        csvLines.push(row.join(','));
+      });
+      
       const cleanName = (csvFileName.trim() || `survey_points_${todayStr}`).replace(/\.csv$/i, '');
       const filename = `${cleanName}.csv`;
       await downloadTextFile(csvLines.join('\n'), filename, csvEncoding, 'text/csv');

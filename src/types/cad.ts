@@ -23,10 +23,9 @@ export interface Point2D {
 export interface CADPoint extends Point2D {
   id: string;
   name: string; // 항목 / TextString / Point Name
-  code?: string; // 코드
-  remark?: string; // 비고
   layerId: string;
   isSurveyNode?: boolean;
+  attributes?: Record<string, string | number>;
 }
 
 export interface CADLine {
@@ -56,6 +55,7 @@ export interface CADPolygon {
   color?: string;
   name?: string;
   fillOpacity?: number;
+  attributes?: Record<string, string | number>;
 }
 
 export interface CADText {
@@ -67,6 +67,7 @@ export interface CADText {
   rotation?: number;
   layerId: string;
   color?: string;
+  attributes?: Record<string, string | number>;
 }
 
 export interface CADLayer {

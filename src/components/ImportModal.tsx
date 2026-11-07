@@ -18,7 +18,6 @@ import {
   Archive,
   MapPin,
   Maximize2,
-  FileCode2,
   Database,
   Globe2,
   Info
@@ -35,7 +34,6 @@ import { isExcelBuffer, parseExcelWorkbook } from '../utils/excelParser';
 import { parseShapefileZip, parseShpBuffer, SHPParseResult } from '../utils/shpParser';
 import { decodeBufferText, SupportedEncoding } from '../utils/encoding';
 import { parseGeoJson } from '../utils/geoJsonParser';
-import { parseDxf } from '../utils/dxfParser';
 import { COORDINATE_SYSTEMS } from '../utils/projections';
 
 interface ImportModalProps {
@@ -46,7 +44,7 @@ interface ImportModalProps {
 }
 
 interface StoredRawInput {
-  kind: 'zip' | 'shp-multi' | 'csv' | 'excel' | 'geojson' | 'dxf';
+  kind: 'zip' | 'shp-multi' | 'csv' | 'excel' | 'geojson';
   filename: string;
   buffer?: ArrayBuffer;
   json?: any;
@@ -159,18 +157,6 @@ export const ImportModal: React.FC<ImportModalProps> = ({
       } finally {
         setIsParsing(false);
       }
-    } else if (raw.kind === 'dxf' && raw.json) {
-      try {
-        setIsParsing(true);
-        setParsingStatusMsg('DXF 데이터 재처리 중...');
-        // but since DXF is usually local, we just re-assign.
-        setShpResult(raw.json);
-        setSelectedLayerIds(new Set());
-      } catch (err: any) {
-        console.error('Re-parse dxf failed:', err);
-      } finally {
-        setIsParsing(false);
-      }
     } else if (raw.kind === 'csv' && raw.buffer) {
       const { text } = decodeBufferText(raw.buffer, enc);
       try {
@@ -205,8 +191,19 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
           // Check if it's a ProjectState (our internal format)
           if (parsed.version || parsed.layers || parsed.points || (parsed.texts && Array.isArray(parsed.texts))) {
-            await onLoadProject(parsed as ProjectState);
-            onClose();
+            const unified: SHPParseResult = {
+              points: parsed.points || [],
+              lines: parsed.lines || [],
+              polylines: parsed.polylines || [],
+              polygons: parsed.polygons || [],
+              texts: parsed.texts || [],
+              layers: parsed.layers || [],
+              layerName: parsed.name || jsonFile.name
+            };
+            setShpResult(unified);
+            setSelectedLayerIds(new Set(unified.layers.map(l => l.id)));
+            setShpFileName(jsonFile.name);
+            setLoadedFormat('shp');
             return;
           }
 
@@ -229,36 +226,6 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         } catch (err) {
           console.warn('JSON parsing failed or not a recognized format:', err);
         }
-      }
-    }
-
-    // Case 1.5: .dxf Drawing File
-    const dxfFile = fileArray.find(f => f.name.toLowerCase().endsWith('.dxf'));
-    if (dxfFile) {
-      try {
-        setIsParsing(true);
-        setParsingStatusMsg('AutoCAD DXF 데이터 분석 중...');
-        setParsingProgress(30);
-
-        const buffer = await dxfFile.arrayBuffer();
-        const { text } = decodeBufferText(buffer, selectedEncoding);
-        
-        setParsingProgress(60);
-        const res = parseDxf(text, dxfFile.name);
-        
-        rawInputRef.current = { kind: 'dxf', filename: dxfFile.name, json: res };
-        setShpResult(res);
-        // DXF usually has too many layers, so default to "Select None" as requested
-        setSelectedLayerIds(new Set());
-        setShpFileName(dxfFile.name);
-        setLoadedFormat('shp');
-        setParsingProgress(100);
-        return;
-      } catch (err: any) {
-        alert('DXF 분석 실패: ' + (err.message || err));
-        return;
-      } finally {
-        setIsParsing(false);
       }
     }
 
@@ -529,7 +496,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 type="file" 
                 className="hidden"
                 multiple
-                accept=".xlsx,.xls,.csv,.txt,.shp,.dbf,.shx,.cpg,.zip,.geojson,.json,.dxf"
+                accept=".xlsx,.xls,.csv,.txt,.shp,.dbf,.shx,.cpg,.zip,.geojson,.json"
                 onChange={async e => {
                   const files = e.target.files;
                   if (files && files.length > 0) {
@@ -549,9 +516,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 <span className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 text-[11px] text-emerald-600 dark:text-emerald-400 border border-slate-200 dark:border-slate-700 shadow-sm">
                   ✓ SHP / GeoJSON 좌표계 변환 지원
                 </span>
-                <span className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 text-[11px] text-sky-600 dark:text-sky-400 border border-slate-200 dark:border-slate-700 shadow-sm">
-                  ✓ AutoCAD DXF 변환 데이터 지원
-                </span>
+
                 <span className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 text-[11px] text-purple-600 dark:text-purple-400 border border-slate-200 dark:border-slate-700 shadow-sm">
                   ✓ 통합 백업용 GeoJSON 지원
                 </span>
@@ -583,7 +548,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                     <Archive className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                     <div>
                       <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
-                        {rawInputRef.current?.kind === 'geojson' ? 'GeoJSON' : rawInputRef.current?.kind === 'dxf' ? 'AutoCAD DXF' : 'Shapefile'} 데이터 감지됨
+                        {rawInputRef.current?.kind === 'geojson' ? 'GeoJSON' : 'Shapefile'} 데이터 감지됨
                       </h3>
                       <p className="text-[11px] text-slate-500 dark:text-slate-400">
                         {shpFileName || 'GIS 도면 데이터'}

@@ -85,35 +85,28 @@ export function parseGeoJson(
       
       if (dxftype === 'TEXT') {
         const name = props.text || props.TEXTSTRING || props.label || props.name || `TXT_${idx + 1}`;
-        const remark = props.remark || props.REMARK || props.비고 || props.DESC || props.설명 || '';
-        const code = props.code || props.CODE || props.지목 || props.코드 || '';
-
         points.push({
           id: props.id || `gj-pt-txt-${Date.now()}-${idx}`,
           name: String(name),
-          remark: String(remark),
-          code: String(code),
           x: pt.x,
           y: pt.y,
           z: pt.z,
           layerId: layer.id,
-          isSurveyNode: true
+          isSurveyNode: true,
+          attributes: props
         });
       } else {
         const name = props.TEXTSTRING || props.text || props.label || props.name || props.PT_NAME || `PT_${idx + 1}`;
-        const remark = props.remark || props.REMARK || props.비고 || props.DESC || props.설명 || '';
-        const code = props.code || props.CODE || props.지목 || props.코드 || '';
 
         points.push({
           id: props.id || `gj-pt-${Date.now()}-${idx}`,
           name: String(name),
-          remark: String(remark),
-          code: String(code),
           x: pt.x,
           y: pt.y,
           z: pt.z,
           layerId: layer.id,
-          isSurveyNode: props.isSurveyNode !== undefined ? !!props.isSurveyNode : true
+          isSurveyNode: props.isSurveyNode !== undefined ? !!props.isSurveyNode : true,
+          attributes: props
         });
       }
     } 
@@ -128,7 +121,8 @@ export function parseGeoJson(
           y: pt.y,
           z: pt.z,
           layerId: layer.id,
-          isSurveyNode: true
+          isSurveyNode: true,
+          attributes: props
         });
       });
     }
@@ -170,7 +164,8 @@ export function parseGeoJson(
           name: props.name || `POLY_${idx + 1}`,
           points: displayPts,
           layerId: layer.id,
-          fillOpacity: 0.15
+          fillOpacity: 0.15,
+          attributes: props
         });
       }
     } else if (geom.type === 'MultiPolygon') {
@@ -187,7 +182,8 @@ export function parseGeoJson(
             name: props.name || `MPOLY_${idx + 1}_${subIdx + 1}`,
             points: displayPts,
             layerId: layer.id,
-            fillOpacity: 0.15
+            fillOpacity: 0.15,
+            attributes: props
           });
         }
       });

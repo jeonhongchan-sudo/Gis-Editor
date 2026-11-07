@@ -4,13 +4,16 @@
  */
 
 import React from 'react';
-import { X, Touchpad, Magnet, ArrowLeftRight, FileCode, Layers, HelpCircle } from 'lucide-react';
+import { X, Touchpad, Magnet, ArrowLeftRight, FileCode, Layers, HelpCircle, Plus } from 'lucide-react';
 
 interface HelpModalProps {
   onClose: () => void;
+  onCreateSampleData: () => void;
 }
 
-export const HelpModal: React.FC<HelpModalProps> = ({ onClose }) => {
+import { Sparkles } from 'lucide-react';
+
+export const HelpModal: React.FC<HelpModalProps> = ({ onClose, onCreateSampleData }) => {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
       <div className="w-full max-w-2xl max-h-[85vh] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700/80 rounded-2xl shadow-2xl flex flex-col overflow-hidden text-slate-900 dark:text-slate-100">
@@ -30,6 +33,27 @@ export const HelpModal: React.FC<HelpModalProps> = ({ onClose }) => {
 
         {/* Content */}
         <div className="p-4 space-y-4 overflow-y-auto text-xs text-slate-600 dark:text-slate-300 leading-relaxed custom-scrollbar">
+          {/* Sample Data Generator Section (NEW) */}
+          <div className="p-4 bg-gradient-to-br from-sky-50 to-indigo-50 dark:from-sky-950/40 dark:to-indigo-950/40 border border-sky-200 dark:border-sky-500/30 rounded-2xl space-y-3 shadow-inner">
+            <div className="flex items-center gap-2 text-sky-700 dark:text-sky-300 font-bold text-sm">
+              <Sparkles className="w-4 h-4" />
+              <span>처음이신가요? 샘플 데이터를 생성해보세요</span>
+            </div>
+            <p className="text-[11px] text-slate-600 dark:text-slate-400">
+              측점(맨홀, 전주) 및 관로 성과물이 포함된 임의의 데이터를 생성하여 <strong>속성(OD) 관리</strong> 및 <strong>내보내기</strong> 기능을 미리 체험해 볼 수 있습니다.
+            </p>
+            <button
+              onClick={() => {
+                onCreateSampleData();
+                onClose();
+              }}
+              className="w-full py-2.5 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl shadow-md shadow-sky-600/30 transition flex items-center justify-center gap-1.5 active:scale-95"
+            >
+              <Plus className="w-4 h-4" />
+              <span>맨홀/전주 샘플 데이터 자동 생성</span>
+            </button>
+          </div>
+
           {/* Section 1 */}
           <div className="p-3.5 bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-xl space-y-2">
             <div className="flex items-center gap-2 text-sky-600 dark:text-sky-400 font-semibold text-sm">
@@ -43,6 +67,8 @@ export const HelpModal: React.FC<HelpModalProps> = ({ onClose }) => {
               • CSV 및 엑셀 파일을 불러올 때 각 열을 X와 Y에 맞게 지정하면 도면에 정확한 위치로 배치됩니다. 모든 수치와 좌표는 소수점 3자리까지 정밀하게 관리됩니다.
             </p>
           </div>
+          
+          {/* ... other sections ... */}
 
           {/* Section 2 */}
           <div className="p-3.5 bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-xl space-y-2">

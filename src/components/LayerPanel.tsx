@@ -5,11 +5,15 @@
 
 import React, { useState } from 'react';
 import { Eye, EyeOff, Lock, Unlock, Plus, X, Palette, CheckCircle2, Trash2, Edit2, Check } from 'lucide-react';
-import { CADLayer } from '../types/cad';
+import { CADLayer, CADLine, CADPoint, CADPolyline } from '../types/cad';
+import { distance2D } from '../utils/geometry';
 
 interface LayerPanelProps {
   layers: CADLayer[];
   activeLayerId: string;
+  points: CADPoint[];
+  lines: CADLine[];
+  polylines: CADPolyline[];
   onSetActiveLayerId: (id: string) => void;
   onToggleVisible: (id: string) => void;
   onToggleLock: (id: string) => void;
@@ -36,6 +40,9 @@ const PALETTE = [
 export const LayerPanel: React.FC<LayerPanelProps> = ({
   layers,
   activeLayerId,
+  points,
+  lines,
+  polylines,
   onSetActiveLayerId,
   onToggleVisible,
   onToggleLock,
@@ -169,9 +176,30 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                   />
                 ) : (
                   <div className="flex flex-col overflow-hidden">
-                    <span className={`text-xs font-semibold truncate ${isActive ? 'text-sky-700 dark:text-sky-300' : 'text-slate-700 dark:text-slate-300'}`}>
-                      {layer.name}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs font-semibold truncate ${isActive ? 'text-sky-700 dark:text-sky-300' : 'text-slate-700 dark:text-slate-300'}`}>
+                        {layer.name}
+                      </span>
+                      {(() => {
+                        let totalLen = 0;
+                        lines.filter(ln => ln.layerId === layer.id).forEach(ln => {
+                          totalLen += distance2D(ln.start, ln.end);
+                        });
+                        polylines.filter(pl => pl.layerId === layer.id).forEach(pl => {
+                          for (let i = 0; i < pl.points.length - 1; i++) {
+                            totalLen += distance2D(pl.points[i], pl.points[i + 1]);
+                          }
+                        });
+                        if (totalLen > 0) {
+                          return (
+                            <span className="text-[10px] text-slate-400 dark:text-slate-500 font-mono">
+                              ({totalLen.toFixed(3)}m)
+                            </span>
+                          );
+                        }
+                        return null;
+                      })()}
+                    </div>
                     {isActive && (
                       <span className="text-[9px] text-sky-500 dark:text-sky-400 font-medium">현재 작업 레이어</span>
                     )}

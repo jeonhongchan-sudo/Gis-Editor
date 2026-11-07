@@ -4,7 +4,7 @@
  */
 
 import JSZip from 'jszip';
-import { CADLine, CADPoint, CADPolygon, CADPolyline, Point2D } from '../types/cad';
+import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, Point2D } from '../types/cad';
 import { COORDINATE_SYSTEMS } from './projections';
 
 interface ShpFeaturePoint {
@@ -365,6 +365,7 @@ export interface SHPExportBundleOptions {
   lines: CADLine[];
   polylines: CADPolyline[];
   polygons: CADPolygon[];
+  layers: CADLayer[];
   encoding?: 'utf-8' | 'euc-kr';
 }
 
@@ -372,7 +373,7 @@ export interface SHPExportBundleOptions {
  * Export CAD data as complete ESRI Shapefile ZIP bundle with .shp, .shx, .dbf, and .prj
  */
 export async function exportToShapefileZip(options: SHPExportBundleOptions): Promise<Blob> {
-  const { points, lines, polylines, polygons, encoding = 'euc-kr' } = options;
+  const { points, lines, polylines, polygons, layers, encoding = 'euc-kr' } = options;
   const zip = new JSZip();
 
   // .cpg content
@@ -380,33 +381,55 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
 
   // 1. Export Points layer if points exist
   if (points.length > 0) {
-    const ptFeatures: ShpFeaturePoint[] = points.map((p, idx) => ({
-      x: p.x,
-      y: p.y,
-      properties: {
-        ID: idx + 1,
-        NAME: p.name.slice(0, 20),
-        LAYER: p.layerId.replace(/^layer-/, '').slice(0, 15),
-        Z: p.z !== undefined ? p.z.toFixed(3) : 0
+    const customPtFieldKeysSet = new Set<string>();
+    points.forEach(p => {
+      if (p.attributes) {
+        Object.keys(p.attributes).forEach(k => {
+          if (k.trim()) customPtFieldKeysSet.add(k.trim());
+        });
       }
-    }));
+    });
+    const customPtFieldKeys = Array.from(customPtFieldKeysSet).slice(0, 15);
+
+    const ptFeatures: ShpFeaturePoint[] = points.map((p, idx) => {
+      const props: Record<string, string | number> = {
+        ID: idx + 1,
+        NAME: p.name.slice(0, 30),
+        LAYER: layers.find(l => l.id === p.layerId)?.name?.slice(0, 15) || '0',
+        Z: p.z !== undefined ? p.z : 0
+      };
+      
+      if (p.attributes) {
+        customPtFieldKeys.forEach(k => {
+          props[k] = p.attributes![k] !== undefined ? p.attributes![k] : '';
+        });
+      }
+      
+      return {
+        x: p.x,
+        y: p.y,
+        properties: props
+      };
+    });
+
+    const dbfFields: { name: string; type: 'C' | 'N'; length: number; decimals: number }[] = [
+      { name: 'ID', type: 'N', length: 10, decimals: 0 },
+      { name: 'NAME', type: 'C', length: 30, decimals: 0 },
+      { name: 'LAYER', type: 'C', length: 15, decimals: 0 },
+      { name: 'Z', type: 'N', length: 12, decimals: 3 }
+    ];
+
+    customPtFieldKeys.forEach(k => {
+      dbfFields.push({ name: k.slice(0, 10), type: 'C', length: 30, decimals: 0 });
+    });
 
     const { shp, shx } = createPointShpAndShx(ptFeatures);
-    const dbf = createDbfBuffer(
-      [
-        { name: 'ID', type: 'N', length: 10, decimals: 0 },
-        { name: 'NAME', type: 'C', length: 20, decimals: 0 },
-        { name: 'LAYER', type: 'C', length: 15, decimals: 0 },
-        { name: 'Z', type: 'N', length: 10, decimals: 3 }
-      ],
-      ptFeatures.map(f => f.properties),
-      encoding
-    );
+    const dbf = createDbfBuffer(dbfFields, ptFeatures.map(f => f.properties), encoding);
 
-    zip.file('points_layer_0.shp', shp);
-    zip.file('points_layer_0.shx', shx);
-    zip.file('points_layer_0.dbf', dbf);
-    zip.file('points_layer_0.cpg', cpgContent);
+    zip.file('cad_points.shp', shp);
+    zip.file('cad_points.shx', shx);
+    zip.file('cad_points.dbf', dbf);
+    zip.file('cad_points.cpg', cpgContent);
   }
 
   // Combine single lines and polylines into polyline features with Object Data (OD)
@@ -534,6 +557,16 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
 
   // 3. Export Polygons if any
   if (polygons.length > 0) {
+    const customPgFieldKeysSet = new Set<string>();
+    polygons.forEach(pg => {
+      if (pg.attributes) {
+        Object.keys(pg.attributes).forEach(k => {
+          if (k.trim()) customPgFieldKeysSet.add(k.trim());
+        });
+      }
+    });
+    const customPgFieldKeys = Array.from(customPgFieldKeysSet).slice(0, 15);
+
     const polyFeatures: ShpFeaturePolygon[] = polygons.map((poly, idx) => {
       let area = 0;
       for (let i = 0; i < poly.points.length; i++) {
@@ -543,28 +576,38 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       }
       area = Math.abs(area) / 2.0;
 
+      const props: Record<string, string | number> = {
+        ID: idx + 1,
+        LAYER: layers.find(l => l.id === poly.layerId)?.name?.slice(0, 15) || '0',
+        AREA_M2: area.toFixed(3),
+        AREA_PY: (area / 3.305785).toFixed(3)
+      };
+
+      if (poly.attributes) {
+        customPgFieldKeys.forEach(k => {
+          props[k] = poly.attributes![k] !== undefined ? poly.attributes![k] : '';
+        });
+      }
+
       return {
         points: poly.points,
-        properties: {
-          ID: idx + 1,
-          LAYER: poly.layerId.replace(/^layer-/, '').slice(0, 15),
-          AREA_M2: area.toFixed(3),
-          AREA_PY: (area / 3.305785).toFixed(3)
-        }
+        properties: props
       };
     });
 
+    const dbfFields: { name: string; type: 'C' | 'N'; length: number; decimals: number }[] = [
+      { name: 'ID', type: 'N', length: 10, decimals: 0 },
+      { name: 'LAYER', type: 'C', length: 15, decimals: 0 },
+      { name: 'AREA_M2', type: 'N', length: 14, decimals: 3 },
+      { name: 'AREA_PY', type: 'N', length: 12, decimals: 3 }
+    ];
+
+    customPgFieldKeys.forEach(k => {
+      dbfFields.push({ name: k.slice(0, 10), type: 'C', length: 30, decimals: 0 });
+    });
+
     const { shp, shx } = createPolygonShpAndShx(polyFeatures);
-    const dbf = createDbfBuffer(
-      [
-        { name: 'ID', type: 'N', length: 10, decimals: 0 },
-        { name: 'LAYER', type: 'C', length: 15, decimals: 0 },
-        { name: 'AREA_M2', type: 'N', length: 14, decimals: 3 },
-        { name: 'AREA_PY', type: 'N', length: 12, decimals: 3 }
-      ],
-      polyFeatures.map(f => f.properties),
-      encoding
-    );
+    const dbf = createDbfBuffer(dbfFields, polyFeatures.map(f => f.properties), encoding);
 
     zip.file('cad_polygons.shp', shp);
     zip.file('cad_polygons.shx', shx);

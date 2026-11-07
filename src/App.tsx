@@ -25,7 +25,7 @@ import { Toolbar } from './components/Toolbar';
 import { CoordinateBar } from './components/CoordinateBar';
 import { LayerPanel } from './components/LayerPanel';
 import { PointTableModal } from './components/PointTableModal';
-import { LineODModal } from './components/LineODModal';
+import { AttributeEditorModal, EntityType } from './components/AttributeEditorModal';
 import { ImportModal } from './components/ImportModal';
 import { ExportModal } from './components/ExportModal';
 import { ManualPointModal } from './components/ManualPointModal';
@@ -56,35 +56,27 @@ export default function App() {
     return (localStorage.getItem('theme') as 'light' | 'dark') || 'dark';
   });
 
-  // On Mount: Clear previous session data to ensure a "Strong Initialization" as requested
-  // We use sessionStorage to ensure this only happens ONCE per tab session, 
-  // preventing accidental resets during re-renders or temporary reloads.
+  // On Mount: Load last project if exists
   useEffect(() => {
     const initApp = async () => {
-      if (sessionStorage.getItem('cad_app_initialized')) return;
-      
-      // Clear persistent IDs so we always start fresh
-      localStorage.removeItem('last_project_id');
-      
-      // Strong reset: Clear all IndexedDB data on startup
-      try {
-        await Promise.all([
-          db.projects.clear(),
-          db.layers.clear(),
-          db.points.clear(),
-          db.lines.clear(),
-          db.polylines.clear(),
-          db.polygons.clear(),
-          db.texts.clear()
-        ]);
-        sessionStorage.setItem('cad_app_initialized', 'true');
-        console.log('App initialization: Local database cleared for new session.');
-      } catch (err) {
-        console.warn('DB clear failed during init:', err);
+      const lastId = localStorage.getItem('last_project_id');
+      if (lastId) {
+        setCurrentProjectId(parseInt(lastId));
+      } else {
+        const latest = await db.projects.orderBy('updatedAt').last();
+        if (latest) {
+          setCurrentProjectId(latest.id!);
+        }
       }
     };
     initApp();
   }, []);
+
+  useEffect(() => {
+    if (currentProjectId !== null) {
+      localStorage.setItem('last_project_id', currentProjectId.toString());
+    }
+  }, [currentProjectId]);
 
   useEffect(() => {
     if (theme === 'dark') {
@@ -135,8 +127,8 @@ export default function App() {
   // Modals & Panels
   const [showLayerPanel, setShowLayerPanel] = useState(false);
   const [showTableModal, setShowTableModal] = useState(false);
-  const [showLineODModal, setShowLineODModal] = useState(false);
-  const [lineODTargetIds, setLineODTargetIds] = useState<string[] | undefined>(undefined);
+  const [showAttributeModal, setShowAttributeModal] = useState(false);
+  const [attributeTargetIds, setAttributeTargetIds] = useState<string[] | undefined>(undefined);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
@@ -381,48 +373,133 @@ export default function App() {
     pushHistory(`선택 객체 ${selectedEntityIds.length}개 레이어 일괄 변경`);
   };
 
-  const handleUpdateLineAttributes = async (updatedLines: { id: string; name?: string; attributes: Record<string, string | number> }[]) => {
-    if (updatedLines.length === 0) return;
-    const updateMap = new Map(updatedLines.map(u => [u.id, u]));
+  const handleUpdateEntityAttributes = async (updates: { id: string; type: EntityType; name?: string; attributes: Record<string, string | number> }[]) => {
+    if (updates.length === 0) return;
+    const updateMap = new Map(updates.map(u => [u.id, u]));
 
+    // 1. Update UI State
+    setPoints(prev => prev.map(p => {
+      const u = updateMap.get(p.id);
+      return (u && u.type === 'point') ? { ...p, name: u.name || p.name, attributes: u.attributes } : p;
+    }));
     setLines(prev => prev.map(l => {
       const u = updateMap.get(l.id);
-      if (u) {
-        return { ...l, name: u.name || l.name, attributes: u.attributes };
-      }
-      return l;
+      return (u && u.type === 'line') ? { ...l, name: u.name || l.name, attributes: u.attributes } : l;
     }));
-
     setPolylines(prev => prev.map(pl => {
       const u = updateMap.get(pl.id);
-      if (u) {
-        return { ...pl, name: u.name || pl.name, attributes: u.attributes };
-      }
-      return pl;
+      return (u && u.type === 'polyline') ? { ...pl, name: u.name || pl.name, attributes: u.attributes } : pl;
+    }));
+    setPolygons(prev => prev.map(pg => {
+      const u = updateMap.get(pg.id);
+      return (u && u.type === 'polygon') ? { ...pg, name: u.name || pg.name, attributes: u.attributes } : pg;
+    }));
+    setTexts(prev => prev.map(t => {
+      const u = updateMap.get(t.id);
+      return (u && u.type === 'text') ? { ...t, text: u.name || t.text, attributes: u.attributes } : t;
     }));
 
+    // 2. Persist to DB
     if (currentProjectId !== null) {
-      const dbLinesToUpdate = lines
-        .filter(l => updateMap.has(l.id))
-        .map(l => {
-          const u = updateMap.get(l.id)!;
-          return { ...l, name: u.name || l.name, attributes: u.attributes, projectId: currentProjectId };
-        });
+      const dbUpdates: Promise<any>[] = [];
+      
+      updates.forEach(u => {
+        let collection: any;
+        switch (u.type) {
+          case 'point': collection = db.points; break;
+          case 'line': collection = db.lines; break;
+          case 'polyline': collection = db.polylines; break;
+          case 'polygon': collection = db.polygons; break;
+          case 'text': collection = db.texts; break;
+        }
+        
+        if (collection) {
+          const updateObj: any = { attributes: u.attributes, projectId: currentProjectId };
+          if (u.name) {
+            if (u.type === 'text') updateObj.text = u.name;
+            else updateObj.name = u.name;
+          }
+          dbUpdates.push(collection.where('id').equals(u.id).modify(updateObj));
+        }
+      });
 
-      const dbPlsToUpdate = polylines
-        .filter(pl => updateMap.has(pl.id))
-        .map(pl => {
-          const u = updateMap.get(pl.id)!;
-          return { ...pl, name: u.name || pl.name, attributes: u.attributes, projectId: currentProjectId };
-        });
-
-      await Promise.all([
-        dbLinesToUpdate.length > 0 ? db.lines.bulkPut(dbLinesToUpdate) : Promise.resolve(),
-        dbPlsToUpdate.length > 0 ? db.polylines.bulkPut(dbPlsToUpdate) : Promise.resolve()
-      ]);
+      await Promise.all(dbUpdates);
     }
 
-    pushHistory(`선 OD 속성 ${updatedLines.length}개 수정`);
+    pushHistory(`객체 속성(OD) ${updates.length}개 수정`);
+  };
+
+  const handleCreateSampleData = async () => {
+    // 1. Ensure project exists
+    let pid = currentProjectId;
+    if (pid === null) {
+      pid = await db.projects.add({ name: '샘플 현장 데이터', createdAt: Date.now(), updatedAt: Date.now() });
+      setCurrentProjectId(pid);
+      for (const l of layers) {
+        await db.layers.add({ ...l, projectId: pid });
+      }
+    }
+
+    // 2. Sample Manhole (Point)
+    const manhole: CADPoint = {
+      id: `sample-pt-${Date.now()}-1`,
+      name: '맨홀_MH01',
+      x: 100, y: 100, z: 15.5,
+      layerId: activeLayerId,
+      isSurveyNode: true,
+      attributes: {
+        '시설종류': '맨홀',
+        '규격': 'D600',
+        '재질': '철근콘크리트',
+        '심도': '1.5',
+        '상태': '양호',
+        '비고': '샘플 데이터'
+      }
+    };
+
+    // 3. Sample Utility Pole (Point)
+    const pole: CADPoint = {
+      id: `sample-pt-${Date.now()}-2`,
+      name: '전주_P12',
+      x: 120, y: 110,
+      layerId: activeLayerId,
+      isSurveyNode: true,
+      attributes: {
+        '시설종류': '전주',
+        '규격': '12m',
+        '재질': '콘크리트',
+        '상태': '보통',
+        '비고': '샘플 전주'
+      }
+    };
+
+    // 4. Sample Pipeline (Line)
+    const pipeline: CADLine = {
+      id: `sample-ln-${Date.now()}`,
+      name: '상수관로_L01',
+      start: { x: 100, y: 100 },
+      end: { x: 120, y: 110 },
+      layerId: activeLayerId,
+      attributes: {
+        '시설구분': '상수관',
+        '규격': 'D100',
+        '재질': 'PE',
+        '매설심도': '1.2',
+        '상태': '양호'
+      }
+    };
+
+    setPoints(prev => [...prev, manhole, pole]);
+    setLines(prev => [...prev, pipeline]);
+
+    await Promise.all([
+      db.points.bulkPut([{ ...manhole, projectId: pid! }, { ...pole, projectId: pid! }]),
+      db.lines.add({ ...pipeline, projectId: pid! })
+    ]);
+
+    handleZoomExtents([manhole, pole]);
+    pushHistory('샘플 데이터 생성');
+    alert('맨홀, 전주, 관로 샘플 데이터가 생성되었습니다.');
   };
 
   const handleDeletePoint = async (id: string) => {
@@ -610,7 +687,7 @@ export default function App() {
         onOpenImport={() => setShowImportModal(true)}
         onOpenExport={() => setShowExportModal(true)}
         onOpenTable={() => setShowTableModal(true)}
-        onOpenLineOD={() => { setLineODTargetIds(undefined); setShowLineODModal(true); }}
+        onOpenAttributeEditor={() => { setAttributeTargetIds(undefined); setShowAttributeModal(true); }}
         onToggleLayerPanel={() => setShowLayerPanel(prev => !prev)}
         onOpenHelp={() => setShowHelpModal(true)}
         onOpenManualPoint={() => setShowManualPointModal(true)}
@@ -660,21 +737,18 @@ export default function App() {
               <span>{multiSelectMode ? '누적추가 ON' : '+ 추가선택'}</span>
             </button>
 
-            {/* Line OD Attributes button when lines/polylines are selected */}
-            {selLinesCount > 0 && (
-              <button
-                onClick={() => {
-                  const lineIds = selectedEntityIds.filter(id => lines.some(l => l.id === id) || polylines.some(pl => pl.id === id));
-                  setLineODTargetIds(lineIds);
-                  setShowLineODModal(true);
-                }}
-                title="선택된 선 객체 데이터(OD) 속성 입력 및 편집"
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-sky-50 dark:bg-sky-950/80 hover:bg-sky-100 dark:hover:bg-sky-900 text-sky-600 dark:text-sky-300 border border-sky-200 dark:border-sky-800 text-xs font-semibold transition"
-              >
-                <Database className="w-3.5 h-3.5 text-sky-500" />
-                <span>선 OD 속성 ({selLinesCount}개)</span>
-              </button>
-            )}
+            {/* Generic Attribute Editor button when any entity is selected */}
+            <button
+              onClick={() => {
+                setAttributeTargetIds(selectedEntityIds);
+                setShowAttributeModal(true);
+              }}
+              title="선택된 객체의 데이터(OD) 속성 입력 및 편집"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-sky-50 dark:bg-sky-950/80 hover:bg-sky-100 dark:hover:bg-sky-900 text-sky-600 dark:text-sky-300 border border-sky-200 dark:border-sky-800 text-xs font-semibold transition"
+            >
+              <Database className="w-3.5 h-3.5 text-sky-500" />
+              <span>객체 속성 (OD)</span>
+            </button>
 
             {/* Layer batch change selector */}
             <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-700/80 rounded-xl px-2 py-1">
@@ -734,6 +808,74 @@ export default function App() {
             >
               <X className="w-4 h-4" />
             </button>
+          </div>
+        )}
+
+        {/* Single Entity Property Inspector Overlay (NEW: Quick visibility for OD attributes) */}
+        {selectedEntityIds.length === 1 && (
+          <div className="fixed bottom-24 right-4 z-30 w-72 max-h-[50vh] bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-sky-400 dark:border-sky-500/60 rounded-2xl shadow-2xl p-4 flex flex-col gap-3 animate-in fade-in slide-in-from-right-4 duration-300 overflow-hidden">
+            {(() => {
+              const sid = selectedEntityIds[0];
+              const ent = points.find(p => p.id === sid) || lines.find(l => l.id === sid) || polylines.find(pl => pl.id === sid) || polygons.find(pg => pg.id === sid) || texts.find(t => t.id === sid);
+              if (!ent) return null;
+
+              const attrs = ent.attributes || {};
+              const attrKeys = Object.keys(attrs);
+
+              return (
+                <>
+                  <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-sky-500/10 flex items-center justify-center text-sky-600 dark:text-sky-400">
+                        <Focus className="w-4 h-4" />
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-[13px] font-bold text-slate-900 dark:text-white truncate max-w-[160px]">
+                          {(ent as any).name || (ent as any).text || '선택된 객체'}
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-medium">레이어: {layers.find(l => l.id === ent.layerId)?.name || '-'}</span>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={() => setSelectedEntityIds([])}
+                      className="p-1 text-slate-300 hover:text-slate-600 dark:hover:text-white transition"
+                    ><X className="w-4 h-4" /></button>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2.5">
+                    {attrKeys.length === 0 ? (
+                      <div className="py-4 text-center">
+                        <p className="text-[11px] text-slate-400 italic">설정된 속성이 없습니다.</p>
+                        <button 
+                          onClick={() => setShowAttributeModal(true)}
+                          className="mt-2 text-[10px] font-bold text-sky-600 dark:text-sky-400 hover:underline"
+                        >속성 추가하기</button>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {attrKeys.map(k => (
+                          <div key={k} className="flex flex-col gap-0.5 bg-slate-50 dark:bg-slate-950/50 p-2 rounded-xl border border-slate-100 dark:border-slate-800/80">
+                            <span className="text-[9px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-tighter">{k}</span>
+                            <span className="text-[11px] font-semibold text-slate-700 dark:text-slate-200">{String(attrs[k])}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setAttributeTargetIds([ent.id]);
+                      setShowAttributeModal(true);
+                    }}
+                    className="w-full py-2 bg-sky-50 dark:bg-sky-900/40 hover:bg-sky-100 dark:hover:bg-sky-900 text-sky-600 dark:text-sky-300 border border-sky-200 dark:border-sky-800 text-[11px] font-bold rounded-xl transition flex items-center justify-center gap-1.5"
+                  >
+                    <Database className="w-3.5 h-3.5" />
+                    <span>속성 편집 (OD Edit)</span>
+                  </button>
+                </>
+              );
+            })()}
           </div>
         )}
 
@@ -821,6 +963,7 @@ export default function App() {
         {showLayerPanel && (
           <LayerPanel
             layers={layers} activeLayerId={activeLayerId}
+            points={points} lines={lines} polylines={polylines}
             onSetActiveLayerId={setActiveLayerId}
             onToggleVisible={handleToggleLayerVisible}
             onToggleLock={handleToggleLayerLock}
@@ -859,7 +1002,7 @@ export default function App() {
         />
       )}
 
-      {showHelpModal && <HelpModal onClose={() => setShowHelpModal(false)} />}
+      {showHelpModal && <HelpModal onClose={() => setShowHelpModal(false)} onCreateSampleData={handleCreateSampleData} />}
       
       {showManualPointModal && (
         <ManualPointModal
@@ -875,15 +1018,19 @@ export default function App() {
         />
       )}
 
-      {showLineODModal && (
-        <LineODModal
+      {showAttributeModal && (
+        <AttributeEditorModal
+          layers={layers}
+          points={points}
           lines={lines}
           polylines={polylines}
-          targetLineIds={lineODTargetIds}
+          polygons={polygons}
+          texts={texts}
+          targetIds={attributeTargetIds}
           activeLayerId={activeLayerId}
-          onUpdateLineAttributes={handleUpdateLineAttributes}
-          onFocusLine={(pts) => handleZoomExtents(pts)}
-          onClose={() => setShowLineODModal(false)}
+          onUpdateAttributes={handleUpdateEntityAttributes}
+          onFocusEntity={(pts) => handleZoomExtents(pts)}
+          onClose={() => setShowAttributeModal(false)}
         />
       )}
     </div>

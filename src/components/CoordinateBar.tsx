@@ -36,7 +36,7 @@ interface CoordinateBarProps {
   onOpenImport: () => void;
   onOpenExport: () => void;
   onOpenTable: () => void;
-  onOpenLineOD: () => void;
+  onOpenAttributeEditor: () => void;
   onToggleLayerPanel: () => void;
   onOpenHelp: () => void;
   onOpenManualPoint: () => void;
@@ -53,7 +53,7 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
   onOpenImport,
   onOpenExport,
   onOpenTable,
-  onOpenLineOD,
+  onOpenAttributeEditor,
   onToggleLayerPanel,
   onOpenHelp,
   onOpenManualPoint,
@@ -129,17 +129,14 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
             </span>
           </button>
 
-          {/* Line OD Table Button */}
+          {/* Attribute Editor Button */}
           <button
-            onClick={onOpenLineOD}
-            title="선 속성 및 오토캐드 맵(OD) 데이터 관리"
+            onClick={onOpenAttributeEditor}
+            title="객체 속성 및 오토캐드 맵(OD) 데이터 관리"
             className="hidden sm:flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium border border-slate-200 dark:border-slate-700 transition"
           >
             <Database className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400" />
-            <span className="hidden md:inline">선(OD)</span>
-            <span className="text-[10px] bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-1 rounded-full font-mono">
-              {linesCount}
-            </span>
+            <span className="hidden md:inline">속성(OD)</span>
           </button>
 
           {/* Layers Button */}
@@ -196,12 +193,12 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
             <button
               onClick={() => {
                 setMobileMenuOpen(false);
-                onOpenLineOD();
+                onOpenAttributeEditor();
               }}
               className="flex items-center justify-center gap-1.5 p-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sky-600 dark:text-sky-400 text-xs font-medium shadow-sm"
             >
               <Database className="w-3.5 h-3.5" />
-              <span>선/OD ({linesCount})</span>
+              <span>속성/OD</span>
             </button>
 
             <button

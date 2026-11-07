@@ -42,7 +42,8 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
         layer: layers.find(l => l.id === p.layerId)?.name || '0',
         layerId: p.layerId,
         dxftype: 'POINT',
-        isSurveyNode: p.isSurveyNode
+        isSurveyNode: p.isSurveyNode,
+        ...(p.attributes || {})
       }
     });
   });
@@ -137,7 +138,8 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
         name: pg.name,
         layer: layers.find(l => l.id === pg.layerId)?.name || '0',
         layerId: pg.layerId,
-        dxftype: 'POLYGON'
+        dxftype: 'POLYGON',
+        ...(pg.attributes || {})
       }
     });
   });

@@ -531,6 +531,23 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
           currentScreen: { x: screenX, y: screenY }
         });
       }
+      return;
+    }
+
+    // Auto-Pan Detection: If primary button is down and moved significantly, switch to pan
+    if (pointerDownPosRef.current && pointerDownPosRef.current.button === 0 && !isPanning && !selectionBox) {
+      const dist = Math.hypot(e.clientX - pointerDownPosRef.current.clientX, e.clientY - pointerDownPosRef.current.clientY);
+      if (dist > 10) {
+        setIsPanning(true);
+        panStartRef.current = {
+          clientX: pointerDownPosRef.current.clientX,
+          clientY: pointerDownPosRef.current.clientY,
+          panX: view.panX,
+          panY: view.panY
+        };
+        try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+        return;
+      }
     }
 
     const rawWorld = screenToWorld(screenX, screenY, rect.width, rect.height);
