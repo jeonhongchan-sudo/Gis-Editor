@@ -515,66 +515,62 @@ export default function App() {
     pushHistory('모든 측점 삭제');
   };
 
+  const clearEntireDatabase = async () => {
+    await Promise.all([
+      db.projects.clear(),
+      db.layers.clear(),
+      db.points.clear(),
+      db.lines.clear(),
+      db.polylines.clear(),
+      db.polygons.clear(),
+      db.texts.clear()
+    ]);
+  };
+
   /**
    * Centralized Import Logic: Unified Data Management for DXF, SHP, CSV, GeoJSON
    * This ensures all sources are stored in the same IndexedDB schema and state.
    */
   const handleImportUnifiedData = async (data: UnifiedCADData, append: boolean) => {
     let pid = currentProjectId;
-    const isNewProject = pid === null;
-    if (isNewProject) {
-      pid = await db.projects.add({ 
-        name: data.layerName || '현장 프로젝트', 
-        createdAt: Date.now(), 
-        updatedAt: Date.now() 
-      });
-    }
-
-    const incomingLayers = data.layers && data.layers.length > 0 ? data.layers : [
-      {
-        id: `layer-0`,
-        name: '0',
-        color: '#38bdf8',
-        visible: true,
-        locked: false,
-        lineWidth: 2
-      }
-    ];
-
-    let finalPoints = data.points;
-    let finalLines = data.lines;
-    let finalPolylines = data.polylines;
-    let finalPolygons = data.polygons;
-    let finalTexts = data.texts || [];
-    let finalLayers = incomingLayers;
 
     if (!append) {
-      // 1. Clean DB for current project BEFORE state update
-      if (!isNewProject) {
-        await Promise.all([
-          db.layers.where('projectId').equals(pid!).delete(),
-          db.points.where('projectId').equals(pid!).delete(),
-          db.lines.where('projectId').equals(pid!).delete(),
-          db.polylines.where('projectId').equals(pid!).delete(),
-          db.polygons.where('projectId').equals(pid!).delete(),
-          db.texts.where('projectId').equals(pid!).delete()
-        ]);
-      }
-
+      // User requested "Replace Mode": 
+      // 1. Purge the entire IndexedDB to prevent "junk projects" accumulation
+      await clearEntireDatabase();
+      
       // 2. Clear current UI state
       setSelectedEntityIds([]); 
       setMultiSelectMode(false);
       setActivePoints([]); 
       
-      setLayers(incomingLayers);
-      setActiveLayerId(incomingLayers[0].id);
+      // 3. Create fresh project record
+      pid = await db.projects.add({ 
+        name: data.layerName || '현장 프로젝트', 
+        createdAt: Date.now(), 
+        updatedAt: Date.now() 
+      });
+      
+      setLayers(data.layers && data.layers.length > 0 ? data.layers : DEFAULT_LAYERS);
+      setActiveLayerId(data.layers?.[0]?.id || 'layer-0');
       setPoints(data.points);
       setLines(data.lines);
       setPolylines(data.polylines);
       setPolygons(data.polygons);
       setTexts(data.texts || []);
     } else {
-      // 3. Robust Append/Merge Logic
+      // Append Mode
+      if (pid === null) {
+        pid = await db.projects.add({ 
+          name: data.layerName || '현장 프로젝트', 
+          createdAt: Date.now(), 
+          updatedAt: Date.now() 
+        });
+      }
+
+      const incomingLayers = data.layers && data.layers.length > 0 ? data.layers : DEFAULT_LAYERS;
+
+      // Robust Append/Merge Logic
       const idMap = new Map<string, string>();
       const existingLayersByName = new Map(layers.map(l => [l.name.trim(), l]));
       const layersToAppend: CADLayer[] = [];
@@ -593,12 +589,11 @@ export default function App() {
       const remap = <T extends { layerId: string }>(items: T[]): T[] => 
         items.map(item => ({ ...item, layerId: idMap.get(item.layerId) || item.layerId }));
 
-      finalPoints = remap(data.points);
-      finalLines = remap(data.lines);
-      finalPolylines = remap(data.polylines);
-      finalPolygons = remap(data.polygons);
-      finalTexts = remap(data.texts || []);
-      finalLayers = layersToAppend;
+      const finalPoints = remap(data.points);
+      const finalLines = remap(data.lines);
+      const finalPolylines = remap(data.polylines);
+      const finalPolygons = remap(data.polygons);
+      const finalTexts = remap(data.texts || []);
 
       setLayers(prev => {
         const existingIds = new Set(prev.map(l => l.id));
@@ -615,23 +610,35 @@ export default function App() {
       setPolylines(prev => dedupe(prev, finalPolylines));
       setPolygons(prev => dedupe(prev, finalPolygons));
       setTexts(prev => dedupe(prev, finalTexts));
+
+      // Atomic Database Transaction for Append
+      await Promise.all([
+        layersToAppend.length > 0 ? db.layers.bulkPut(layersToAppend.map(l => ({ ...l, projectId: pid! }))) : Promise.resolve(),
+        db.points.bulkPut(finalPoints.map(p => ({ ...p, projectId: pid! }))),
+        db.lines.bulkPut(finalLines.map(l => ({ ...l, projectId: pid! }))),
+        db.polylines.bulkPut(finalPolylines.map(pl => ({ ...pl, projectId: pid! }))),
+        db.polygons.bulkPut(finalPolygons.map(pg => ({ ...pg, projectId: pid! }))),
+        finalTexts.length > 0 ? db.texts.bulkPut(finalTexts.map(t => ({ ...t, projectId: pid! }))) : Promise.resolve()
+      ]);
     }
 
-    // 4. Atomic Database Transaction
-    await Promise.all([
-      finalLayers.length > 0 ? db.layers.bulkPut(finalLayers.map((l: CADLayer) => ({ ...l, projectId: pid! }))) : Promise.resolve(),
-      db.points.bulkPut(finalPoints.map((p: CADPoint) => ({ ...p, projectId: pid! }))),
-      db.lines.bulkPut(finalLines.map((l: CADLine) => ({ ...l, projectId: pid! }))),
-      db.polylines.bulkPut(finalPolylines.map((pl: CADPolyline) => ({ ...pl, projectId: pid! }))),
-      db.polygons.bulkPut(finalPolygons.map((pg: CADPolygon) => ({ ...pg, projectId: pid! }))),
-      finalTexts.length > 0 ? db.texts.bulkPut(finalTexts.map((t: CADText) => ({ ...t, projectId: pid! }))) : Promise.resolve()
-    ]);
-
-    if (isNewProject) {
+    if (!append || currentProjectId === null) {
+      // For Replace mode or initial load, save all records since we cleared DB
+      if (!append) {
+        const p = pid!;
+        await Promise.all([
+          db.layers.bulkPut((data.layers && data.layers.length > 0 ? data.layers : DEFAULT_LAYERS).map(ly => ({ ...ly, projectId: p }))),
+          db.points.bulkPut(data.points.map(pt => ({ ...pt, projectId: p }))),
+          db.lines.bulkPut(data.lines.map(ln => ({ ...ln, projectId: p }))),
+          db.polylines.bulkPut(data.polylines.map(pln => ({ ...pln, projectId: p }))),
+          db.polygons.bulkPut(data.polygons.map(pgy => ({ ...pgy, projectId: p }))),
+          (data.texts || []).length > 0 ? db.texts.bulkPut(data.texts!.map(txt => ({ ...txt, projectId: p }))) : Promise.resolve()
+        ]);
+      }
       setCurrentProjectId(pid!);
     }
 
-    handleZoomExtents(finalPoints);
+    handleZoomExtents(data.points);
     pushHistory(`${data.layerName || '데이터'} 불러오기`);
   };
 
@@ -1037,7 +1044,10 @@ export default function App() {
   );
 
   async function handleLoadProject(state: ProjectState) {
-    // 1. Create a new project entry first
+    // 1. User is opening a specific project file (usually a backup)
+    // Clear entire DB to keep workspace clean
+    await clearEntireDatabase();
+
     const pid = await db.projects.add({ 
       name: state.name || '가져온 프로젝트', 
       createdAt: Date.now(), 
