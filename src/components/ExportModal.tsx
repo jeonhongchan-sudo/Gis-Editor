@@ -65,24 +65,35 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     setTimeout(() => setExportSuccessMsg(null), 3000);
   };
 
+  // GeoJSON Specific states
+  const [geoJsonMode, setGeoJsonMode] = useState<'backup' | 'wgs84'>('backup');
+  const [sourceCrs, setSourceCrs] = useState<string>('EPSG:5186');
+
   // 0. Export GeoJSON (Recommended for Backup & Multi-device)
   const handleExportGeoJson = async () => {
     if (isProcessingRef.current) return;
     try {
       isProcessingRef.current = true;
+      
+      const isWgs84 = geoJsonMode === 'wgs84';
       const geojson = exportToGeoJson({
         points,
         lines,
         polylines,
         polygons,
         texts,
-        layers
+        layers,
+        targetCrs: isWgs84 ? 'EPSG:4326' : undefined,
+        sourceCrs: isWgs84 ? sourceCrs : undefined
       });
+      
       const jsonStr = JSON.stringify(geojson, null, 2);
-      const cleanName = (geoJsonFileName.trim() || `cad_backup_${todayStr}`).replace(/\.geojson$/i, '');
-      const filename = `${cleanName}.geojson`;
+      const suffix = isWgs84 ? '_wgs84' : '_backup';
+      const cleanName = (geoJsonFileName.trim() || `field_data_${todayStr}`).replace(/\.geojson$/i, '');
+      const filename = `${cleanName}${suffix}.geojson`;
+      
       await downloadTextFile(jsonStr, filename, 'utf-8', 'application/geo+json');
-      showSuccess(`기기 통합 백업 파일(${filename})이 저장되었습니다.`);
+      showSuccess(`${isWgs84 ? 'WGS84 지도용' : '기기 통합 백업'} 파일(${filename})이 저장되었습니다.`);
     } catch (err: any) {
       alert('GeoJSON 생성 중 오류가 발생했습니다: ' + err.message);
     } finally {
@@ -232,34 +243,62 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         {/* Export Options Grid */}
         <div className="p-4 space-y-3.5 overflow-y-auto max-h-[60vh] custom-scrollbar">
           
-          {/* Option 0: GeoJSON Project Backup (NEW & RECOMMENDED) */}
-          <div className="p-4 bg-sky-50/30 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-500/40 hover:border-sky-500 rounded-2xl flex flex-col gap-3 transition shadow-sm ring-1 ring-sky-500/10">
-            <div className="flex items-start justify-between gap-2">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <Globe2 className="w-5 h-5 text-sky-600 dark:text-sky-400" />
-                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">기기 통합 GeoJSON 백업 (.GEOJSON)</h3>
-                  <span className="text-[10px] bg-sky-500 text-white px-2 py-0.5 rounded-full font-bold uppercase animate-pulse">
-                    권장 (기기 간 이동용)
-                  </span>
+          {/* Option 0: GeoJSON Project Backup & WGS84 Export */}
+          <div className="p-4 bg-sky-50/30 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-500/40 rounded-2xl flex flex-col gap-3 transition shadow-sm ring-1 ring-sky-500/10">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <Globe2 className="w-5 h-5 text-sky-600 dark:text-sky-400" />
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">GeoJSON 내보내기</h3>
+                <div className="flex bg-sky-100 dark:bg-sky-900/60 p-0.5 rounded-lg ml-auto">
+                  <button 
+                    onClick={() => setGeoJsonMode('backup')}
+                    className={`px-2 py-1 rounded-md text-[10px] font-bold transition ${geoJsonMode === 'backup' ? 'bg-white dark:bg-sky-500 text-sky-600 dark:text-white shadow-sm' : 'text-sky-400 dark:text-sky-300'}`}
+                  >기기백업(TM)</button>
+                  <button 
+                    onClick={() => setGeoJsonMode('wgs84')}
+                    className={`px-2 py-1 rounded-md text-[10px] font-bold transition ${geoJsonMode === 'wgs84' ? 'bg-white dark:bg-sky-500 text-sky-600 dark:text-white shadow-sm' : 'text-sky-400 dark:text-sky-300'}`}
+                  >지도용(WGS84)</button>
                 </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                  Dropbox, Google Drive 등 <strong>개인 클라우드</strong>에 저장하기 가장 좋은 형식입니다.
-                  레이어 정보, 측점명, 속성 데이터가 모두 포함되어 <strong>스마트폰, 태블릿, PC</strong> 어디서든 이어서 작업할 수 있습니다.
-                </p>
               </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                {geoJsonMode === 'backup' 
+                  ? '모든 레이어와 속성을 유지하여 다른 기기(폰, PC)에서 그대로 불러올 수 있습니다.' 
+                  : 'TM좌표를 위경도로 변환하여 구글맵, QGIS 등에서 바로 활용할 수 있습니다.'}
+              </p>
             </div>
 
-            <div className="flex items-center gap-1.5 p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800 text-xs">
-              <span className="text-slate-500 dark:text-slate-400 font-medium shrink-0">백업 파일명:</span>
-              <input
-                type="text"
-                value={geoJsonFileName}
-                onChange={e => setGeoJsonFileName(e.target.value)}
-                placeholder="GeoJSON 파일명 입력"
-                className="bg-transparent text-sky-700 dark:text-sky-400 font-semibold outline-none flex-1 min-w-0"
-              />
-              <span className="text-[11px] font-mono text-slate-400 dark:text-slate-500 shrink-0">.geojson</span>
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5 p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800 text-xs">
+                <span className="text-slate-500 dark:text-slate-400 font-medium shrink-0">파일명:</span>
+                <input
+                  type="text"
+                  value={geoJsonFileName}
+                  onChange={e => setGeoJsonFileName(e.target.value)}
+                  placeholder="파일명 입력"
+                  className="bg-transparent text-sky-700 dark:text-sky-400 font-semibold outline-none flex-1 min-w-0"
+                />
+                <span className="text-[11px] font-mono text-slate-400 dark:text-slate-500 shrink-0">
+                  {geoJsonMode === 'wgs84' ? '_wgs84.geojson' : '_backup.geojson'}
+                </span>
+              </div>
+
+              {geoJsonMode === 'wgs84' && (
+                <div className="p-2.5 bg-white dark:bg-slate-900 rounded-xl border border-sky-100 dark:border-sky-800 flex flex-col gap-1.5 animate-in slide-in-from-top-1 duration-200">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-slate-500 font-bold">현재 도면의 원본 좌표계 선택:</span>
+                    <Info className="w-3 h-3 text-sky-400" />
+                  </div>
+                  <select 
+                    value={sourceCrs}
+                    onChange={e => setSourceCrs(e.target.value)}
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-sky-600 dark:text-sky-400 text-[11px] rounded-lg p-2 outline-none font-bold"
+                  >
+                    {Object.values(COORDINATE_SYSTEMS).filter(cs => cs.isTM).map(cs => (
+                      <option key={cs.code} value={cs.code}>{cs.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
 
             <button
@@ -268,7 +307,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               className="w-full py-2.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-md shadow-sky-600/30 flex items-center justify-center gap-1.5 transition active:scale-98"
             >
               <Download className="w-4 h-4" />
-              클라우드 공유용 GeoJSON 다운로드
+              {geoJsonMode === 'backup' ? '백업용 GeoJSON 다운로드' : 'WGS84 변환 GeoJSON 다운로드'}
             </button>
           </div>
 

@@ -319,7 +319,8 @@ export function calculateExtents(
   points: CADPoint[],
   lines: CADLine[],
   polylines: CADPolyline[],
-  polygons: CADPolygon[]
+  polygons: CADPolygon[],
+  texts: import('../types/cad').CADText[] = []
 ): { minX: number; minY: number; maxX: number; maxY: number; hasData: boolean } {
   let minX = Infinity;
   let minY = Infinity;
@@ -340,6 +341,7 @@ export function calculateExtents(
   lines.forEach(l => { update(l.start); update(l.end); });
   polylines.forEach(pl => pl.points.forEach(update));
   polygons.forEach(pg => pg.points.forEach(update));
+  texts.forEach(t => update({ x: t.x, y: t.y }));
 
   if (count === 0) {
     return { minX: 0, minY: 0, maxX: 100, maxY: 100, hasData: false };

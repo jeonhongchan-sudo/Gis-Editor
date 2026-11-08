@@ -87,7 +87,45 @@ export default function App() {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
-  // Entities & Layers (Cached for fast rendering)
+  const [zoomExtentsTrigger, setZoomExtentsTrigger] = useState<{ timestamp: number; targetPoints?: Point2D[] } | null>(null);
+  const lastKeySequenceRef = useRef<{ key: string; time: number } | null>(null);
+
+  const handleZoomExtents = useCallback((targetPoints?: Point2D[]) => {
+    setZoomExtentsTrigger({ timestamp: Date.now(), targetPoints });
+  }, []);
+
+  // Entities & Layers (LIVE from IndexedDB)
+  const dbLayers = useLiveQuery(async () => {
+    if (currentProjectId === null) return [];
+    return await db.layers.where('projectId').equals(currentProjectId).toArray();
+  }, [currentProjectId]);
+
+  const dbPoints = useLiveQuery(async () => {
+    if (currentProjectId === null) return [];
+    return await db.points.where('projectId').equals(currentProjectId).toArray();
+  }, [currentProjectId]);
+
+  const dbLines = useLiveQuery(async () => {
+    if (currentProjectId === null) return [];
+    return await db.lines.where('projectId').equals(currentProjectId).toArray();
+  }, [currentProjectId]);
+
+  const dbPolylines = useLiveQuery(async () => {
+    if (currentProjectId === null) return [];
+    return await db.polylines.where('projectId').equals(currentProjectId).toArray();
+  }, [currentProjectId]);
+
+  const dbPolygons = useLiveQuery(async () => {
+    if (currentProjectId === null) return [];
+    return await db.polygons.where('projectId').equals(currentProjectId).toArray();
+  }, [currentProjectId]);
+
+  const dbTexts = useLiveQuery(async () => {
+    if (currentProjectId === null) return [];
+    return await db.texts.where('projectId').equals(currentProjectId).toArray();
+  }, [currentProjectId]);
+
+  // UI state for transient edits and rendering (Synchronized with DB changes)
   const [layers, setLayers] = useState<CADLayer[]>(DEFAULT_LAYERS);
   const [activeLayerId, setActiveLayerId] = useState<string>('layer-0');
   const [points, setPoints] = useState<CADPoint[]>([]);
@@ -95,6 +133,29 @@ export default function App() {
   const [polylines, setPolylines] = useState<CADPolyline[]>([]);
   const [polygons, setPolygons] = useState<CADPolygon[]>([]);
   const [texts, setTexts] = useState<CADText[]>([]);
+
+  // Sync DB results to local state for fast canvas rendering and transient edits
+  useEffect(() => {
+    if (dbLayers) {
+      setLayers(dbLayers.length > 0 ? dbLayers : DEFAULT_LAYERS);
+      if (dbLayers.length > 0 && !dbLayers.some(l => l.id === activeLayerId)) {
+        setActiveLayerId(dbLayers[0].id);
+      }
+    }
+  }, [dbLayers, activeLayerId]);
+
+  useEffect(() => { if (dbPoints) setPoints(dbPoints); }, [dbPoints]);
+  useEffect(() => { if (dbLines) setLines(dbLines); }, [dbLines]);
+  useEffect(() => { if (dbPolylines) setPolylines(dbPolylines); }, [dbPolylines]);
+  useEffect(() => { if (dbPolygons) setPolygons(dbPolygons); }, [dbPolygons]);
+  useEffect(() => { if (dbTexts) setTexts(dbTexts); }, [dbTexts]);
+
+  // Handle Zoom Extents on initial load or project change
+  useEffect(() => {
+    if (currentProjectId !== null && dbPoints && dbPoints.length > 0) {
+      setTimeout(() => handleZoomExtents(), 100);
+    }
+  }, [currentProjectId, handleZoomExtents, dbPoints]);
 
   // Selection & Tools
   const [tool, setTool] = useState<ToolMode>('pan');
@@ -117,12 +178,6 @@ export default function App() {
     pointCount: number;
   }>({ currentSegment: 0, totalLength: 0, pointCount: 0 });
 
-  const [zoomExtentsTrigger, setZoomExtentsTrigger] = useState<{ timestamp: number; targetPoints?: Point2D[] } | null>(null);
-  const lastKeySequenceRef = useRef<{ key: string; time: number } | null>(null);
-
-  const handleZoomExtents = useCallback((targetPoints?: Point2D[]) => {
-    setZoomExtentsTrigger({ timestamp: Date.now(), targetPoints });
-  }, []);
 
   // Modals & Panels
   const [showLayerPanel, setShowLayerPanel] = useState(false);
@@ -138,35 +193,6 @@ export default function App() {
   const [history, setHistory] = useState<HistoryStep[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
   const isUndoingOrRedoing = useRef(false);
-
-  // Load project data from IndexedDB on project change
-  useEffect(() => {
-    if (currentProjectId === null) return;
-    
-    const loadData = async () => {
-      const pLayers = await db.layers.where('projectId').equals(currentProjectId).toArray();
-      const pPoints = await db.points.where('projectId').equals(currentProjectId).toArray();
-      const pLines = await db.lines.where('projectId').equals(currentProjectId).toArray();
-      const pPolylines = await db.polylines.where('projectId').equals(currentProjectId).toArray();
-      const pPolygons = await db.polygons.where('projectId').equals(currentProjectId).toArray();
-      const pTexts = await db.texts.where('projectId').equals(currentProjectId).toArray();
-
-      if (pLayers.length > 0) {
-        setLayers(pLayers);
-        setActiveLayerId(prev => pLayers.some(l => l.id === prev) ? prev : pLayers[0].id);
-      }
-      setPoints(pPoints);
-      setLines(pLines);
-      setPolylines(pPolylines);
-      setPolygons(pPolygons);
-      setTexts(pTexts);
-      
-      // Delay zoom slightly to ensure state is committed
-      setTimeout(() => handleZoomExtents(), 50);
-    };
-
-    loadData();
-  }, [currentProjectId, handleZoomExtents]);
 
   const pushHistory = useCallback((desc: string) => {
     if (isUndoingOrRedoing.current) return;
@@ -539,7 +565,7 @@ export default function App() {
       // 1. Purge the entire IndexedDB to prevent "junk projects" accumulation
       await clearEntireDatabase();
       
-      // 2. Clear current UI state
+      // 2. Clear current UI transient state
       setSelectedEntityIds([]); 
       setMultiSelectMode(false);
       setActivePoints([]); 
@@ -550,14 +576,9 @@ export default function App() {
         createdAt: Date.now(), 
         updatedAt: Date.now() 
       });
-      
-      setLayers(data.layers && data.layers.length > 0 ? data.layers : DEFAULT_LAYERS);
-      setActiveLayerId(data.layers?.[0]?.id || 'layer-0');
-      setPoints(data.points);
-      setLines(data.lines);
-      setPolylines(data.polylines);
-      setPolygons(data.polygons);
-      setTexts(data.texts || []);
+
+      // NO DIRECT UI STATE UPDATES (setPoints etc.)
+      // The useLiveQuery hooks will detect the new data in DB and update the UI.
     } else {
       // Append Mode
       if (pid === null) {
@@ -595,23 +616,10 @@ export default function App() {
       const finalPolygons = remap(data.polygons);
       const finalTexts = remap(data.texts || []);
 
-      setLayers(prev => {
-        const existingIds = new Set(prev.map(l => l.id));
-        return [...prev, ...layersToAppend.filter(l => !existingIds.has(l.id))];
-      });
+      // NO DIRECT UI STATE UPDATES (setPoints etc.)
+      // Persist to DB and let useLiveQuery handle the rest
 
-      const dedupe = <T extends { id: string }>(prev: T[], next: T[]): T[] => {
-        const idSet = new Set(prev.map(i => i.id));
-        return [...prev, ...next.filter(i => !idSet.has(i.id))];
-      };
-
-      setPoints(prev => dedupe(prev, finalPoints));
-      setLines(prev => dedupe(prev, finalLines));
-      setPolylines(prev => dedupe(prev, finalPolylines));
-      setPolygons(prev => dedupe(prev, finalPolygons));
-      setTexts(prev => dedupe(prev, finalTexts));
-
-      // Atomic Database Transaction for Append
+      // 4. Atomic Database Transaction for Append
       await Promise.all([
         layersToAppend.length > 0 ? db.layers.bulkPut(layersToAppend.map(l => ({ ...l, projectId: pid! }))) : Promise.resolve(),
         db.points.bulkPut(finalPoints.map(p => ({ ...p, projectId: pid! }))),
@@ -623,7 +631,7 @@ export default function App() {
     }
 
     if (!append || currentProjectId === null) {
-      // For Replace mode or initial load, save all records since we cleared DB
+      // For Replace mode, save all data from the 'data' object to DB
       if (!append) {
         const p = pid!;
         await Promise.all([
@@ -638,7 +646,10 @@ export default function App() {
       setCurrentProjectId(pid!);
     }
 
-    handleZoomExtents(data.points);
+    // Zoom and finish
+    setTimeout(() => {
+      handleZoomExtents(data.points);
+    }, 200);
     pushHistory(`${data.layerName || '데이터'} 불러오기`);
   };
 

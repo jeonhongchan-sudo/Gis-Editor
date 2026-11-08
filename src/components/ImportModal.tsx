@@ -34,6 +34,7 @@ import { isExcelBuffer, parseExcelWorkbook } from '../utils/excelParser';
 import { parseShapefileZip, parseShpBuffer, SHPParseResult } from '../utils/shpParser';
 import { decodeBufferText, SupportedEncoding } from '../utils/encoding';
 import { parseGeoJson } from '../utils/geoJsonParser';
+import { parseDxfBuffer } from '../utils/dxfParser';
 import { COORDINATE_SYSTEMS } from '../utils/projections';
 
 interface ImportModalProps {
@@ -44,7 +45,7 @@ interface ImportModalProps {
 }
 
 interface StoredRawInput {
-  kind: 'zip' | 'shp-multi' | 'csv' | 'excel' | 'geojson';
+  kind: 'zip' | 'shp-multi' | 'csv' | 'excel' | 'geojson' | 'dxf';
   filename: string;
   buffer?: ArrayBuffer;
   json?: any;
@@ -164,6 +165,18 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         setCsvPreview(res);
         setCsvMapping(res.detectedMapping);
       } catch {}
+    } else if (raw.kind === 'dxf' && raw.buffer) {
+      try {
+        setIsParsing(true);
+        setParsingStatusMsg('DXF 도면 데이터 재분석 중...');
+        const res = parseDxfBuffer(raw.buffer, raw.filename, forced);
+        setShpResult(res);
+        setSelectedLayerIds(new Set(res.layers.map(l => l.id)));
+      } catch (err: any) {
+        console.error('Re-parse dxf failed:', err);
+      } finally {
+        setIsParsing(false);
+      }
     }
   };
 
@@ -361,6 +374,31 @@ export const ImportModal: React.FC<ImportModalProps> = ({
       }
     }
 
+    // Case 3.5: DXF file
+    const dxfFile = fileArray.find(f => f.name.toLowerCase().endsWith('.dxf'));
+    if (dxfFile) {
+      try {
+        setIsParsing(true);
+        setParsingStatusMsg('AutoCAD DXF 도면 분석 중...');
+        const buffer = await dxfFile.arrayBuffer();
+        rawInputRef.current = { kind: 'dxf', filename: dxfFile.name, buffer };
+
+        const forced = selectedEncoding === 'auto' ? undefined : (selectedEncoding as 'utf-8' | 'euc-kr');
+        const res = parseDxfBuffer(buffer, dxfFile.name, forced);
+        
+        setShpResult(res);
+        setSelectedLayerIds(new Set(res.layers.map(l => l.id)));
+        setShpFileName(dxfFile.name);
+        setLoadedFormat('shp');
+        return;
+      } catch (err: any) {
+        alert('DXF 파일 분석 실패: ' + (err.message || err));
+        return;
+      } finally {
+        setIsParsing(false);
+      }
+    }
+
     // Case 4: Excel (.xlsx, .xls)
     const excelFile = fileArray.find(f => {
       const ext = f.name.split('.').pop()?.toLowerCase();
@@ -496,7 +534,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 type="file" 
                 className="hidden"
                 multiple
-                accept=".xlsx,.xls,.csv,.txt,.shp,.dbf,.shx,.cpg,.zip,.geojson,.json"
+                accept=".xlsx,.xls,.csv,.txt,.shp,.dbf,.shx,.cpg,.zip,.geojson,.json,.dxf"
                 onChange={async e => {
                   const files = e.target.files;
                   if (files && files.length > 0) {

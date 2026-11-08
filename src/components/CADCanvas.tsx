@@ -1189,7 +1189,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       }
 
       ctx.strokeStyle = isSelected ? '#fbbf24' : (layer?.color || '#ef4444');
-      ctx.fillStyle = isSelected ? '#fbbf24' : '#ef4444';
+      ctx.fillStyle = isSelected ? '#fbbf24' : (layer?.color || '#ef4444');
 
       ctx.beginPath();
       ctx.arc(sp.x, sp.y, 3.5, 0, Math.PI * 2);
@@ -1253,6 +1253,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         if (!sp) continue;
 
         const isSelected = selectedSet.has(pt.id);
+        const layerRef = layerMap.current.get(pt.layerId);
         const labelText = pt.name || '';
         if (!labelText.trim()) continue;
 
@@ -1261,93 +1262,21 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 
         // 8 standard QGIS compass candidate positions + 4 extended offset positions
         const candidates: { tx: number; ty: number; box: LabelBox; isExtended: boolean }[] = [
-          // 1. Top-Right (우상단, QGIS default 1st preference)
-          {
-            tx: sp.x + 6,
-            ty: sp.y - 3,
-            box: { minX: sp.x + 5, minY: sp.y - 14, maxX: sp.x + 7 + tw, maxY: sp.y + 1 },
-            isExtended: false
-          },
-          // 2. Bottom-Right (우하단)
-          {
-            tx: sp.x + 6,
-            ty: sp.y + 12,
-            box: { minX: sp.x + 5, minY: sp.y + 1, maxX: sp.x + 7 + tw, maxY: sp.y + 16 },
-            isExtended: false
-          },
-          // 3. Top-Left (좌상단)
-          {
-            tx: sp.x - tw - 6,
-            ty: sp.y - 3,
-            box: { minX: sp.x - tw - 7, minY: sp.y - 14, maxX: sp.x - 5, maxY: sp.y + 1 },
-            isExtended: false
-          },
-          // 4. Bottom-Left (좌하단)
-          {
-            tx: sp.x - tw - 6,
-            ty: sp.y + 12,
-            box: { minX: sp.x - tw - 7, minY: sp.y + 1, maxX: sp.x - 5, maxY: sp.y + 16 },
-            isExtended: false
-          },
-          // 5. Top-Center (상단)
-          {
-            tx: sp.x - tw / 2,
-            ty: sp.y - 8,
-            box: { minX: sp.x - tw / 2 - 1, minY: sp.y - 19, maxX: sp.x + tw / 2 + 1, maxY: sp.y - 4 },
-            isExtended: false
-          },
-          // 6. Bottom-Center (하단)
-          {
-            tx: sp.x - tw / 2,
-            ty: sp.y + 16,
-            box: { minX: sp.x - tw / 2 - 1, minY: sp.y + 5, maxX: sp.x + tw / 2 + 1, maxY: sp.y + 20 },
-            isExtended: false
-          },
-          // 7. Right-Center (우측)
-          {
-            tx: sp.x + 8,
-            ty: sp.y + 4,
-            box: { minX: sp.x + 7, minY: sp.y - 7, maxX: sp.x + 9 + tw, maxY: sp.y + 8 },
-            isExtended: false
-          },
-          // 8. Left-Center (좌측)
-          {
-            tx: sp.x - tw - 8,
-            ty: sp.y + 4,
-            box: { minX: sp.x - tw - 9, minY: sp.y - 7, maxX: sp.x - 7, maxY: sp.y + 8 },
-            isExtended: false
-          },
-          // 9. Extended Far Top-Right (인출선 포함 우상단)
-          {
-            tx: sp.x + 16,
-            ty: sp.y - 12,
-            box: { minX: sp.x + 15, minY: sp.y - 23, maxX: sp.x + 17 + tw, maxY: sp.y - 8 },
-            isExtended: true
-          },
-          // 10. Extended Far Bottom-Right (인출선 포함 우하단)
-          {
-            tx: sp.x + 16,
-            ty: sp.y + 20,
-            box: { minX: sp.x + 15, minY: sp.y + 9, maxX: sp.x + 17 + tw, maxY: sp.y + 24 },
-            isExtended: true
-          },
-          // 11. Extended Far Top-Left (인출선 포함 좌상단)
-          {
-            tx: sp.x - tw - 16,
-            ty: sp.y - 12,
-            box: { minX: sp.x - tw - 17, minY: sp.y - 23, maxX: sp.x - 15, maxY: sp.y - 8 },
-            isExtended: true
-          },
-          // 12. Extended Far Bottom-Left (인출선 포함 좌하단)
-          {
-            tx: sp.x - tw - 16,
-            ty: sp.y + 20,
-            box: { minX: sp.x - tw - 17, minY: sp.y + 9, maxX: sp.x - 15, maxY: sp.y + 24 },
-            isExtended: true
-          }
+          { tx: sp.x + 6, ty: sp.y - 3, box: { minX: sp.x + 5, minY: sp.y - 14, maxX: sp.x + 7 + tw, maxY: sp.y + 1 }, isExtended: false },
+          { tx: sp.x + 6, ty: sp.y + 12, box: { minX: sp.x + 5, minY: sp.y + 1, maxX: sp.x + 7 + tw, maxY: sp.y + 16 }, isExtended: false },
+          { tx: sp.x - tw - 6, ty: sp.y - 3, box: { minX: sp.x - tw - 7, minY: sp.y - 14, maxX: sp.x - 5, maxY: sp.y + 1 }, isExtended: false },
+          { tx: sp.x - tw - 6, ty: sp.y + 12, box: { minX: sp.x - tw - 7, minY: sp.y + 1, maxX: sp.x - 5, maxY: sp.y + 16 }, isExtended: false },
+          { tx: sp.x - tw / 2, ty: sp.y - 8, box: { minX: sp.x - tw / 2 - 1, minY: sp.y - 19, maxX: sp.x + tw / 2 + 1, maxY: sp.y - 4 }, isExtended: false },
+          { tx: sp.x - tw / 2, ty: sp.y + 16, box: { minX: sp.x - tw / 2 - 1, minY: sp.y + 5, maxX: sp.x + tw / 2 + 1, maxY: sp.y + 20 }, isExtended: false },
+          { tx: sp.x + 8, ty: sp.y + 4, box: { minX: sp.x + 7, minY: sp.y - 7, maxX: sp.x + 9 + tw, maxY: sp.y + 8 }, isExtended: false },
+          { tx: sp.x - tw - 8, ty: sp.y + 4, box: { minX: sp.x - tw - 9, minY: sp.y - 7, maxX: sp.x - 7, maxY: sp.y + 8 }, isExtended: false },
+          { tx: sp.x + 16, ty: sp.y - 12, box: { minX: sp.x + 15, minY: sp.y - 23, maxX: sp.x + 17 + tw, maxY: sp.y - 8 }, isExtended: true },
+          { tx: sp.x + 16, ty: sp.y + 20, box: { minX: sp.x + 15, minY: sp.y + 9, maxX: sp.x + 17 + tw, maxY: sp.y + 24 }, isExtended: true },
+          { tx: sp.x - tw - 16, ty: sp.y - 12, box: { minX: sp.x - tw - 17, minY: sp.y - 23, maxX: sp.x - 15, maxY: sp.y - 8 }, isExtended: true },
+          { tx: sp.x - tw - 16, ty: sp.y + 20, box: { minX: sp.x - tw - 17, minY: sp.y + 9, maxX: sp.x - 15, maxY: sp.y + 24 }, isExtended: true }
         ];
 
-        let chosenCandidate: typeof candidates[0] | null = null;
+        let chosenCandidate = null;
         for (let c = 0; c < candidates.length; c++) {
           if (!checkCollision(candidates[c].box)) {
             chosenCandidate = candidates[c];
@@ -1355,7 +1284,6 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
           }
         }
 
-        // If high density and everything collides, force placement for selected entities
         if (!chosenCandidate && isSelected) {
           chosenCandidate = candidates[0];
         }
@@ -1363,7 +1291,6 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         if (chosenCandidate) {
           occupiedBoxes.push(chosenCandidate.box);
 
-          // Draw leader line if extended offset was used
           if (chosenCandidate.isExtended) {
             ctx.save();
             ctx.strokeStyle = isSelected ? '#fbbf2477' : '#94a3b866';
@@ -1376,16 +1303,15 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
             ctx.restore();
           }
 
-          // Draw label with QGIS-style text buffer/halo for high contrast
           ctx.save();
-          ctx.font = '10px Pretendard, sans-serif';
+          ctx.font = 'bold 12px Pretendard, sans-serif';
           ctx.textAlign = 'left';
           ctx.lineJoin = 'round';
           ctx.strokeStyle = theme === 'dark' ? '#090d16' : '#ffffff';
           ctx.lineWidth = 2.5;
           ctx.strokeText(labelText, chosenCandidate.tx, chosenCandidate.ty);
 
-          ctx.fillStyle = isSelected ? '#fbbf24' : (theme === 'dark' ? '#e2e8f0' : '#334155');
+          ctx.fillStyle = isSelected ? '#fbbf24' : (layerRef?.color || (theme === 'dark' ? '#e2e8f0' : '#334155'));
           ctx.fillText(labelText, chosenCandidate.tx, chosenCandidate.ty);
           ctx.restore();
         }
@@ -1396,17 +1322,16 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     for (let i = 0; i < texts.length; i++) {
       const txt = texts[i];
       if (txt.x < visMinX || txt.x > visMaxX || txt.y < visMinY || txt.y > visMaxY) continue;
-      const layer = layerMap.current.get(txt.layerId);
-      if (!layer || !layer.visible) continue;
+      const tLayer = layerMap.current.get(txt.layerId);
+      if (!tLayer || !tLayer.visible) continue;
 
       const pxHeight = txt.height * view.zoom;
-      if (pxHeight < 0.2) continue; // Further lowered for extreme visibility
-      const renderPxHeight = Math.max(12, pxHeight); // Increased from 6 to 12 for 2x visibility
+      if (pxHeight < 0.2) continue; 
+      const renderPxHeight = Math.max(12, pxHeight); 
       const sp = getScreen({ x: txt.x, y: txt.y });
       const isSelected = selectedSet.has(txt.id);
 
-      // Node point at anchor
-      ctx.fillStyle = isSelected ? '#f59e0b' : (txt.color || layer?.color || '#ffffff');
+      ctx.fillStyle = isSelected ? '#f59e0b' : (txt.color || tLayer?.color || '#ffffff');
       ctx.beginPath();
       ctx.arc(sp.x, sp.y, isSelected ? 3.5 : 2, 0, Math.PI * 2);
       ctx.fill();
@@ -1417,7 +1342,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         ctx.rotate((-txt.rotation * Math.PI) / 180);
       }
       ctx.font = `${renderPxHeight}px Pretendard, sans-serif`;
-      ctx.fillStyle = isSelected ? '#fbbf24' : (txt.color || layer?.color || (theme === 'dark' ? '#ffffff' : '#1e293b'));
+      ctx.fillStyle = isSelected ? '#fbbf24' : (txt.color || tLayer?.color || (theme === 'dark' ? '#ffffff' : '#1e293b'));
       ctx.textAlign = 'left';
       ctx.textBaseline = 'bottom';
       ctx.fillText(txt.text, 4, 0);

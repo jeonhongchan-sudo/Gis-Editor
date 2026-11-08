@@ -394,8 +394,8 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     const ptFeatures: ShpFeaturePoint[] = points.map((p, idx) => {
       const props: Record<string, string | number> = {
         ID: idx + 1,
-        NAME: p.name.slice(0, 30),
-        LAYER: layers.find(l => l.id === p.layerId)?.name?.slice(0, 15) || '0',
+        NAME: p.name,
+        LAYER: layers.find(l => l.id === p.layerId)?.name || '0',
         Z: p.z !== undefined ? p.z : 0
       };
       
@@ -414,13 +414,13 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
 
     const dbfFields: { name: string; type: 'C' | 'N'; length: number; decimals: number }[] = [
       { name: 'ID', type: 'N', length: 10, decimals: 0 },
-      { name: 'NAME', type: 'C', length: 30, decimals: 0 },
-      { name: 'LAYER', type: 'C', length: 15, decimals: 0 },
+      { name: 'NAME', type: 'C', length: 254, decimals: 0 },
+      { name: 'LAYER', type: 'C', length: 254, decimals: 0 },
       { name: 'Z', type: 'N', length: 12, decimals: 3 }
     ];
 
     customPtFieldKeys.forEach(k => {
-      dbfFields.push({ name: k.slice(0, 10), type: 'C', length: 30, decimals: 0 });
+      dbfFields.push({ name: k.slice(0, 10), type: 'C', length: 254, decimals: 0 });
     });
 
     const { shp, shx } = createPointShpAndShx(ptFeatures);
@@ -463,17 +463,17 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     const a = l.attributes || {};
     const props: Record<string, string | number> = {
       ID: idx + 1,
-      NAME: (l.name || `단일선_${idx + 1}`).slice(0, 30),
-      LAYER: l.layerId.replace(/^layer-/, '').slice(0, 15),
+      NAME: l.name || `단일선_${idx + 1}`,
+      LAYER: l.layerId.replace(/^layer-/, ''),
       LENGTH_M: len.toFixed(3),
-      CATEGORY: (a.CATEGORY || a.시설구분 || '').toString().slice(0, 25),
-      SPEC: (a.SPEC || a.규격 || '').toString().slice(0, 25),
-      MATERIAL: (a.MATERIAL || a.재질 || '').toString().slice(0, 20),
+      CATEGORY: (a.CATEGORY || a.시설구분 || '').toString(),
+      SPEC: (a.SPEC || a.규격 || '').toString(),
+      MATERIAL: (a.MATERIAL || a.재질 || '').toString(),
       DEPTH: a.DEPTH !== undefined ? a.DEPTH : (a.매설심도 !== undefined ? a.매설심도 : 0),
-      SURV_DATE: (a.SURV_DATE || a.조사일자 || '').toString().slice(0, 12),
-      SURVEYOR: (a.SURVEYOR || a.조사자 || '').toString().slice(0, 20),
-      STATUS: (a.STATUS || a.상태 || '').toString().slice(0, 15),
-      REMARK: (a.REMARK || a.비고 || '').toString().slice(0, 40),
+      SURV_DATE: (a.SURV_DATE || a.조사일자 || '').toString(),
+      SURVEYOR: (a.SURVEYOR || a.조사자 || '').toString(),
+      STATUS: (a.STATUS || a.상태 || '').toString(),
+      REMARK: (a.REMARK || a.비고 || '').toString(),
       TYPE: 'LINE'
     };
     customFieldKeys.forEach(k => {
@@ -493,17 +493,17 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     const a = pl.attributes || {};
     const props: Record<string, string | number> = {
       ID: lines.length + idx + 1,
-      NAME: (pl.name || `연속선_${idx + 1}`).slice(0, 30),
-      LAYER: pl.layerId.replace(/^layer-/, '').slice(0, 15),
+      NAME: pl.name || `연속선_${idx + 1}`,
+      LAYER: pl.layerId.replace(/^layer-/, ''),
       LENGTH_M: len.toFixed(3),
-      CATEGORY: (a.CATEGORY || a.시설구분 || '').toString().slice(0, 25),
-      SPEC: (a.SPEC || a.규격 || '').toString().slice(0, 25),
-      MATERIAL: (a.MATERIAL || a.재질 || '').toString().slice(0, 20),
+      CATEGORY: (a.CATEGORY || a.시설구분 || '').toString(),
+      SPEC: (a.SPEC || a.규격 || '').toString(),
+      MATERIAL: (a.MATERIAL || a.재질 || '').toString(),
       DEPTH: a.DEPTH !== undefined ? a.DEPTH : (a.매설심도 !== undefined ? a.매설심도 : 0),
-      SURV_DATE: (a.SURV_DATE || a.조사일자 || '').toString().slice(0, 12),
-      SURVEYOR: (a.SURVEYOR || a.조사자 || '').toString().slice(0, 20),
-      STATUS: (a.STATUS || a.상태 || '').toString().slice(0, 15),
-      REMARK: (a.REMARK || a.비고 || '').toString().slice(0, 40),
+      SURV_DATE: (a.SURV_DATE || a.조사일자 || '').toString(),
+      SURVEYOR: (a.SURVEYOR || a.조사자 || '').toString(),
+      STATUS: (a.STATUS || a.상태 || '').toString(),
+      REMARK: (a.REMARK || a.비고 || '').toString(),
       TYPE: 'POLYLINE'
     };
     customFieldKeys.forEach(k => {
@@ -520,25 +520,25 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
 
     const dbfFields: { name: string; type: 'C' | 'N'; length: number; decimals: number }[] = [
       { name: 'ID', type: 'N', length: 10, decimals: 0 },
-      { name: 'NAME', type: 'C', length: 30, decimals: 0 },
-      { name: 'LAYER', type: 'C', length: 15, decimals: 0 },
+      { name: 'NAME', type: 'C', length: 254, decimals: 0 },
+      { name: 'LAYER', type: 'C', length: 254, decimals: 0 },
       { name: 'LENGTH_M', type: 'N', length: 12, decimals: 3 },
-      { name: 'CATEGORY', type: 'C', length: 25, decimals: 0 },
-      { name: 'SPEC', type: 'C', length: 25, decimals: 0 },
-      { name: 'MATERIAL', type: 'C', length: 20, decimals: 0 },
+      { name: 'CATEGORY', type: 'C', length: 254, decimals: 0 },
+      { name: 'SPEC', type: 'C', length: 254, decimals: 0 },
+      { name: 'MATERIAL', type: 'C', length: 254, decimals: 0 },
       { name: 'DEPTH', type: 'N', length: 10, decimals: 3 },
-      { name: 'SURV_DATE', type: 'C', length: 12, decimals: 0 },
-      { name: 'SURVEYOR', type: 'C', length: 20, decimals: 0 },
-      { name: 'STATUS', type: 'C', length: 15, decimals: 0 },
-      { name: 'REMARK', type: 'C', length: 40, decimals: 0 },
-      { name: 'TYPE', type: 'C', length: 10, decimals: 0 }
+      { name: 'SURV_DATE', type: 'C', length: 254, decimals: 0 },
+      { name: 'SURVEYOR', type: 'C', length: 254, decimals: 0 },
+      { name: 'STATUS', type: 'C', length: 254, decimals: 0 },
+      { name: 'REMARK', type: 'C', length: 254, decimals: 0 },
+      { name: 'TYPE', type: 'C', length: 254, decimals: 0 }
     ];
 
     customFieldKeys.forEach(k => {
       dbfFields.push({
         name: k.slice(0, 10),
         type: 'C',
-        length: 30,
+        length: 254,
         decimals: 0
       });
     });
@@ -578,7 +578,7 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
 
       const props: Record<string, string | number> = {
         ID: idx + 1,
-        LAYER: layers.find(l => l.id === poly.layerId)?.name?.slice(0, 15) || '0',
+        LAYER: layers.find(l => l.id === poly.layerId)?.name || '0',
         AREA_M2: area.toFixed(3),
         AREA_PY: (area / 3.305785).toFixed(3)
       };
@@ -597,13 +597,13 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
 
     const dbfFields: { name: string; type: 'C' | 'N'; length: number; decimals: number }[] = [
       { name: 'ID', type: 'N', length: 10, decimals: 0 },
-      { name: 'LAYER', type: 'C', length: 15, decimals: 0 },
+      { name: 'LAYER', type: 'C', length: 254, decimals: 0 },
       { name: 'AREA_M2', type: 'N', length: 14, decimals: 3 },
       { name: 'AREA_PY', type: 'N', length: 12, decimals: 3 }
     ];
 
     customPgFieldKeys.forEach(k => {
-      dbfFields.push({ name: k.slice(0, 10), type: 'C', length: 30, decimals: 0 });
+      dbfFields.push({ name: k.slice(0, 10), type: 'C', length: 254, decimals: 0 });
     });
 
     const { shp, shx } = createPolygonShpAndShx(polyFeatures);

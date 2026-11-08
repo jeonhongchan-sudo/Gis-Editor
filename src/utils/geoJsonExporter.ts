@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText } from '../types/cad';
+import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText, Point2D } from '../types/cad';
+import { transformCoords } from './projections';
 
 interface GeoJsonExportOptions {
   points: CADPoint[];
@@ -12,6 +13,8 @@ interface GeoJsonExportOptions {
   polygons: CADPolygon[];
   texts: CADText[];
   layers: CADLayer[];
+  targetCrs?: string; // e.g. "EPSG:4326" for WGS84
+  sourceCrs?: string; // The TM CRS to convert from
 }
 
 /**
@@ -19,9 +22,17 @@ interface GeoJsonExportOptions {
  * Includes layer metadata and all entity properties to serve as a robust project backup.
  */
 export function exportToGeoJson(options: GeoJsonExportOptions): any {
-  const { points = [], lines = [], polylines = [], polygons = [], texts = [], layers = [] } = options;
+  const { points = [], lines = [], polylines = [], polygons = [], texts = [], layers = [], targetCrs, sourceCrs } = options;
 
-  console.log(`Exporting GeoJSON: ${points.length} pts, ${lines.length} lines, ${polylines.length} pls, ${polygons.length} pgs, ${texts.length} txts`);
+  const projectPoint = (p: Point2D): number[] => {
+    if (targetCrs && sourceCrs && sourceCrs !== 'LOCAL') {
+      const transformed = transformCoords(p.x, p.y, sourceCrs, targetCrs);
+      return [transformed.x, transformed.y];
+    }
+    return [p.x, p.y];
+  };
+
+  console.log(`Exporting GeoJSON: ${points.length} pts, ${lines.length} lines, ${polylines.length} pls, ${polygons.length} pgs, ${texts.length} txts (Target: ${targetCrs || 'RAW'})`);
 
   const features: any[] = [];
   
@@ -33,7 +44,7 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       type: 'Feature',
       geometry: {
         type: 'Point',
-        coordinates: [Number(p.x) || 0, Number(p.y) || 0, ...(p.z !== undefined ? [Number(p.z) || 0] : [])]
+        coordinates: [...projectPoint(p), ...(p.z !== undefined ? [Number(p.z) || 0] : [])]
       },
       properties: {
         id: p.id,
@@ -55,7 +66,7 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       type: 'Feature',
       geometry: {
         type: 'Point',
-        coordinates: [Number(t.x) || 0, Number(t.y) || 0]
+        coordinates: projectPoint({ x: t.x, y: t.y })
       },
       properties: {
         id: t.id,
@@ -79,8 +90,8 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       geometry: {
         type: 'LineString',
         coordinates: [
-          [Number(l.start.x) || 0, Number(l.start.y) || 0],
-          [Number(l.end.x) || 0, Number(l.end.y) || 0]
+          projectPoint(l.start),
+          projectPoint(l.end)
         ]
       },
       properties: {
@@ -101,7 +112,7 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       type: 'Feature',
       geometry: {
         type: 'LineString',
-        coordinates: pl.points.map(p => [Number(p.x) || 0, Number(p.y) || 0])
+        coordinates: pl.points.map(p => projectPoint(p))
       },
       properties: {
         id: pl.id,
@@ -118,7 +129,7 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
   // 5. Export Polygons
   polygons.forEach(pg => {
     if (!pg || !Array.isArray(pg.points) || pg.points.length < 3) return;
-    const coords = pg.points.map(p => [Number(p.x) || 0, Number(p.y) || 0]);
+    const coords = pg.points.map(p => projectPoint(p));
     // Ensure closed ring for standard GeoJSON
     if (coords.length > 0) {
       const first = coords[0];
@@ -150,7 +161,9 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       generator: 'Web GIS/CAD App',
       version: '1.0.0',
       exportedAt: new Date().toISOString(),
-      layers: layers
+      layers: layers,
+      crs: targetCrs || 'RAW_TM',
+      sourceCrs: sourceCrs
     },
     features: features
   };
