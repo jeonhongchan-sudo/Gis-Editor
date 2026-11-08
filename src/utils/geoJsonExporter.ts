@@ -27,7 +27,11 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
   const projectPoint = (p: Point2D): number[] => {
     if (targetCrs && sourceCrs && sourceCrs !== 'LOCAL') {
       const transformed = transformCoords(p.x, p.y, sourceCrs, targetCrs);
-      return [transformed.x, transformed.y];
+      // Ensure fixed precision for web maps (WGS84 usually 7-8 decimals)
+      return [
+        Number(transformed.x.toFixed(8)),
+        Number(transformed.y.toFixed(8))
+      ];
     }
     return [p.x, p.y];
   };
@@ -40,20 +44,27 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
   // 1. Export Points
   points.forEach(p => {
     if (!p) return;
+    const coords = projectPoint(p);
     features.push({
       type: 'Feature',
       geometry: {
         type: 'Point',
-        coordinates: [...projectPoint(p), ...(p.z !== undefined ? [Number(p.z) || 0] : [])]
+        coordinates: coords // Force 2D for maximum compatibility
       },
       properties: {
         id: p.id,
         name: p.name,
+        title: p.name,
         TEXTSTRING: p.name,
         layer: layers.find(l => l.id === p.layerId)?.name || '0',
         layerId: p.layerId,
         dxftype: 'POINT',
         isSurveyNode: p.isSurveyNode,
+        z: p.z !== undefined ? Number(p.z) : undefined,
+        // Simplestyle-spec properties for better visibility in some apps
+        'marker-color': layers.find(l => l.id === p.layerId)?.color || '#ef4444',
+        'marker-size': 'medium',
+        'marker-symbol': 'marker',
         ...(p.attributes || {})
       }
     });
@@ -62,22 +73,29 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
   // 2. Export Texts
   texts.forEach(t => {
     if (!t) return;
+    const coords = projectPoint({ x: t.x, y: t.y });
     features.push({
       type: 'Feature',
       geometry: {
         type: 'Point',
-        coordinates: projectPoint({ x: t.x, y: t.y })
+        coordinates: coords
       },
       properties: {
         id: t.id,
         text: t.text,
+        name: t.text,
+        title: t.text,
         TEXTSTRING: t.text,
         height: t.height,
         rotation: t.rotation,
         layer: layers.find(l => l.id === t.layerId)?.name || '0',
         layerId: t.layerId,
         dxftype: 'TEXT',
-        color: t.color
+        color: t.color,
+        // Simplestyle-spec
+        'marker-color': t.color || layers.find(l => l.id === t.layerId)?.color || '#38bdf8',
+        'marker-size': 'small',
+        'marker-symbol': 'circle'
       }
     });
   });
@@ -97,9 +115,13 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       properties: {
         id: l.id,
         name: l.name,
+        title: l.name,
         layer: layers.find(lay => lay.id === l.layerId)?.name || '0',
         layerId: l.layerId,
         dxftype: 'LINE',
+        // Simplestyle
+        'stroke': layers.find(lay => lay.id === l.layerId)?.color || '#38bdf8',
+        'stroke-width': 2,
         ...(l.attributes || {})
       }
     });
@@ -117,10 +139,14 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       properties: {
         id: pl.id,
         name: pl.name,
+        title: pl.name,
         layer: layers.find(l => l.id === pl.layerId)?.name || '0',
         layerId: pl.layerId,
         dxftype: 'LWPOLYLINE',
         isClosed: pl.isClosed,
+        // Simplestyle
+        'stroke': layers.find(l => l.id === pl.layerId)?.color || '#38bdf8',
+        'stroke-width': 2,
         ...(pl.attributes || {})
       }
     });
@@ -147,9 +173,15 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       properties: {
         id: pg.id,
         name: pg.name,
+        title: pg.name,
         layer: layers.find(l => l.id === pg.layerId)?.name || '0',
         layerId: pg.layerId,
         dxftype: 'POLYGON',
+        // Simplestyle
+        'stroke': layers.find(l => l.id === pg.layerId)?.color || '#38bdf8',
+        'stroke-width': 2,
+        'fill': layers.find(l => l.id === pg.layerId)?.color || '#38bdf8',
+        'fill-opacity': 0.2,
         ...(pg.attributes || {})
       }
     });

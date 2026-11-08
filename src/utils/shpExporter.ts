@@ -392,10 +392,12 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     const customPtFieldKeys = Array.from(customPtFieldKeysSet).slice(0, 15);
 
     const ptFeatures: ShpFeaturePoint[] = points.map((p, idx) => {
+      const layer = layers.find(l => l.id === p.layerId);
       const props: Record<string, string | number> = {
         ID: idx + 1,
         NAME: p.name,
-        LAYER: layers.find(l => l.id === p.layerId)?.name || '0',
+        LAYER: layer?.name || '0',
+        COLOR: layer?.color || '#ef4444',
         Z: p.z !== undefined ? p.z : 0
       };
       
@@ -416,6 +418,7 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       { name: 'ID', type: 'N', length: 10, decimals: 0 },
       { name: 'NAME', type: 'C', length: 254, decimals: 0 },
       { name: 'LAYER', type: 'C', length: 254, decimals: 0 },
+      { name: 'COLOR', type: 'C', length: 20, decimals: 0 },
       { name: 'Z', type: 'N', length: 12, decimals: 3 }
     ];
 
@@ -461,10 +464,12 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
   lines.forEach((l, idx) => {
     const len = Math.sqrt(Math.pow(l.end.x - l.start.x, 2) + Math.pow(l.end.y - l.start.y, 2));
     const a = l.attributes || {};
+    const layer = layers.find(lay => lay.id === l.layerId);
     const props: Record<string, string | number> = {
       ID: idx + 1,
       NAME: l.name || `단일선_${idx + 1}`,
-      LAYER: l.layerId.replace(/^layer-/, ''),
+      LAYER: layer?.name || l.layerId.replace(/^layer-/, ''),
+      COLOR: layer?.color || '#38bdf8',
       LENGTH_M: len.toFixed(3),
       CATEGORY: (a.CATEGORY || a.시설구분 || '').toString(),
       SPEC: (a.SPEC || a.규격 || '').toString(),
@@ -491,10 +496,12 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       len += Math.sqrt(Math.pow(pl.points[i + 1].x - pl.points[i].x, 2) + Math.pow(pl.points[i + 1].y - pl.points[i].y, 2));
     }
     const a = pl.attributes || {};
+    const layer = layers.find(lay => lay.id === pl.layerId);
     const props: Record<string, string | number> = {
       ID: lines.length + idx + 1,
       NAME: pl.name || `연속선_${idx + 1}`,
-      LAYER: pl.layerId.replace(/^layer-/, ''),
+      LAYER: layer?.name || pl.layerId.replace(/^layer-/, ''),
+      COLOR: layer?.color || '#38bdf8',
       LENGTH_M: len.toFixed(3),
       CATEGORY: (a.CATEGORY || a.시설구분 || '').toString(),
       SPEC: (a.SPEC || a.규격 || '').toString(),
@@ -522,6 +529,7 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       { name: 'ID', type: 'N', length: 10, decimals: 0 },
       { name: 'NAME', type: 'C', length: 254, decimals: 0 },
       { name: 'LAYER', type: 'C', length: 254, decimals: 0 },
+      { name: 'COLOR', type: 'C', length: 20, decimals: 0 },
       { name: 'LENGTH_M', type: 'N', length: 12, decimals: 3 },
       { name: 'CATEGORY', type: 'C', length: 254, decimals: 0 },
       { name: 'SPEC', type: 'C', length: 254, decimals: 0 },
@@ -576,9 +584,11 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       }
       area = Math.abs(area) / 2.0;
 
+      const layer = layers.find(l => l.id === poly.layerId);
       const props: Record<string, string | number> = {
         ID: idx + 1,
-        LAYER: layers.find(l => l.id === poly.layerId)?.name || '0',
+        LAYER: layer?.name || poly.layerId.replace(/^layer-/, ''),
+        COLOR: layer?.color || '#38bdf8',
         AREA_M2: area.toFixed(3),
         AREA_PY: (area / 3.305785).toFixed(3)
       };
@@ -598,6 +608,7 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     const dbfFields: { name: string; type: 'C' | 'N'; length: number; decimals: number }[] = [
       { name: 'ID', type: 'N', length: 10, decimals: 0 },
       { name: 'LAYER', type: 'C', length: 254, decimals: 0 },
+      { name: 'COLOR', type: 'C', length: 20, decimals: 0 },
       { name: 'AREA_M2', type: 'N', length: 14, decimals: 3 },
       { name: 'AREA_PY', type: 'N', length: 12, decimals: 3 }
     ];
