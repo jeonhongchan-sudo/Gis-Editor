@@ -1,8 +1,3 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import React, { useState, useMemo } from 'react';
 import { 
   X, 
@@ -22,11 +17,17 @@ import {
   Spline,
   Minus,
   Pentagon,
-  Type
+  Type,
+  LayoutTemplate,
+  Save,
+  Upload,
+  Share2
 } from 'lucide-react';
-import { CADLine, CADPolyline, CADPoint, CADPolygon, CADText, Point2D, CADLayer } from '../types/cad';
+import { CADLine, CADPolyline, CADPoint, CADPolygon, CADText, Point2D, CADLayer, AttributeTemplate } from '../types/cad';
 import { distance2D } from '../utils/geometry';
 import { downloadTextFile } from '../utils/downloadHelper';
+import { db } from '../db/localDb';
+import { useLiveQuery } from 'dexie-react-hooks';
 
 export type EntityType = 'point' | 'line' | 'polyline' | 'polygon' | 'text';
 
@@ -49,6 +50,63 @@ const CATEGORY_PRESETS = [
   '전주', '가로등', '도로경계', '지적경계', '건물', '기타시설'
 ];
 
+const TemplateItem: React.FC<{ 
+  tpl: AttributeTemplate; 
+  onEdit: (t: AttributeTemplate) => void; 
+}> = ({ tpl, onEdit }) => {
+  const [isConfirming, setIsConfirming] = useState(false);
+
+  return (
+    <div className="group p-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl hover:border-sky-500 transition shadow-sm">
+      <div className="flex items-center justify-between mb-1.5">
+        <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+          <LayoutTemplate className="w-3.5 h-3.5 text-sky-500" />
+          {tpl.name}
+        </h4>
+        <div className="flex gap-1 items-center">
+          {isConfirming ? (
+            <div className="flex items-center gap-1 animate-in fade-in slide-in-from-right-1 duration-150">
+              <span className="text-[9px] font-bold text-red-500 mr-1">삭제하시겠습니까?</span>
+              <button 
+                type="button" 
+                onClick={async () => { await db.attributeTemplates.delete(tpl.id!); setIsConfirming(false); }} 
+                className="px-2 py-0.5 bg-red-500 text-white text-[9px] font-bold rounded hover:bg-red-600 transition"
+              >확인</button>
+              <button 
+                type="button" 
+                onClick={() => setIsConfirming(false)} 
+                className="px-2 py-0.5 bg-slate-100 dark:bg-slate-700 text-slate-500 text-[9px] font-bold rounded hover:bg-slate-200 transition"
+              >취소</button>
+            </div>
+          ) : (
+            <>
+              <button 
+                type="button" 
+                onClick={() => onEdit(tpl)} 
+                className="p-1.5 text-slate-400 hover:text-sky-600 hover:bg-sky-50 dark:hover:bg-sky-900/30 rounded-lg transition"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+              </button>
+              <button 
+                type="button" 
+                onClick={() => setIsConfirming(true)} 
+                className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {tpl.keys.map(k => (
+          <span key={k} className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-950 text-[9px] text-slate-500 border border-slate-200 dark:border-slate-800 rounded">{k}</span>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
   layers,
   points,
@@ -62,6 +120,9 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
   onFocusEntity,
   onClose
 }) => {
+  // 1. Load Templates from IndexedDB
+  const templates = useLiveQuery(() => db.attributeTemplates.toArray()) || [];
+
   // Combine all entities into a single searchable list
   const allEntitiesList = useMemo(() => {
     const list: Array<{
@@ -70,7 +131,7 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
       name: string;
       layerId: string;
       layerName: string;
-      info: string; // e.g. "Length: 5.0m" or "Coord: X, Y"
+      info: string;
       points: Point2D[];
       attributes: Record<string, string | number>;
     }> = [];
@@ -114,7 +175,7 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
         type: 'polyline',
         name: pl.name || '연속선',
         layerId: pl.layerId,
-        layerName: getLayerName(pl.layerId),
+        layerName: getLayerName(pl.layerId), 
         info: `연장: ${len.toFixed(3)}m`,
         points: pl.points,
         attributes: { ...(pl.attributes || {}) }
@@ -157,8 +218,7 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
   }, [points, lines, polylines, polygons, texts, layers]);
 
   const initialMode = targetIds && targetIds.length > 0 ? 'inspect' : 'table';
-  const [activeTab, setActiveTab] = useState<'inspect' | 'table'>(initialMode);
-
+  const [activeTab, setActiveTab] = useState<'inspect' | 'table' | 'templates'>(initialMode);
   const [selectedIds, setSelectedIds] = useState<string[]>(targetIds || []);
 
   // Sync selection when targetIds prop changes
@@ -177,62 +237,26 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
 
   // Form Fields
   const [entityName, setEntityName] = useState<string>('');
-  
-  // Skeletons for different types
-  const getSkeletonKeys = (type: EntityType): string[] => {
-    switch (type) {
-      case 'point':
-        return ['시설종류', '규격', '재질', '심도', '상태', '조사일자', '조사자', '비고'];
-      case 'line':
-      case 'polyline':
-        return ['시설구분', '규격', '재질', '매설심도', '상태', '조사일자', '조사자', '비고'];
-      case 'polygon':
-        return ['구역구분', '용도', '상태', '조사일자', '비고'];
-      case 'text':
-        return ['분류', '비고'];
-      default:
-        return ['비고'];
-    }
-  };
-
   const [customFields, setCustomFields] = useState<Array<{ key: string; value: string }>>([]);
 
   // Update form fields when selection changes
   React.useEffect(() => {
     if (targetEntities.length === 1 && firstEntity) {
       setEntityName(firstEntity.name || '');
-      
       const existing = firstEntity.attributes || {};
-      const skeletonKeys = getSkeletonKeys(firstEntity.type);
-      
-      // Merge existing attributes with skeleton keys to ensure "골격" (skeleton) is visible
-      const mergedFields: Array<{ key: string; value: string }> = [];
-      const seenKeys = new Set<string>();
-
-      // 1. Add existing data
+      const fields: Array<{ key: string; value: string }> = [];
       Object.entries(existing).forEach(([k, v]) => {
-        mergedFields.push({ key: k, value: String(v) });
-        seenKeys.add(k);
+        fields.push({ key: k, value: String(v) });
       });
-
-      // 2. Add missing skeleton keys as empty fields
-      skeletonKeys.forEach(sk => {
-        if (!seenKeys.has(sk)) {
-          mergedFields.push({ key: sk, value: '' });
-        }
-      });
-
-      setCustomFields(mergedFields);
+      setCustomFields(fields);
     } else if (targetEntities.length > 1) {
       setEntityName(`${targetEntities.length}개 객체 선택됨`);
-      // For multi-select, start with a common skeleton based on the first selected item's type
-      const skeletonKeys = getSkeletonKeys(firstEntity?.type || 'point');
-      setCustomFields(skeletonKeys.map(k => ({ key: k, value: '' })));
+      setCustomFields([]); // Clear for batch mode
     } else {
       setEntityName('');
       setCustomFields([]);
     }
-  }, [selectedIds, allEntitiesList]); // Re-run when selection or data changes
+  }, [selectedIds, allEntitiesList]);
 
   // Table search
   const [tableSearch, setTableSearch] = useState('');
@@ -292,15 +316,11 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
 
     const updates = targetEntities.map(ent => {
       let finalAttributes: Record<string, string | number>;
-      
       if (targetEntities.length === 1) {
-        // Single entity: Complete replacement of attributes with the ones in the form
         finalAttributes = baseAttributes;
       } else {
-        // Batch edit: Merge new values into existing attributes
         finalAttributes = { ...ent.attributes, ...baseAttributes };
       }
-
       return {
         id: ent.id,
         type: ent.type,
@@ -310,33 +330,87 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
     });
 
     onUpdateAttributes(updates);
-    onClose();
+    if (targetEntities.length === 1) onClose();
+  };
+
+  const handleApplyTemplate = (tpl: AttributeTemplate) => {
+    const seenKeys = new Set(customFields.map(f => f.key.trim()));
+    const nextFields = [...customFields];
+    tpl.keys.forEach(k => {
+      if (!seenKeys.has(k.trim())) {
+        nextFields.push({ key: k.trim(), value: '' });
+      }
+    });
+    setCustomFields(nextFields);
+  };
+
+  // Template Management States
+  const [editingTpl, setEditingTemplate] = useState<AttributeTemplate | null>(null);
+  const [tplFormName, setTplFormName] = useState('');
+  const [tplFormKeys, setTplFormKeys] = useState('');
+
+  const handleSaveTemplate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tplFormName.trim()) return;
+    const keys = tplFormKeys.split(',').map(k => k.trim()).filter(k => !!k);
+    
+    if (editingTpl) {
+      await db.attributeTemplates.update(editingTpl.id!, { name: tplFormName.trim(), keys });
+    } else {
+      await db.attributeTemplates.add({ name: tplFormName.trim(), keys, createdAt: Date.now() });
+    }
+    
+    setEditingTemplate(null);
+    setTplFormName('');
+    setTplFormKeys('');
+  };
+
+  const handleExportTemplates = () => {
+    const data = JSON.stringify(templates, null, 2);
+    downloadTextFile(data, `od_templates_${new Date().toISOString().slice(0, 10)}.json`, 'utf-8', 'application/json');
+  };
+
+  const handleImportTemplates = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const imported = JSON.parse(ev.target?.result as string);
+        if (Array.isArray(imported)) {
+          for (const t of imported) {
+            if (t.name && Array.isArray(t.keys)) {
+              await db.attributeTemplates.add({ 
+                name: t.name, 
+                keys: t.keys, 
+                createdAt: t.createdAt || Date.now() 
+              });
+            }
+          }
+          alert('템플릿이 성공적으로 추가되었습니다.');
+        }
+      } catch (err) {
+        alert('잘못된 템플릿 파일 형식입니다.');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
   };
 
   const handleExportCSV = () => {
-    // Collect ALL unique keys across all entities
     const allKeys = new Set<string>();
     allEntitiesList.forEach(e => Object.keys(e.attributes).forEach(k => allKeys.add(k)));
     const keys = Array.from(allKeys);
-
     const headers = ['번호', '명칭', '종류', '레이어', '정보', ...keys];
     const rows = [headers.join(',')];
-
     allEntitiesList.forEach((e, idx) => {
-      const row = [
-        idx + 1,
-        `"${e.name.replace(/"/g, '""')}"`,
-        e.type,
-        `"${e.layerName.replace(/"/g, '""')}"`,
-        `"${e.info.replace(/"/g, '""')}"`
-      ];
+      const row = [idx + 1, `"${e.name.replace(/"/g, '""')}"`, e.type, `"${e.layerName.replace(/"/g, '""')}"`, `"${e.info.replace(/"/g, '""')}"` ];
       keys.forEach(k => {
         const val = e.attributes[k] ?? '';
         row.push(`"${String(val).replace(/"/g, '""')}"`);
       });
       rows.push(row.join(','));
     });
-
     downloadTextFile(rows.join('\n'), `od_data_export_${new Date().toISOString().slice(0, 10)}.csv`, 'euc-kr', 'text/csv');
   };
 
@@ -379,15 +453,10 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
                       if (m) s.len += parseFloat(m[1]);
                     }
                   });
-
-                  if (layersMap.size === 0) {
-                    return <div className="p-8 text-center text-slate-400 text-xs italic">도면에 선 데이터가 없습니다.</div>;
-                  }
-
+                  if (layersMap.size === 0) return <div className="p-8 text-center text-slate-400 text-xs italic">도면에 선 데이터가 없습니다.</div>;
                   let grandTotal = 0;
                   const sorted = Array.from(layersMap.entries()).sort((a, b) => b[1].len - a[1].len);
                   sorted.forEach(s => grandTotal += s[1].len);
-
                   return (
                     <>
                       <div className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -404,18 +473,15 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
                         ))}
                       </div>
                       <div className="mt-4 pt-3 border-t-2 border-dashed border-slate-100 dark:border-slate-800 flex items-center justify-between">
-                        <span className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">전체 합계 (Grand Total)</span>
-                        <span className="text-base font-mono font-black text-sky-600 dark:text-sky-400 underline decoration-sky-500/30 underline-offset-4">{grandTotal.toFixed(3)} m</span>
+                        <span className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">전체 합계</span>
+                        <span className="text-base font-mono font-black text-sky-600 dark:text-sky-400 underline underline-offset-4">{grandTotal.toFixed(3)} m</span>
                       </div>
                     </>
                   );
                 })()}
               </div>
               <div className="p-3 bg-slate-50 dark:bg-slate-950 text-center">
-                <button 
-                  onClick={() => setShowLayerSummaryPopup(false)}
-                  className="w-full py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold rounded-xl hover:bg-slate-100 transition"
-                >닫기</button>
+                <button onClick={() => setShowLayerSummaryPopup(false)} className="w-full py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold rounded-xl hover:bg-slate-100 transition">닫기</button>
               </div>
             </div>
           </div>
@@ -429,47 +495,17 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
             </div>
             <div>
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">현장 시설물 속성(OD) 및 조사 데이터 관리</h2>
-                {(() => {
-                  let selLen = 0;
-                  let selArea = 0;
-                  targetEntities.forEach(e => {
-                    if (e.type === 'line' || e.type === 'polyline') {
-                      const m = e.info.match(/연장: ([\d.]+)m/);
-                      if (m) selLen += parseFloat(m[1]);
-                    } else if (e.type === 'polygon') {
-                      const m = e.info.match(/면적: ([\d.]+)㎡/);
-                      if (m) selArea += parseFloat(m[1]);
-                    }
-                  });
-
-                  return (
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {selLen > 0 && (
-                        <div className="px-2 py-0.5 bg-sky-50 dark:bg-sky-950 border border-sky-200 dark:border-sky-800 rounded-full">
-                          <span className="text-[10px] text-sky-600 dark:text-sky-400 font-bold">선택 연장: {selLen.toFixed(3)}m</span>
-                        </div>
-                      )}
-                      {selArea > 0 && (
-                        <div className="px-2 py-0.5 bg-emerald-50 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-800 rounded-full">
-                          <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">선택 면적: {selArea.toFixed(3)}㎡</span>
-                        </div>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => setShowLayerSummaryPopup(true)}
-                        className="px-2.5 py-0.5 bg-amber-500 hover:bg-amber-400 text-slate-950 border border-amber-600 rounded-full flex items-center gap-1 shadow-sm transition active:scale-95"
-                      >
-                        <Layers className="w-3 h-3" />
-                        <span className="text-[10px] font-bold">레이어별 연장 확인</span>
-                      </button>
-                    </div>
-                  );
-                })()}
+                <h2 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white">속성(OD) 및 템플릿 관리</h2>
+                <button
+                  type="button"
+                  onClick={() => setShowLayerSummaryPopup(true)}
+                  className="px-2.5 py-0.5 bg-amber-500 hover:bg-amber-400 text-slate-950 border border-amber-600 rounded-full flex items-center gap-1 shadow-sm transition active:scale-95"
+                >
+                  <Layers className="w-3 h-3" />
+                  <span className="text-[10px] font-bold">레이어별 연장</span>
+                </button>
               </div>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                점(맨홀/시설물), 선, 텍스트 객체에 대해 자유로운 속성 항목을 추가하고 관리합니다.
-              </p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">사용자 정의 템플릿을 통해 시설물별 속성 항목을 유연하게 관리합니다.</p>
             </div>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-xl text-slate-400 hover:text-slate-900 transition">
@@ -486,7 +522,7 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
             }`}
           >
             <Edit3 className="w-3.5 h-3.5" />
-            <span>속성 편집 ({targetEntities.length}개)</span>
+            <span>속성 편집 ({targetEntities.length})</span>
           </button>
           <button
             onClick={() => setActiveTab('table')}
@@ -495,136 +531,133 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
             }`}
           >
             <FileSpreadsheet className="w-3.5 h-3.5" />
-            <span>전체 데이터 대장 ({allEntitiesList.length}개)</span>
+            <span>데이터 대장</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('templates')}
+            className={`py-2.5 px-3.5 text-xs font-semibold border-b-2 transition flex items-center gap-1.5 ${
+              activeTab === 'templates' ? 'border-sky-500 text-sky-600' : 'border-transparent text-slate-500'
+            }`}
+          >
+            <LayoutTemplate className="w-3.5 h-3.5" />
+            <span>템플릿 설정</span>
           </button>
         </div>
 
         {/* Content */}
         <div className="flex-1 overflow-hidden flex flex-col">
-          {activeTab === 'inspect' ? (
+          {activeTab === 'inspect' && (
             <form onSubmit={handleSaveAttributes} className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
               {targetEntities.length === 0 ? (
                 <div className="p-12 text-center text-slate-400 text-xs">선택된 객체가 없습니다.</div>
               ) : (
                 <>
-                  <div className="p-3 bg-slate-50 dark:bg-slate-950/40 border border-slate-100 dark:border-slate-800 rounded-xl flex items-center gap-3">
-                    {getIcon(firstEntity!.type)}
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                        {targetEntities.length === 1 ? (
-                          <input 
-                            value={entityName} 
-                            onChange={e => setEntityName(e.target.value)}
-                            placeholder="객체 명칭 입력"
-                            className="bg-transparent outline-none border-b border-transparent focus:border-sky-500 w-full"
-                          />
-                        ) : (
-                          <div className="flex flex-col">
-                            <span>{targetEntities.length}개 객체 선택됨</span>
-                            {(() => {
-                              const types = new Set(targetEntities.map(e => e.type));
-                              if (types.size === 1) {
-                                const type = Array.from(types)[0];
-                                if (type === 'line' || type === 'polyline') {
-                                  const total = targetEntities.reduce((sum, e) => {
-                                    const match = e.info.match(/연장: ([\d.]+)m/);
-                                    return sum + (match ? parseFloat(match[1]) : 0);
-                                  }, 0);
-                                  return <span className="text-[11px] text-amber-600 dark:text-amber-400 font-mono">선택 합계 연장: {total.toFixed(3)}m</span>;
-                                }
-                                if (type === 'polygon') {
-                                  const total = targetEntities.reduce((sum, e) => {
-                                    const match = e.info.match(/면적: ([\d.]+)㎡/);
-                                    return sum + (match ? parseFloat(match[1]) : 0);
-                                  }, 0);
-                                  return <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-mono">선택 합계 면적: {total.toFixed(3)}㎡</span>;
-                                }
-                              }
-                              return null;
-                            })()}
+                  <div className="flex flex-col sm:flex-row gap-4">
+                    {/* Left: Entity Info & Apply Template */}
+                    <div className="flex-1 space-y-3">
+                      <div className="p-3 bg-slate-50 dark:bg-slate-950/40 border border-slate-100 dark:border-slate-800 rounded-xl flex items-center gap-3">
+                        {getIcon(firstEntity!.type)}
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                            {targetEntities.length === 1 ? (
+                              <input 
+                                value={entityName} 
+                                onChange={e => setEntityName(e.target.value)}
+                                placeholder="객체 명칭 입력"
+                                className="bg-transparent outline-none border-b border-transparent focus:border-sky-500 w-full"
+                              />
+                            ) : (
+                              <span>{targetEntities.length}개 객체 일괄 수정</span>
+                            )}
                           </div>
+                          {targetEntities.length === 1 && <div className="text-[10px] text-slate-500 mt-0.5">{firstEntity?.info}</div>}
+                        </div>
+                        {targetEntities.length === 1 && onFocusEntity && (
+                          <button type="button" onClick={() => onFocusEntity(firstEntity!.points)} className="p-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 text-slate-500 shadow-sm"><Crosshair className="w-3.5 h-3.5" /></button>
                         )}
                       </div>
-                      {targetEntities.length === 1 && <div className="text-[10px] text-slate-500 mt-0.5">{firstEntity?.info}</div>}
-                    </div>
-                    {targetEntities.length === 1 && onFocusEntity && (
-                      <button type="button" onClick={() => onFocusEntity(firstEntity!.points)} className="p-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 text-slate-500"><Crosshair className="w-3.5 h-3.5" /></button>
-                    )}
-                  </div>
 
-                  <div className="space-y-2.5">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-xs font-bold flex items-center gap-1.5">
-                        <Tag className="w-3.5 h-3.5 text-sky-500" />
-                        <span>객체 속성 리스트 (OD Fields)</span>
-                      </h3>
-                      <button
-                        type="button"
-                        onClick={handleAddCustomField}
-                        className="text-[11px] font-bold text-sky-600 dark:text-sky-400 flex items-center gap-1"
-                      >
-                        <Plus className="w-3 h-3" /> 항목 추가
-                      </button>
-                    </div>
-
-                    <div className="space-y-2">
-                      {customFields.map((cf, idx) => (
-                        <div key={idx} className="flex items-center gap-2 group">
-                          <input
-                            type="text"
-                            list="od-keys-presets"
-                            placeholder="속성명 (예: 맨홀종류, 규격)"
-                            value={cf.key}
-                            onChange={e => handleUpdateCustomField(idx, 'key', e.target.value)}
-                            className="flex-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs outline-none focus:ring-1 focus:ring-sky-500"
-                          />
-                          <input
-                            type="text"
-                            placeholder="속성값"
-                            value={cf.value}
-                            onChange={e => handleUpdateCustomField(idx, 'value', e.target.value)}
-                            className="flex-[2] bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs outline-none focus:ring-1 focus:ring-sky-500"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveCustomField(idx)}
-                            className="p-1.5 text-slate-300 hover:text-red-500 transition"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                      {/* Template Application Area */}
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-1.5 px-1">
+                          <LayoutTemplate className="w-3 h-3" />
+                          <span>속성 템플릿 불러오기</span>
+                        </label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {templates.length === 0 ? (
+                            <span className="text-[11px] text-slate-400 px-1 italic">등록된 템플릿이 없습니다. (템플릿 설정 탭에서 추가)</span>
+                          ) : (
+                            templates.map(tpl => (
+                              <button
+                                key={tpl.id}
+                                type="button"
+                                onClick={() => handleApplyTemplate(tpl)}
+                                className="px-2.5 py-1.5 bg-sky-50 dark:bg-sky-900/30 border border-sky-200 dark:border-sky-800 rounded-lg text-[11px] font-bold text-sky-700 dark:text-sky-300 hover:bg-sky-100 transition shadow-sm"
+                              >
+                                {tpl.name}
+                              </button>
+                            ))
+                          )}
                         </div>
-                      ))}
-                      <datalist id="od-keys-presets">
-                        <option value="시설구분" /><option value="규격" /><option value="재질" /><option value="심도" />
-                        <option value="상태" /><option value="조사일자" /><option value="조사자" /><option value="비고" />
-                      </datalist>
+                      </div>
+                    </div>
+
+                    {/* Right: Attribute Fields List */}
+                    <div className="flex-[1.5] space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-xs font-bold flex items-center gap-1.5">
+                          <Tag className="w-3.5 h-3.5 text-sky-500" />
+                          <span>속성 상세 항목 (Fields)</span>
+                        </h3>
+                        <button type="button" onClick={handleAddCustomField} className="text-[11px] font-bold text-sky-600 dark:text-sky-400 flex items-center gap-1">
+                          <Plus className="w-3 h-3" /> 항목 추가
+                        </button>
+                      </div>
+
+                      <div className="space-y-2 max-h-64 overflow-y-auto pr-1 custom-scrollbar">
+                        {customFields.map((cf, idx) => (
+                          <div key={idx} className="flex items-center gap-2 group">
+                            <input
+                              type="text"
+                              placeholder="속성명"
+                              value={cf.key}
+                              onChange={e => handleUpdateCustomField(idx, 'key', e.target.value)}
+                              className="flex-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs outline-none focus:ring-1 focus:ring-sky-500"
+                            />
+                            <input
+                              type="text"
+                              placeholder="속성값"
+                              value={cf.value}
+                              onChange={e => handleUpdateCustomField(idx, 'value', e.target.value)}
+                              className="flex-[2] bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs outline-none focus:ring-1 focus:ring-sky-500"
+                            />
+                            <button type="button" onClick={() => handleRemoveCustomField(idx)} className="p-1.5 text-slate-300 hover:text-red-500 transition">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
 
-                  <div className="pt-4 flex justify-end gap-2">
+                  <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2">
                     <button type="button" onClick={onClose} className="px-4 py-2 text-xs font-semibold text-slate-500">취소</button>
-                    <button type="submit" className="px-6 py-2 bg-sky-600 text-white rounded-xl text-xs font-bold shadow-lg shadow-sky-600/20 active:scale-95 transition">속성 저장</button>
+                    <button type="submit" className="px-8 py-2 bg-sky-600 text-white rounded-xl text-xs font-bold shadow-lg shadow-sky-600/20 active:scale-95 transition">속성 저장</button>
                   </div>
                 </>
               )}
             </form>
-          ) : (
+          )}
+
+          {activeTab === 'table' && (
             <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/20 dark:bg-slate-900/40">
               <div className="p-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
                 <div className="relative flex-1">
                   <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    placeholder="객체 검색 (명칭, 속성값, 레이어)..."
-                    value={tableSearch}
-                    onChange={e => setTableSearch(e.target.value)}
-                    className="w-full pl-8 pr-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"
-                  />
+                  <input placeholder="객체 검색 (명칭, 속성값, 레이어)..." value={tableSearch} onChange={e => setTableSearch(e.target.value)} className="w-full pl-8 pr-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs" />
                 </div>
-                <button onClick={handleExportCSV} className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs font-bold rounded-xl flex items-center gap-1.5">
-                  <Download className="w-3.5 h-3.5" /> 엑셀(CSV) 저장
-                </button>
+                <button onClick={handleExportCSV} className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs font-bold rounded-xl flex items-center gap-1.5 transition hover:bg-slate-200 shadow-sm"><Download className="w-3.5 h-3.5" /> 엑셀(CSV)</button>
               </div>
-
               <div className="flex-1 overflow-auto custom-scrollbar">
                 <table className="w-full text-left text-[11px] border-collapse min-w-[800px]">
                   <thead className="bg-slate-50 dark:bg-slate-950 text-slate-500 sticky top-0 border-b border-slate-200 dark:border-slate-800 z-10">
@@ -643,29 +676,104 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
                       <tr key={e.id} className="hover:bg-sky-50/30 dark:hover:bg-sky-900/10 transition group">
                         <td className="py-2 px-3 text-center text-slate-400 font-mono">{idx + 1}</td>
                         <td className="py-2 px-3 font-bold text-slate-900 dark:text-white">
-                          <div className="flex items-center gap-1.5">
-                            {getIcon(e.type)}
-                            <span className="truncate max-w-[180px]">{e.name}</span>
-                          </div>
+                          <div className="flex items-center gap-1.5">{getIcon(e.type)} <span className="truncate max-w-[180px]">{e.name}</span></div>
                         </td>
-                        <td className="py-2 px-3 text-slate-500">
-                          <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 rounded border border-slate-200 dark:border-slate-700 text-[10px]">{e.layerName}</span>
-                        </td>
+                        <td className="py-2 px-3 text-slate-500"><span className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 rounded border border-slate-200 dark:border-slate-700 text-[10px]">{e.layerName}</span></td>
                         {tableAttributeKeys.map(k => (
-                          <td key={k} className="py-2 px-3 text-slate-600 dark:text-slate-300 border-l border-slate-100 dark:border-slate-800/50">
-                            {e.attributes[k] ?? '-'}
-                          </td>
+                          <td key={k} className="py-2 px-3 text-slate-600 dark:text-slate-300 border-l border-slate-100 dark:border-slate-800/50">{e.attributes[k] ?? '-'}</td>
                         ))}
                         <td className="py-2 px-3 text-right sticky right-0 bg-white dark:bg-slate-900 group-hover:bg-sky-50 dark:group-hover:bg-slate-800 transition shadow-[-4px_0_10px_rgba(0,0,0,0.05)]">
-                          <button
-                            onClick={() => { setSelectedIds([e.id]); setActiveTab('inspect'); }}
-                            className="px-2 py-1 bg-sky-50 dark:bg-sky-950 text-sky-600 rounded-lg font-bold hover:bg-sky-100 transition"
-                          >편집</button>
+                          <button onClick={() => { setSelectedIds([e.id]); setActiveTab('inspect'); }} className="px-2 py-1 bg-sky-50 dark:bg-sky-950 text-sky-600 rounded-lg font-bold hover:bg-sky-100 transition shadow-sm">편집</button>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'templates' && (
+            <div className="flex-1 flex flex-col sm:flex-row overflow-hidden">
+              {/* Template List & Actions */}
+              <div className="flex-1 flex flex-col border-r border-slate-100 dark:border-slate-800 overflow-hidden">
+                <div className="p-3 bg-slate-50 dark:bg-slate-950/40 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">나의 속성 템플릿</span>
+                  <div className="flex gap-1.5">
+                    <label className="p-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-500 hover:text-sky-600 cursor-pointer transition shadow-sm" title="템플릿 파일 불러오기">
+                      <Upload className="w-3.5 h-3.5" />
+                      <input type="file" accept=".json" className="hidden" onChange={handleImportTemplates} />
+                    </label>
+                    <button onClick={handleExportTemplates} className="p-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-500 hover:text-sky-600 transition shadow-sm" title="내 템플릿 파일로 저장/백업"><Save className="w-3.5 h-3.5" /></button>
+                  </div>
+                </div>
+                <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
+                  {templates.length === 0 ? (
+                    <div className="p-8 text-center text-slate-400 text-xs italic">등록된 템플릿이 없습니다. 오른쪽 폼에서 새 템플릿을 만들어보세요.</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {templates.map(tpl => (
+                        <TemplateItem key={tpl.id} tpl={tpl} onEdit={(t) => {
+                          setEditingTemplate(t);
+                          setTplFormName(t.name);
+                          setTplFormKeys(t.keys.join(', '));
+                        }} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Template Editor Form */}
+              <div className="w-full sm:w-80 bg-slate-50/50 dark:bg-slate-950/20 p-4">
+                <form onSubmit={handleSaveTemplate} className="space-y-4">
+                  <div className="flex items-center gap-2 mb-4">
+                    <div className="p-1.5 rounded-lg bg-sky-100 dark:bg-sky-900 text-sky-600 dark:text-sky-400"><Plus className="w-3.5 h-3.5" /></div>
+                    <h3 className="text-xs font-black uppercase tracking-tight">{editingTpl ? '템플릿 수정' : '새 템플릿 생성'}</h3>
+                  </div>
+                  
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase ml-1">템플릿 이름</label>
+                    <input 
+                      required 
+                      placeholder="예: 오수맨홀 성과" 
+                      value={tplFormName} 
+                      onChange={e => setTplFormName(e.target.value)} 
+                      className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-sky-500"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase ml-1">속성 항목 (쉼표로 구분)</label>
+                    <textarea 
+                      required 
+                      placeholder="시설종류, 규격, 재질, 심도, 조사자" 
+                      value={tplFormKeys} 
+                      onChange={e => setTplFormKeys(e.target.value)} 
+                      rows={5}
+                      className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-sky-500 resize-none font-sans"
+                    />
+                    <p className="text-[9px] text-slate-400 mt-1 leading-tight px-1">관리할 속성 키값들을 쉼표(,)로 연결하여 입력하세요. 저장 시 템플릿 목록에 추가됩니다.</p>
+                  </div>
+
+                  <div className="pt-2 flex gap-2">
+                    {editingTpl && (
+                      <button type="button" onClick={() => { setEditingTemplate(null); setTplFormName(''); setTplFormKeys(''); }} className="flex-1 py-2 text-xs font-bold text-slate-400 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl">취소</button>
+                    )}
+                    <button type="submit" className="flex-[2] py-2 bg-sky-600 text-white text-xs font-black rounded-xl shadow-lg shadow-sky-600/20 active:scale-95 transition flex items-center justify-center gap-1.5">
+                      <Save className="w-3.5 h-3.5" />
+                      {editingTpl ? '변경사항 저장' : '템플릿 저장'}
+                    </button>
+                  </div>
+                </form>
+
+                <div className="mt-8 p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-100 dark:border-amber-900 rounded-xl">
+                  <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 mb-1.5">
+                    <Share2 className="w-3 h-3" />
+                    <span className="text-[10px] font-black uppercase">템플릿 공유 팁</span>
+                  </div>
+                  <p className="text-[9px] text-amber-700/80 dark:text-amber-300/60 leading-relaxed">상단의 저장 아이콘을 클릭하여 템플릿 파일을 내보낸 뒤, 동료에게 전송하면 다른 기기에서도 동일한 속성 형식을 사용할 수 있습니다.</p>
+                </div>
               </div>
             </div>
           )}

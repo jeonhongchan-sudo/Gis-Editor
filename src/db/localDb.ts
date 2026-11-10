@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie';
-import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText } from '../types/cad';
+import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText, AttributeTemplate } from '../types/cad';
 
 interface LocalProject {
   id: number;
@@ -16,10 +16,11 @@ export class CADDatabase extends Dexie {
   polylines!: EntityTable<CADPolyline & { projectId: number }, 'id'>;
   polygons!: EntityTable<CADPolygon & { projectId: number }, 'id'>;
   texts!: EntityTable<CADText & { projectId: number }, 'id'>;
+  attributeTemplates!: EntityTable<AttributeTemplate, 'id'>;
 
   constructor() {
     super('CADDatabase');
-    this.version(1).stores({
+    this.version(2).stores({
       projects: '++id, name, createdAt, updatedAt',
       layers: '++id, projectId, name',
       points: '++id, projectId, layerId',
@@ -27,6 +28,7 @@ export class CADDatabase extends Dexie {
       polylines: '++id, projectId, layerId',
       polygons: '++id, projectId, layerId',
       texts: '++id, projectId, layerId',
+      attributeTemplates: '++id, name, createdAt'
     });
   }
 }

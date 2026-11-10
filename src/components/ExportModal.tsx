@@ -149,13 +149,20 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       const csvLines = [headers.join(',')];
       
       points.forEach((p, idx) => {
+        const getLayerName = (id: string): string => {
+          const l = layers.find(lay => lay.id === id);
+          if (l) return l.name;
+          if (id.startsWith('layer-')) return id.replace(/^layer-/, '');
+          return id || '0';
+        };
+
         const row = [
           idx + 1,
           `"${p.name || ''}"`,
           p.x.toFixed(3),
           p.y.toFixed(3),
           p.z !== undefined ? p.z.toFixed(3) : '',
-          `"${layers.find(l => l.id === p.layerId)?.name || '0'}"`
+          `"${getLayerName(p.layerId)}"`
         ];
         
         // Add dynamic attributes

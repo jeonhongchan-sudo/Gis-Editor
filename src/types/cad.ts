@@ -138,3 +138,10 @@ export interface HistoryStep {
   texts: CADText[];
   description: string;
 }
+
+export interface AttributeTemplate {
+  id?: number;
+  name: string;
+  keys: string[];
+  createdAt: number;
+}

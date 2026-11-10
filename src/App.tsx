@@ -171,6 +171,7 @@ export default function App() {
   const [activePoints, setActivePoints] = useState<Point2D[]>([]);
   const [cursorWorld, setCursorWorld] = useState<Point2D | null>(null);
   const [activeSnap, setActiveSnap] = useState<SnapPoint | null>(null);
+  const [showBatchLayerMenu, setShowBatchLayerMenu] = useState(false);
   const [liveMeasurement, setLiveMeasurement] = useState<{
     currentSegment: number;
     totalLength: number;
@@ -577,8 +578,20 @@ export default function App() {
         updatedAt: Date.now() 
       });
 
-      // NO DIRECT UI STATE UPDATES (setPoints etc.)
-      // The useLiveQuery hooks will detect the new data in DB and update the UI.
+      // 4. Atomic Database Transaction for Replace (all data)
+      const p = pid!;
+      const incomingLayers = data.layers && data.layers.length > 0 ? data.layers : DEFAULT_LAYERS;
+      
+      await Promise.all([
+        db.layers.bulkPut(incomingLayers.map(ly => ({ ...ly, projectId: p }))),
+        db.points.bulkPut(data.points.map(pt => ({ ...pt, projectId: p }))),
+        db.lines.bulkPut(data.lines.map(ln => ({ ...ln, projectId: p }))),
+        db.polylines.bulkPut(data.polylines.map(pln => ({ ...pln, projectId: p }))),
+        db.polygons.bulkPut(data.polygons.map(pgy => ({ ...pgy, projectId: p }))),
+        (data.texts || []).length > 0 ? db.texts.bulkPut(data.texts!.map(txt => ({ ...txt, projectId: p }))) : Promise.resolve()
+      ]);
+
+      setCurrentProjectId(pid!);
     } else {
       // Append Mode
       if (pid === null) {
@@ -587,6 +600,11 @@ export default function App() {
           createdAt: Date.now(), 
           updatedAt: Date.now() 
         });
+        // Save initial default layer for new project
+        for (const l of DEFAULT_LAYERS) {
+          await db.layers.add({ ...l, projectId: pid });
+        }
+        setCurrentProjectId(pid);
       }
 
       const incomingLayers = data.layers && data.layers.length > 0 ? data.layers : DEFAULT_LAYERS;
@@ -616,10 +634,7 @@ export default function App() {
       const finalPolygons = remap(data.polygons);
       const finalTexts = remap(data.texts || []);
 
-      // NO DIRECT UI STATE UPDATES (setPoints etc.)
-      // Persist to DB and let useLiveQuery handle the rest
-
-      // 4. Atomic Database Transaction for Append
+      // Atomic Database Transaction for Append
       await Promise.all([
         layersToAppend.length > 0 ? db.layers.bulkPut(layersToAppend.map(l => ({ ...l, projectId: pid! }))) : Promise.resolve(),
         db.points.bulkPut(finalPoints.map(p => ({ ...p, projectId: pid! }))),
@@ -628,22 +643,6 @@ export default function App() {
         db.polygons.bulkPut(finalPolygons.map(pg => ({ ...pg, projectId: pid! }))),
         finalTexts.length > 0 ? db.texts.bulkPut(finalTexts.map(t => ({ ...t, projectId: pid! }))) : Promise.resolve()
       ]);
-    }
-
-    if (!append || currentProjectId === null) {
-      // For Replace mode, save all data from the 'data' object to DB
-      if (!append) {
-        const p = pid!;
-        await Promise.all([
-          db.layers.bulkPut((data.layers && data.layers.length > 0 ? data.layers : DEFAULT_LAYERS).map(ly => ({ ...ly, projectId: p }))),
-          db.points.bulkPut(data.points.map(pt => ({ ...pt, projectId: p }))),
-          db.lines.bulkPut(data.lines.map(ln => ({ ...ln, projectId: p }))),
-          db.polylines.bulkPut(data.polylines.map(pln => ({ ...pln, projectId: p }))),
-          db.polygons.bulkPut(data.polygons.map(pgy => ({ ...pgy, projectId: p }))),
-          (data.texts || []).length > 0 ? db.texts.bulkPut(data.texts!.map(txt => ({ ...txt, projectId: p }))) : Promise.resolve()
-        ]);
-      }
-      setCurrentProjectId(pid!);
     }
 
     // Zoom and finish
@@ -732,69 +731,89 @@ export default function App() {
 
         {/* Floating Multi-Select Action Bar (레이어 일괄 변경 & 일괄 삭제) */}
         {selectedEntityIds.length > 0 && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-amber-400 dark:border-amber-500/80 px-3.5 py-2 sm:px-4 sm:py-2 rounded-2xl shadow-2xl animate-in fade-in slide-in-from-top-3 duration-150 max-w-[95vw]">
-            <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 font-semibold shrink-0">
-              <span className="w-2 h-2 rounded-full bg-amber-500 dark:bg-amber-400 animate-ping" />
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-amber-400 dark:border-amber-500/80 px-3 py-2 rounded-2xl shadow-2xl animate-in fade-in slide-in-from-top-3 duration-150 max-w-[95vw]">
+            <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 font-bold shrink-0 px-1">
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
               <span>선택 {selectedEntityIds.length}개</span>
-              <span className="text-[11px] text-slate-500 dark:text-slate-400 font-normal hidden sm:inline">
-                (점 {selPointsCount}, 선 {selLinesCount}, 면 {selPolygonsCount}, 텍스트 {selTextsCount})
-              </span>
             </div>
 
             {/* Mobile / Desktop Multi-Select Append Mode Toggle */}
             <button
               onClick={() => setMultiSelectMode(prev => !prev)}
               title="누적 선택 모드"
-              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-medium transition ${
+              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[11px] font-medium transition ${
                 multiSelectMode
                   ? 'bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/30'
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
               }`}
             >
               <CheckSquare className="w-3.5 h-3.5" />
-              <span>{multiSelectMode ? '누적추가 ON' : '+ 추가선택'}</span>
+              <span className="hidden sm:inline">{multiSelectMode ? '누적추가 ON' : '+ 추가선택'}</span>
+              <span className="sm:hidden">{multiSelectMode ? '누적ON' : '+추가'}</span>
             </button>
 
-            {/* Generic Attribute Editor button when any entity is selected */}
+            {/* Generic Attribute Editor button */}
             <button
               onClick={() => {
                 setAttributeTargetIds(selectedEntityIds);
                 setShowAttributeModal(true);
               }}
-              title="선택된 객체의 데이터(OD) 속성 입력 및 편집"
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-sky-50 dark:bg-sky-950/80 hover:bg-sky-100 dark:hover:bg-sky-900 text-sky-600 dark:text-sky-300 border border-sky-200 dark:border-sky-800 text-xs font-semibold transition"
+              title="객체 속성(OD) 편집"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-sky-50 dark:bg-sky-950/80 hover:bg-sky-100 dark:hover:bg-sky-900 text-sky-600 dark:text-sky-300 border border-sky-200 dark:border-sky-800 text-[11px] font-semibold transition"
             >
               <Database className="w-3.5 h-3.5 text-sky-500" />
-              <span>객체 속성 (OD)</span>
+              <span>속성(OD)</span>
             </button>
 
-            {/* Layer batch change selector */}
-            <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-700/80 rounded-xl px-2 py-1">
-              <Layers className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-              <select
-                onChange={(e) => {
-                  if (e.target.value) {
-                    handleBatchChangeLayer(e.target.value);
-                    e.target.value = '';
-                  }
-                }}
-                defaultValue=""
-                className="bg-transparent text-sky-400 text-xs outline-none cursor-pointer pr-1 font-medium"
+            {/* Layer batch change selector (Custom Mobile-friendly UI) */}
+            <div className="relative">
+              <button
+                onClick={() => setShowBatchLayerMenu(!showBatchLayerMenu)}
+                className={`flex items-center gap-1.5 border rounded-xl px-2.5 py-1.5 transition shadow-sm ${
+                  showBatchLayerMenu 
+                    ? 'bg-purple-100 dark:bg-purple-900/40 border-purple-300 dark:border-purple-600' 
+                    : 'bg-slate-50 dark:bg-slate-950/80 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-900'
+                }`}
               >
-                <option value="" disabled className="bg-white dark:bg-slate-900 text-slate-400">레이어 일괄 변경...</option>
-                {layers.map(l => (
-                  <option key={l.id} value={l.id} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-200">
-                    {l.name}
-                  </option>
-                ))}
-              </select>
+                <Layers className={`w-3.5 h-3.5 shrink-0 ${showBatchLayerMenu ? 'text-purple-600 dark:text-purple-300' : 'text-purple-400'}`} />
+                <span className={`text-[11px] font-bold whitespace-nowrap ${showBatchLayerMenu ? 'text-purple-700 dark:text-purple-200' : 'text-sky-600 dark:text-sky-400'}`}>레이어 변경</span>
+              </button>
+              
+              {showBatchLayerMenu && (
+                <>
+                  {/* Backdrop for easy closing */}
+                  <div className="fixed inset-0 z-40" onClick={() => setShowBatchLayerMenu(false)} />
+                  
+                  {/* Dropdown Menu (Opened downwards on mobile) */}
+                  <div className="absolute top-full left-0 mt-2 w-48 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl overflow-hidden z-50 animate-in slide-in-from-top-2">
+                    <div className="p-2 max-h-60 overflow-y-auto custom-scrollbar">
+                      <div className="px-2 py-1.5 mb-1 border-b border-slate-100 dark:border-slate-800">
+                        <span className="text-[10px] font-black text-slate-400 uppercase">대상 레이어 선택</span>
+                      </div>
+                      {layers.map(l => (
+                        <button
+                          key={l.id}
+                          onClick={() => {
+                            handleBatchChangeLayer(l.id);
+                            setShowBatchLayerMenu(false);
+                          }}
+                          className="w-full text-left px-3 py-2 rounded-xl text-[11px] font-semibold text-slate-700 dark:text-slate-300 hover:bg-sky-50 dark:hover:bg-sky-900/40 hover:text-sky-600 dark:hover:text-sky-400 transition flex items-center gap-2"
+                        >
+                          <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: l.color }} />
+                          <span className="truncate">{l.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Delete button */}
             <button
               onClick={handleDeleteSelected}
-              title="선택된 객체 일괄 삭제"
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-red-50 dark:bg-red-950/80 hover:bg-red-100 dark:hover:bg-red-900 text-red-600 dark:text-red-300 border border-red-200 dark:border-red-800 hover:border-red-300 dark:hover:border-red-700 text-xs font-medium transition"
+              title="일괄 삭제"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-red-50 dark:bg-red-950/80 hover:bg-red-100 dark:hover:bg-red-900 text-red-600 dark:text-red-300 border border-red-200 dark:border-red-800 text-[11px] font-medium transition"
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span>삭제</span>
@@ -812,8 +831,8 @@ export default function App() {
                 ];
                 setSelectedEntityIds(allIds);
               }}
-              title="모든 객체 전체 선택 (Ctrl+A)"
-              className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-medium transition"
+              title="전체 선택 (Ctrl+A)"
+              className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-[11px] font-medium transition"
             >
               전체선택
             </button>
@@ -829,73 +848,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Single Entity Property Inspector Overlay (NEW: Quick visibility for OD attributes) */}
-        {selectedEntityIds.length === 1 && (
-          <div className="fixed bottom-24 right-4 z-30 w-72 max-h-[50vh] bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-sky-400 dark:border-sky-500/60 rounded-2xl shadow-2xl p-4 flex flex-col gap-3 animate-in fade-in slide-in-from-right-4 duration-300 overflow-hidden">
-            {(() => {
-              const sid = selectedEntityIds[0];
-              const ent = points.find(p => p.id === sid) || lines.find(l => l.id === sid) || polylines.find(pl => pl.id === sid) || polygons.find(pg => pg.id === sid) || texts.find(t => t.id === sid);
-              if (!ent) return null;
-
-              const attrs = ent.attributes || {};
-              const attrKeys = Object.keys(attrs);
-
-              return (
-                <>
-                  <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
-                    <div className="flex items-center gap-2">
-                      <div className="w-7 h-7 rounded-lg bg-sky-500/10 flex items-center justify-center text-sky-600 dark:text-sky-400">
-                        <Focus className="w-4 h-4" />
-                      </div>
-                      <div className="flex flex-col">
-                        <span className="text-[13px] font-bold text-slate-900 dark:text-white truncate max-w-[160px]">
-                          {(ent as any).name || (ent as any).text || '선택된 객체'}
-                        </span>
-                        <span className="text-[10px] text-slate-400 font-medium">레이어: {layers.find(l => l.id === ent.layerId)?.name || '-'}</span>
-                      </div>
-                    </div>
-                    <button 
-                      onClick={() => setSelectedEntityIds([])}
-                      className="p-1 text-slate-300 hover:text-slate-600 dark:hover:text-white transition"
-                    ><X className="w-4 h-4" /></button>
-                  </div>
-
-                  <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2.5">
-                    {attrKeys.length === 0 ? (
-                      <div className="py-4 text-center">
-                        <p className="text-[11px] text-slate-400 italic">설정된 속성이 없습니다.</p>
-                        <button 
-                          onClick={() => setShowAttributeModal(true)}
-                          className="mt-2 text-[10px] font-bold text-sky-600 dark:text-sky-400 hover:underline"
-                        >속성 추가하기</button>
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {attrKeys.map(k => (
-                          <div key={k} className="flex flex-col gap-0.5 bg-slate-50 dark:bg-slate-950/50 p-2 rounded-xl border border-slate-100 dark:border-slate-800/80">
-                            <span className="text-[9px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-tighter">{k}</span>
-                            <span className="text-[11px] font-semibold text-slate-700 dark:text-slate-200">{String(attrs[k])}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <button
-                    onClick={() => {
-                      setAttributeTargetIds([ent.id]);
-                      setShowAttributeModal(true);
-                    }}
-                    className="w-full py-2 bg-sky-50 dark:bg-sky-900/40 hover:bg-sky-100 dark:hover:bg-sky-900 text-sky-600 dark:text-sky-300 border border-sky-200 dark:border-sky-800 text-[11px] font-bold rounded-xl transition flex items-center justify-center gap-1.5"
-                  >
-                    <Database className="w-3.5 h-3.5" />
-                    <span>속성 편집 (OD Edit)</span>
-                  </button>
-                </>
-              );
-            })()}
-          </div>
-        )}
 
 
 
@@ -1113,19 +1065,37 @@ export default function App() {
     pushHistory('프로젝트 가져오기');
   }
 
-  function handleToggleLayerVisible(id: string) {
-    setLayers(prev => prev.map(l => l.id === id ? { ...l, visible: !l.visible } : l));
+  async function handleToggleLayerVisible(id: string) {
+    const layer = layers.find(l => l.id === id);
+    if (!layer) return;
+    const nextVisible = !layer.visible;
+    setLayers(prev => prev.map(l => l.id === id ? { ...l, visible: nextVisible } : l));
+    if (currentProjectId !== null) {
+      await db.layers.where('id').equals(id).modify({ visible: nextVisible });
+    }
   }
-  function handleToggleLayerLock(id: string) {
-    setLayers(prev => prev.map(l => l.id === id ? { ...l, locked: !l.locked } : l));
+  async function handleToggleLayerLock(id: string) {
+    const layer = layers.find(l => l.id === id);
+    if (!layer) return;
+    const nextLocked = !layer.locked;
+    setLayers(prev => prev.map(l => l.id === id ? { ...l, locked: nextLocked } : l));
+    if (currentProjectId !== null) {
+      await db.layers.where('id').equals(id).modify({ locked: nextLocked });
+    }
   }
-  function handleChangeLayerColor(id: string, color: string) {
+  async function handleChangeLayerColor(id: string, color: string) {
     setLayers(prev => prev.map(l => l.id === id ? { ...l, color } : l));
+    if (currentProjectId !== null) {
+      await db.layers.where('id').equals(id).modify({ color });
+    }
   }
-  function handleAddLayer(name: string, color: string) {
-    const newL = { id: `layer-${Date.now()}`, name, color, visible: true, locked: false, lineWidth: 2 };
+  async function handleAddLayer(name: string, color: string) {
+    const newL: CADLayer = { id: `layer-${Date.now()}`, name, color, visible: true, locked: false, lineWidth: 2 };
     setLayers(prev => [...prev, newL]);
     setActiveLayerId(newL.id);
+    if (currentProjectId !== null) {
+      await db.layers.add({ ...newL, projectId: currentProjectId });
+    }
   }
   async function handleDeleteLayer(id: string) {
     if (layers.length <= 1) return;

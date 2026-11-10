@@ -34,9 +34,12 @@ export function parseGeoJson(
     metaLayers.forEach((l: any) => {
       if (l && typeof l === 'object' && l.id && l.name) {
         layerMap.set(l.name, {
-          ...l,
-          visible: l.visible ?? true,
-          locked: l.locked ?? false
+          id: l.id,
+          name: l.name,
+          color: l.color || LAYER_COLORS[layerMap.size % LAYER_COLORS.length],
+          visible: l.visible !== undefined ? !!l.visible : true,
+          locked: l.locked !== undefined ? !!l.locked : false,
+          lineWidth: l.lineWidth || 2
         });
       }
     });

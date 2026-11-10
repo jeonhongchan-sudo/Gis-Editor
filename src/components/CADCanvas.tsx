@@ -1247,6 +1247,9 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         ...visiblePoints.filter(p => !selectedSet.has(p.id))
       ];
 
+      // Deduplication Map: prevents drawing identical labels at the same spot (common in DXF/SHP with overlapping point/text entities)
+      const drawnLabels = new Set<string>();
+
       for (let i = 0; i < prioritizedPoints.length; i++) {
         const pt = prioritizedPoints[i];
         const sp = pointScreenCoords.get(pt.id);
@@ -1256,6 +1259,11 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         const layerRef = layerMap.current.get(pt.layerId);
         const labelText = pt.name || '';
         if (!labelText.trim()) continue;
+
+        // Create a unique key for this label at this location (with 2px screen tolerance)
+        const labelKey = `${labelText}_${Math.round(sp.x / 2)}_${Math.round(sp.y / 2)}`;
+        if (drawnLabels.has(labelKey) && !isSelected) continue;
+        drawnLabels.add(labelKey);
 
         const tw = ctx.measureText(labelText).width;
         const th = 11;

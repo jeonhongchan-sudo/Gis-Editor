@@ -391,12 +391,20 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     });
     const customPtFieldKeys = Array.from(customPtFieldKeysSet).slice(0, 15);
 
+    const getLayerName = (id: string): string => {
+      const l = layers.find(lay => lay.id === id);
+      if (l) return l.name;
+      // Fallback: extract name from ID if it follows "layer-NAME" pattern
+      if (id.startsWith('layer-')) return id.replace(/^layer-/, '');
+      return id || '0';
+    };
+
     const ptFeatures: ShpFeaturePoint[] = points.map((p, idx) => {
       const layer = layers.find(l => l.id === p.layerId);
       const props: Record<string, string | number> = {
         ID: idx + 1,
         NAME: p.name,
-        LAYER: layer?.name || '0',
+        LAYER: getLayerName(p.layerId),
         COLOR: layer?.color || '#ef4444',
         Z: p.z !== undefined ? p.z : 0
       };
@@ -461,6 +469,13 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
 
   const lineFeatures: ShpFeaturePolyline[] = [];
 
+  const getLayerName = (id: string): string => {
+    const l = layers.find(lay => lay.id === id);
+    if (l) return l.name;
+    if (id.startsWith('layer-')) return id.replace(/^layer-/, '');
+    return id || '0';
+  };
+
   lines.forEach((l, idx) => {
     const len = Math.sqrt(Math.pow(l.end.x - l.start.x, 2) + Math.pow(l.end.y - l.start.y, 2));
     const a = l.attributes || {};
@@ -468,7 +483,7 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     const props: Record<string, string | number> = {
       ID: idx + 1,
       NAME: l.name || `단일선_${idx + 1}`,
-      LAYER: layer?.name || l.layerId.replace(/^layer-/, ''),
+      LAYER: getLayerName(l.layerId),
       COLOR: layer?.color || '#38bdf8',
       LENGTH_M: len.toFixed(3),
       CATEGORY: (a.CATEGORY || a.시설구분 || '').toString(),
@@ -500,7 +515,7 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     const props: Record<string, string | number> = {
       ID: lines.length + idx + 1,
       NAME: pl.name || `연속선_${idx + 1}`,
-      LAYER: layer?.name || pl.layerId.replace(/^layer-/, ''),
+      LAYER: getLayerName(pl.layerId),
       COLOR: layer?.color || '#38bdf8',
       LENGTH_M: len.toFixed(3),
       CATEGORY: (a.CATEGORY || a.시설구분 || '').toString(),
@@ -575,6 +590,13 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     });
     const customPgFieldKeys = Array.from(customPgFieldKeysSet).slice(0, 15);
 
+    const getLayerName = (id: string): string => {
+      const l = layers.find(lay => lay.id === id);
+      if (l) return l.name;
+      if (id.startsWith('layer-')) return id.replace(/^layer-/, '');
+      return id || '0';
+    };
+
     const polyFeatures: ShpFeaturePolygon[] = polygons.map((poly, idx) => {
       let area = 0;
       for (let i = 0; i < poly.points.length; i++) {
@@ -587,7 +609,7 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       const layer = layers.find(l => l.id === poly.layerId);
       const props: Record<string, string | number> = {
         ID: idx + 1,
-        LAYER: layer?.name || poly.layerId.replace(/^layer-/, ''),
+        LAYER: getLayerName(poly.layerId),
         COLOR: layer?.color || '#38bdf8',
         AREA_M2: area.toFixed(3),
         AREA_PY: (area / 3.305785).toFixed(3)

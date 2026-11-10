@@ -27,7 +27,6 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
   const projectPoint = (p: Point2D): number[] => {
     if (targetCrs && sourceCrs && sourceCrs !== 'LOCAL') {
       const transformed = transformCoords(p.x, p.y, sourceCrs, targetCrs);
-      // Ensure fixed precision for web maps (WGS84 usually 7-8 decimals)
       return [
         Number(transformed.x.toFixed(8)),
         Number(transformed.y.toFixed(8))
@@ -36,33 +35,39 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
     return [p.x, p.y];
   };
 
+  const getLayerName = (id: string): string => {
+    const l = layers.find(lay => lay.id === id);
+    if (l) return l.name;
+    if (id.startsWith('layer-')) return id.replace(/^layer-/, '');
+    return id || '0';
+  };
+
   console.log(`Exporting GeoJSON: ${points.length} pts, ${lines.length} lines, ${polylines.length} pls, ${polygons.length} pgs, ${texts.length} txts (Target: ${targetCrs || 'RAW'})`);
 
   const features: any[] = [];
   
-  // (Point, Text, Line, Polyline, Polygon loops remain same...)
   // 1. Export Points
   points.forEach(p => {
     if (!p) return;
     const coords = projectPoint(p);
+    const layerObj = layers.find(l => l.id === p.layerId);
     features.push({
       type: 'Feature',
       geometry: {
         type: 'Point',
-        coordinates: coords // Force 2D for maximum compatibility
+        coordinates: coords
       },
       properties: {
         id: p.id,
         name: p.name,
         title: p.name,
         TEXTSTRING: p.name,
-        layer: layers.find(l => l.id === p.layerId)?.name || '0',
+        layer: getLayerName(p.layerId),
         layerId: p.layerId,
         dxftype: 'POINT',
         isSurveyNode: p.isSurveyNode,
         z: p.z !== undefined ? Number(p.z) : undefined,
-        // Simplestyle-spec properties for better visibility in some apps
-        'marker-color': layers.find(l => l.id === p.layerId)?.color || '#ef4444',
+        'marker-color': layerObj?.color || '#ef4444',
         'marker-size': 'medium',
         'marker-symbol': 'marker',
         ...(p.attributes || {})
@@ -74,6 +79,7 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
   texts.forEach(t => {
     if (!t) return;
     const coords = projectPoint({ x: t.x, y: t.y });
+    const layerObj = layers.find(l => l.id === t.layerId);
     features.push({
       type: 'Feature',
       geometry: {
@@ -88,12 +94,11 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
         TEXTSTRING: t.text,
         height: t.height,
         rotation: t.rotation,
-        layer: layers.find(l => l.id === t.layerId)?.name || '0',
+        layer: getLayerName(t.layerId),
         layerId: t.layerId,
         dxftype: 'TEXT',
         color: t.color,
-        // Simplestyle-spec
-        'marker-color': t.color || layers.find(l => l.id === t.layerId)?.color || '#38bdf8',
+        'marker-color': t.color || layerObj?.color || '#38bdf8',
         'marker-size': 'small',
         'marker-symbol': 'circle'
       }
@@ -103,24 +108,21 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
   // 3. Export Lines
   lines.forEach(l => {
     if (!l || !l.start || !l.end) return;
+    const layerObj = layers.find(lay => lay.id === l.layerId);
     features.push({
       type: 'Feature',
       geometry: {
         type: 'LineString',
-        coordinates: [
-          projectPoint(l.start),
-          projectPoint(l.end)
-        ]
+        coordinates: [projectPoint(l.start), projectPoint(l.end)]
       },
       properties: {
         id: l.id,
         name: l.name,
         title: l.name,
-        layer: layers.find(lay => lay.id === l.layerId)?.name || '0',
+        layer: getLayerName(l.layerId),
         layerId: l.layerId,
         dxftype: 'LINE',
-        // Simplestyle
-        'stroke': layers.find(lay => lay.id === l.layerId)?.color || '#38bdf8',
+        'stroke': layerObj?.color || '#38bdf8',
         'stroke-width': 2,
         ...(l.attributes || {})
       }
@@ -130,6 +132,7 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
   // 4. Export Polylines
   polylines.forEach(pl => {
     if (!pl || !Array.isArray(pl.points)) return;
+    const layerObj = layers.find(l => l.id === pl.layerId);
     features.push({
       type: 'Feature',
       geometry: {
@@ -140,12 +143,11 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
         id: pl.id,
         name: pl.name,
         title: pl.name,
-        layer: layers.find(l => l.id === pl.layerId)?.name || '0',
+        layer: getLayerName(pl.layerId),
         layerId: pl.layerId,
         dxftype: 'LWPOLYLINE',
         isClosed: pl.isClosed,
-        // Simplestyle
-        'stroke': layers.find(l => l.id === pl.layerId)?.color || '#38bdf8',
+        'stroke': layerObj?.color || '#38bdf8',
         'stroke-width': 2,
         ...(pl.attributes || {})
       }
@@ -156,7 +158,6 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
   polygons.forEach(pg => {
     if (!pg || !Array.isArray(pg.points) || pg.points.length < 3) return;
     const coords = pg.points.map(p => projectPoint(p));
-    // Ensure closed ring for standard GeoJSON
     if (coords.length > 0) {
       const first = coords[0];
       const last = coords[coords.length - 1];
@@ -164,6 +165,7 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
         coords.push([first[0], first[1]]);
       }
     }
+    const layerObj = layers.find(l => l.id === pg.layerId);
     features.push({
       type: 'Feature',
       geometry: {
@@ -174,13 +176,12 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
         id: pg.id,
         name: pg.name,
         title: pg.name,
-        layer: layers.find(l => l.id === pg.layerId)?.name || '0',
+        layer: getLayerName(pg.layerId),
         layerId: pg.layerId,
         dxftype: 'POLYGON',
-        // Simplestyle
-        'stroke': layers.find(l => l.id === pg.layerId)?.color || '#38bdf8',
+        'stroke': layerObj?.color || '#38bdf8',
         'stroke-width': 2,
-        'fill': layers.find(l => l.id === pg.layerId)?.color || '#38bdf8',
+        'fill': layerObj?.color || '#38bdf8',
         'fill-opacity': 0.2,
         ...(pg.attributes || {})
       }
