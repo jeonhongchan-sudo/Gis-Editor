@@ -68,11 +68,9 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
       <div className="flex items-center justify-between px-2.5 py-1.5 md:px-4 md:py-2">
         {/* Left: Brand Logo & Title */}
         <div className="flex items-center gap-2">
-          <img 
-            src="/public/assets/aistudio/icon_e6e9ad8a.png" 
-            className="w-7 h-7 sm:w-8 sm:h-8 rounded-xl object-contain shadow-md shadow-sky-500/10" 
-            alt="Logo" 
-          />
+          <div className="px-2 h-7 sm:h-8 rounded-xl bg-gradient-to-tr from-sky-600 to-indigo-500 flex items-center justify-center font-bold text-white text-[10px] sm:text-xs shadow-md shadow-sky-500/20 shrink-0 min-w-[40px] sm:min-w-[48px]">
+            Asin
+          </div>
           <div>
             <div className="flex items-center gap-1.5">
               <h1 className="font-semibold text-xs sm:text-base text-slate-900 dark:text-slate-100 tracking-tight whitespace-nowrap">
