@@ -4,8 +4,9 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Focus, Trash2, Ruler, X, Check, Layers, CheckSquare, Database } from 'lucide-react';
+import { Focus, Trash2, Ruler, X, Check, Layers, CheckSquare, Database, Unlink, Scissors, ArrowUpRight, Link2, Square, Circle, Lock } from 'lucide-react';
 import { distance2D } from './utils/geometry';
+import { CADGeometryMutation, createCirclePolyline, createRectangleByDimensions, joinLinearEntities } from './utils/cadOperations';
 import { 
   CADLayer, 
   CADLine, 
@@ -175,12 +176,30 @@ export default function App() {
 
   // Selection & Tools
   const [tool, setTool] = useState<ToolMode>('pan');
+  const [breakMode, setBreakMode] = useState<'split' | 'gap'>('split');
+  const [extendMode, setExtendMode] = useState<'distance' | 'boundary'>('distance');
+  const [extendDistanceInput, setExtendDistanceInput] = useState<string>('1');
+  const [rectWidthInput, setRectWidthInput] = useState<string>('');
+  const [rectHeightInput, setRectHeightInput] = useState<string>('');
+  const [rectAnchor, setRectAnchor] = useState<'corner' | 'center'>('corner');
+  const [rectDimLocked, setRectDimLocked] = useState<boolean>(false);
+  const [circleDimMode, setCircleDimMode] = useState<'radius' | 'diameter'>('radius');
+  const [circleDimInput, setCircleDimInput] = useState<string>('');
+  const [circleDimLocked, setCircleDimLocked] = useState<boolean>(false);
+  const [cadToast, setCadToast] = useState<string | null>(null);
+  const cadToastTimerRef = useRef<any>(null);
   const [snapEnabled, setSnapEnabled] = useState<boolean>(true);
   const [selectedEntityIds, setSelectedEntityIds] = useState<string[]>([]);
   const [multiSelectMode, setMultiSelectMode] = useState<boolean>(false);
   const selectedEntityId = selectedEntityIds[0] || null;
   const setSelectedEntityId = useCallback((id: string | null) => {
     setSelectedEntityIds(id ? [id] : []);
+  }, []);
+
+  const showCadToast = useCallback((msg: string) => {
+    if (cadToastTimerRef.current) clearTimeout(cadToastTimerRef.current);
+    setCadToast(msg);
+    cadToastTimerRef.current = setTimeout(() => setCadToast(null), 2600);
   }, []);
 
   // Active Drawing State
@@ -259,6 +278,25 @@ export default function App() {
     }
   }, [history, historyIndex]);
 
+  const parsedExtendDistance = useMemo(() => {
+    const v = parseFloat(extendDistanceInput);
+    return isFinite(v) && v > 0 ? v : null;
+  }, [extendDistanceInput]);
+
+  const rectDimSpec = useMemo(() => {
+    const w = parseFloat(rectWidthInput);
+    const h = parseFloat(rectHeightInput);
+    if (!isFinite(w) || !isFinite(h) || Math.abs(w) <= 1e-4 || Math.abs(h) <= 1e-4) return null;
+    return { width: w, height: h, anchor: rectAnchor, locked: rectDimLocked };
+  }, [rectWidthInput, rectHeightInput, rectAnchor, rectDimLocked]);
+
+  const circleDimSpec = useMemo(() => {
+    const v = parseFloat(circleDimInput);
+    if (!isFinite(v) || v <= 1e-4) return null;
+    const radius = circleDimMode === 'diameter' ? v / 2 : v;
+    return { radius, locked: circleDimLocked };
+  }, [circleDimInput, circleDimMode, circleDimLocked]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'SELECT') return;
@@ -272,7 +310,15 @@ export default function App() {
         setActivePoints([]);
         setSelectedEntityIds([]);
       } else if (e.key === 'Enter') {
-        handleFinishDrawing();
+        if (tool === 'join') {
+          handleExecuteJoin();
+        } else if (tool === 'rectangle' && activePoints.length === 1 && rectDimSpec) {
+          handleCreateRectangleByDimension();
+        } else if (tool === 'circle' && activePoints.length === 1 && circleDimSpec) {
+          handleCreateCircleByDimension();
+        } else {
+          handleFinishDrawing();
+        }
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
         e.preventDefault();
         const allIds = [
@@ -296,7 +342,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleUndo, handleRedo, handleZoomExtents, selectedEntityIds, activePoints, points, lines, polylines, polygons, texts]);
+  }, [handleUndo, handleRedo, handleZoomExtents, selectedEntityIds, activePoints, points, lines, polylines, polygons, texts, tool, rectDimSpec, circleDimSpec]);
 
   const saveEntityToDb = async (type: 'points'|'lines'|'polylines'|'polygons'|'texts', data: any) => {
     try {
@@ -380,6 +426,104 @@ export default function App() {
     setPolygons(prev => [...prev, polygon]);
     await saveEntityToDb('polygons', polygon);
     pushHistory('폴리곤 추가');
+  };
+
+  const handleSelectTool = useCallback((nextTool: ToolMode) => {
+    setActivePoints([]);
+    if (nextTool === 'join') {
+      const validLineIds = new Set([...lines.map(l => l.id), ...polylines.filter(pl => !pl.isClosed).map(pl => pl.id)]);
+      setSelectedEntityIds(prev => prev.filter(id => validLineIds.has(id)));
+    }
+    setTool(nextTool);
+  }, [lines, polylines]);
+
+  const handleCreateRectangleByDimension = async () => {
+    const w = parseFloat(rectWidthInput);
+    const h = parseFloat(rectHeightInput);
+    if (!isFinite(w) || !isFinite(h) || Math.abs(w) <= 1e-4 || Math.abs(h) <= 1e-4) {
+      showCadToast('가로(W)와 세로(H) 치수(m)를 0이 아닌 값으로 입력해 주세요.');
+      return;
+    }
+    if (activePoints.length === 0) {
+      showCadToast('먼저 도면에서 시작점(기준점)을 클릭해 주세요.');
+      return;
+    }
+    const newRect = createRectangleByDimensions(
+      activePoints[0],
+      w,
+      h,
+      rectAnchor,
+      activeLayerId,
+      `사각형_${polylines.length + 1}`
+    );
+    await handleAddPolyline(newRect);
+    setActivePoints([]);
+    showCadToast(`${Math.abs(w).toFixed(2)}m × ${Math.abs(h).toFixed(2)}m 사각형을 생성했습니다.`);
+  };
+
+  const handleCreateCircleByDimension = async () => {
+    const v = parseFloat(circleDimInput);
+    if (!isFinite(v) || v <= 1e-4) {
+      showCadToast('반지름 또는 지름 치수(m)를 0보다 크게 입력해 주세요.');
+      return;
+    }
+    if (activePoints.length === 0) {
+      showCadToast('먼저 도면에서 원의 중심점을 클릭해 주세요.');
+      return;
+    }
+    const radius = circleDimMode === 'diameter' ? v / 2 : v;
+    const newCircle = createCirclePolyline(
+      activePoints[0],
+      radius,
+      activeLayerId,
+      64,
+      `원_${polylines.length + 1}`
+    );
+    await handleAddPolyline(newCircle);
+    setActivePoints([]);
+    showCadToast(`반지름 ${radius.toFixed(3)}m 원을 생성했습니다.`);
+  };
+
+  const applyGeometryMutation = async (description: string, mutation: CADGeometryMutation) => {
+    const delLineSet = new Set(mutation.deleteLineIds);
+    const delPlSet = new Set(mutation.deletePolylineIds);
+    const upsertLineSet = new Set(mutation.upsertLines.map(l => l.id));
+    const upsertPlSet = new Set(mutation.upsertPolylines.map(pl => pl.id));
+
+    setLines(prev => [
+      ...prev.filter(l => !delLineSet.has(l.id) && !upsertLineSet.has(l.id)),
+      ...mutation.upsertLines
+    ]);
+    setPolylines(prev => [
+      ...prev.filter(pl => !delPlSet.has(pl.id) && !upsertPlSet.has(pl.id)),
+      ...mutation.upsertPolylines
+    ]);
+    setSelectedEntityIds(prev => prev.filter(id => !delLineSet.has(id) && !delPlSet.has(id)));
+
+    if (currentProjectId !== null) {
+      const pid = currentProjectId;
+      await Promise.all([
+        mutation.deleteLineIds.length > 0 ? db.lines.where('id').anyOf(mutation.deleteLineIds as any).delete() : Promise.resolve(),
+        mutation.deletePolylineIds.length > 0 ? db.polylines.where('id').anyOf(mutation.deletePolylineIds as any).delete() : Promise.resolve(),
+        mutation.upsertLines.length > 0 ? db.lines.bulkPut(mutation.upsertLines.map(l => ({ ...l, projectId: pid }))) : Promise.resolve(),
+        mutation.upsertPolylines.length > 0 ? db.polylines.bulkPut(mutation.upsertPolylines.map(pl => ({ ...pl, projectId: pid }))) : Promise.resolve(),
+      ]);
+    }
+
+    pushHistory(description);
+    if (mutation.message) {
+      showCadToast(mutation.message);
+    }
+  };
+
+  const handleExecuteJoin = async () => {
+    const { mutation, error } = joinLinearEntities(selectedEntityIds, lines, polylines, layers);
+    if (error || !mutation) {
+      showCadToast(error || '결합할 수 있는 선이 없습니다.');
+      return;
+    }
+    await applyGeometryMutation('선 결합 (Join)', mutation);
+    setSelectedEntityIds(mutation.upsertPolylines.map(pl => pl.id));
   };
 
   const handleDeleteSelected = async () => {
@@ -803,7 +947,13 @@ export default function App() {
       <main className="relative flex-1 w-full h-full overflow-hidden bg-slate-50 dark:bg-slate-950">
         <CADCanvas
           theme={theme}
-          tool={tool} snapEnabled={snapEnabled}
+          tool={tool}
+          breakMode={breakMode}
+          extendMode={extendMode}
+          extendDistance={parsedExtendDistance}
+          rectDimSpec={rectDimSpec}
+          circleDimSpec={circleDimSpec}
+          snapEnabled={snapEnabled}
           layers={layers} points={points} lines={lines} polylines={polylines} polygons={polygons} texts={texts}
           activeLayerId={activeLayerId} 
           selectedEntityId={selectedEntityId}
@@ -813,14 +963,359 @@ export default function App() {
           onSelectEntities={setSelectedEntityIds}
           onAddPoint={handleAddPoint}
           onAddLine={handleAddLine} onAddPolyline={handleAddPolyline} onAddPolygon={handleAddPolygon}
+          onApplyGeometryMutation={applyGeometryMutation}
           onCursorMove={(world, snap) => { setCursorWorld(world); setActiveSnap(snap); }}
           onLiveMeasurementChange={setLiveMeasurement}
           activePoints={activePoints} setActivePoints={setActivePoints}
           zoomExtentsTrigger={zoomExtentsTrigger}
         />
 
+        {/* CAD Toast Feedback */}
+        {cadToast && (
+          <div className="fixed top-28 sm:top-32 left-1/2 -translate-x-1/2 z-40 px-4 py-2 rounded-xl bg-slate-900/95 text-white border border-sky-400/70 shadow-2xl text-xs font-semibold animate-in fade-in slide-in-from-top-2 duration-150 pointer-events-none">
+            {cadToast}
+          </div>
+        )}
+
+        {/* CAD Rectangle Dimension Floating Bar */}
+        {tool === 'rectangle' && (
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 sm:gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-sky-400 dark:border-sky-500/80 px-3 py-2 rounded-2xl shadow-2xl max-w-[95vw]">
+            <div className="flex items-center gap-1 text-xs font-bold text-sky-600 dark:text-sky-400 px-1">
+              <Square className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">사각형 치수</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">가로</span>
+              <input
+                type="number"
+                step="any"
+                value={rectWidthInput}
+                onChange={e => setRectWidthInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleCreateRectangleByDimension();
+                  } else if (e.key === 'Escape') {
+                    (e.target as HTMLInputElement).blur();
+                    setActivePoints([]);
+                  }
+                }}
+                placeholder="W(m)"
+                className="w-20 px-2 py-1 rounded-lg text-xs font-mono bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
+              />
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 ml-0.5">세로</span>
+              <input
+                type="number"
+                step="any"
+                value={rectHeightInput}
+                onChange={e => setRectHeightInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleCreateRectangleByDimension();
+                  } else if (e.key === 'Escape') {
+                    (e.target as HTMLInputElement).blur();
+                    setActivePoints([]);
+                  }
+                }}
+                placeholder="H(m)"
+                className="w-20 px-2 py-1 rounded-lg text-xs font-mono bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
+              />
+            </div>
+            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl">
+              <button
+                onClick={() => setRectAnchor('corner')}
+                title="클릭 지점을 시작 모서리로 사용"
+                className={`px-2 py-1 rounded-lg text-[11px] font-bold transition ${
+                  rectAnchor === 'corner' ? 'bg-sky-500 text-white shadow-sm' : 'text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                모서리
+              </button>
+              <button
+                onClick={() => setRectAnchor('center')}
+                title="클릭 지점을 사각형 중심으로 사용"
+                className={`px-2 py-1 rounded-lg text-[11px] font-bold transition ${
+                  rectAnchor === 'center' ? 'bg-sky-500 text-white shadow-sm' : 'text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                중심
+              </button>
+            </div>
+            <button
+              onClick={() => setRectDimLocked(prev => !prev)}
+              title="켜면 입력한 가로×세로 치수로 도면 클릭 한 번에 바로 배치합니다"
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-bold transition ${
+                rectDimLocked
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              <Lock className="w-3 h-3" />
+              <span>치수고정</span>
+            </button>
+            <button
+              onClick={handleCreateRectangleByDimension}
+              disabled={activePoints.length === 0 || !rectDimSpec}
+              title="시작점 클릭 후 입력한 치수로 사각형 생성 (Enter)"
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-bold transition ${
+                activePoints.length > 0 && rectDimSpec
+                  ? 'bg-sky-500 hover:bg-sky-400 text-white shadow-sm'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
+              }`}
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>생성</span>
+            </button>
+            <button
+              onClick={() => handleSelectTool('pan')}
+              title="종료"
+              className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* CAD Circle Dimension Floating Bar */}
+        {tool === 'circle' && (
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 sm:gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-sky-400 dark:border-sky-500/80 px-3 py-2 rounded-2xl shadow-2xl max-w-[95vw]">
+            <div className="flex items-center gap-1 text-xs font-bold text-sky-600 dark:text-sky-400 px-1">
+              <Circle className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">원 치수</span>
+            </div>
+            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl">
+              <button
+                onClick={() => setCircleDimMode('radius')}
+                className={`px-2 py-1 rounded-lg text-[11px] font-bold transition ${
+                  circleDimMode === 'radius' ? 'bg-sky-500 text-white shadow-sm' : 'text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                반지름(R)
+              </button>
+              <button
+                onClick={() => setCircleDimMode('diameter')}
+                className={`px-2 py-1 rounded-lg text-[11px] font-bold transition ${
+                  circleDimMode === 'diameter' ? 'bg-sky-500 text-white shadow-sm' : 'text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                지름(D)
+              </button>
+            </div>
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                step="any"
+                min="0"
+                value={circleDimInput}
+                onChange={e => setCircleDimInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleCreateCircleByDimension();
+                  } else if (e.key === 'Escape') {
+                    (e.target as HTMLInputElement).blur();
+                    setActivePoints([]);
+                  }
+                }}
+                placeholder={circleDimMode === 'radius' ? '반지름(m)' : '지름(m)'}
+                className="w-24 px-2 py-1 rounded-lg text-xs font-mono bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
+              />
+              <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">m</span>
+            </div>
+            <button
+              onClick={() => setCircleDimLocked(prev => !prev)}
+              title="켜면 입력한 치수의 원을 중심점 클릭 한 번으로 바로 배치합니다"
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-bold transition ${
+                circleDimLocked
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              <Lock className="w-3 h-3" />
+              <span>치수고정</span>
+            </button>
+            <button
+              onClick={handleCreateCircleByDimension}
+              disabled={activePoints.length === 0 || !circleDimSpec}
+              title="중심점 클릭 후 입력한 치수로 원 생성 (Enter)"
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-bold transition ${
+                activePoints.length > 0 && circleDimSpec
+                  ? 'bg-sky-500 hover:bg-sky-400 text-white shadow-sm'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
+              }`}
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>생성</span>
+            </button>
+            <button
+              onClick={() => handleSelectTool('pan')}
+              title="종료"
+              className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* CAD Break Mode Floating Bar */}
+        {tool === 'break' && (
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-rose-400 dark:border-rose-500/80 px-3 py-2 rounded-2xl shadow-2xl max-w-[95vw]">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-rose-600 dark:text-rose-400 px-1">
+              <Unlink className="w-3.5 h-3.5" />
+              <span>선 끊기 (Break)</span>
+            </div>
+            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl">
+              <button
+                onClick={() => setBreakMode('split')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
+                  breakMode === 'split'
+                    ? 'bg-rose-500 text-white shadow-sm'
+                    : 'text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                1점 끊기
+              </button>
+              <button
+                onClick={() => setBreakMode('gap')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
+                  breakMode === 'gap'
+                    ? 'bg-rose-500 text-white shadow-sm'
+                    : 'text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                2점 구간 끊기
+              </button>
+            </div>
+            <button
+              onClick={() => handleSelectTool('pan')}
+              title="종료"
+              className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* CAD Trim Floating Bar */}
+        {tool === 'trim' && (
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-rose-400 dark:border-rose-500/80 px-3 py-2 rounded-2xl shadow-2xl max-w-[95vw]">
+            <Scissors className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+            <span className="text-xs font-bold text-slate-800 dark:text-slate-100">자르기 (Trim)</span>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 hidden sm:inline">교차 선 사이의 제거할 구간을 클릭하세요</span>
+            <button
+              onClick={() => handleSelectTool('pan')}
+              title="종료"
+              className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* CAD Extend Floating Bar */}
+        {tool === 'extend' && (
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-emerald-400 dark:border-emerald-500/80 px-3 py-2 rounded-2xl shadow-2xl max-w-[95vw]">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-600 dark:text-emerald-400 px-1">
+              <ArrowUpRight className="w-3.5 h-3.5" />
+              <span>선 연장 (Extend)</span>
+            </div>
+            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl">
+              <button
+                onClick={() => setExtendMode('distance')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
+                  extendMode === 'distance'
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                치수 입력
+              </button>
+              <button
+                onClick={() => setExtendMode('boundary')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
+                  extendMode === 'boundary'
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                경계선까지
+              </button>
+            </div>
+            {extendMode === 'distance' && (
+              <div className="flex items-center gap-1">
+                <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">연장 길이</span>
+                <input
+                  type="number"
+                  step="any"
+                  min="0"
+                  value={extendDistanceInput}
+                  onChange={e => setExtendDistanceInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Escape') {
+                      (e.target as HTMLInputElement).blur();
+                    }
+                  }}
+                  placeholder="길이(m)"
+                  className="w-20 px-2 py-1 rounded-lg text-xs font-mono bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500"
+                />
+                <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">m</span>
+              </div>
+            )}
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 hidden md:inline">
+              {extendMode === 'distance'
+                ? '연장할 선의 끝쪽을 클릭하세요'
+                : '연장할 선의 끝쪽을 클릭하면 가장 가까운 선까지 이어집니다'}
+            </span>
+            <button
+              onClick={() => handleSelectTool('pan')}
+              title="종료"
+              className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* CAD Join Floating Bar */}
+        {tool === 'join' && (
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-amber-400 dark:border-amber-500/80 px-3 py-2 rounded-2xl shadow-2xl max-w-[95vw]">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-amber-600 dark:text-amber-400 px-1">
+              <Link2 className="w-3.5 h-3.5" />
+              <span>선 결합 (Join) · {selLinesCount}개 선택</span>
+            </div>
+            <button
+              onClick={handleExecuteJoin}
+              disabled={selLinesCount < 2}
+              className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-[11px] font-bold transition ${
+                selLinesCount >= 2
+                  ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/30'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
+              }`}
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>결합 실행</span>
+            </button>
+            {selectedEntityIds.length > 0 && (
+              <button
+                onClick={() => setSelectedEntityIds([])}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-[11px] font-medium transition"
+              >
+                선택해제
+              </button>
+            )}
+            <button
+              onClick={() => handleSelectTool('pan')}
+              title="종료"
+              className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* Floating Multi-Select Action Bar (레이어 일괄 변경 & 일괄 삭제) */}
-        {selectedEntityIds.length > 0 && (
+        {selectedEntityIds.length > 0 && tool !== 'join' && (
           <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-amber-400 dark:border-amber-500/80 px-3 py-2 rounded-2xl shadow-2xl animate-in fade-in slide-in-from-top-3 duration-150 max-w-[95vw]">
             <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 font-bold shrink-0 px-1">
               <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
@@ -898,6 +1393,18 @@ export default function App() {
                 </>
               )}
             </div>
+
+            {/* Quick Join button when 2+ lines/polylines selected */}
+            {selLinesCount >= 2 && (
+              <button
+                onClick={handleExecuteJoin}
+                title="선택된 선 결합 (Join)"
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/80 hover:bg-emerald-100 dark:hover:bg-emerald-900 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-[11px] font-semibold transition"
+              >
+                <Link2 className="w-3.5 h-3.5" />
+                <span>결합</span>
+              </button>
+            )}
 
             {/* Delete button */}
             <button
@@ -1003,7 +1510,7 @@ export default function App() {
         )}
 
         <Toolbar
-          tool={tool} setTool={setTool}
+          tool={tool} setTool={handleSelectTool}
           snapEnabled={snapEnabled} setSnapEnabled={setSnapEnabled}
           canUndo={historyIndex > 0} canRedo={historyIndex < history.length - 1}
           onUndo={handleUndo} onRedo={handleRedo}

@@ -215,7 +215,75 @@ export function findSnapPoint(opts: FindSnapOptions): SnapPoint | null {
     }
   }
 
-  // 3. Midpoints
+  // 3. Intersections between nearby lines / polylines / polygons
+  if (enabledSnapTypes.intersection !== false) {
+    const segs: { p1: Point2D; p2: Point2D; ownerId: string }[] = [];
+    for (const line of lines) {
+      const lMinX = Math.min(line.start.x, line.end.x) - minDistance;
+      const lMaxX = Math.max(line.start.x, line.end.x) + minDistance;
+      const lMinY = Math.min(line.start.y, line.end.y) - minDistance;
+      const lMaxY = Math.max(line.start.y, line.end.y) + minDistance;
+      if (worldCursor.x < lMinX || worldCursor.x > lMaxX || worldCursor.y < lMinY || worldCursor.y > lMaxY) continue;
+      segs.push({ p1: line.start, p2: line.end, ownerId: line.id });
+    }
+    for (const pl of polylines) {
+      const pts = pl.points;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const p1 = pts[i];
+        const p2 = pts[i + 1];
+        if (
+          worldCursor.x < Math.min(p1.x, p2.x) - minDistance ||
+          worldCursor.x > Math.max(p1.x, p2.x) + minDistance ||
+          worldCursor.y < Math.min(p1.y, p2.y) - minDistance ||
+          worldCursor.y > Math.max(p1.y, p2.y) + minDistance
+        ) continue;
+        segs.push({ p1, p2, ownerId: pl.id });
+      }
+      if (pl.isClosed && pts.length >= 2) {
+        const p1 = pts[pts.length - 1];
+        const p2 = pts[0];
+        if (
+          (p1.x !== p2.x || p1.y !== p2.y) &&
+          worldCursor.x >= Math.min(p1.x, p2.x) - minDistance &&
+          worldCursor.x <= Math.max(p1.x, p2.x) + minDistance &&
+          worldCursor.y >= Math.min(p1.y, p2.y) - minDistance &&
+          worldCursor.y <= Math.max(p1.y, p2.y) + minDistance
+        ) {
+          segs.push({ p1, p2, ownerId: pl.id });
+        }
+      }
+    }
+    for (const pg of polygons) {
+      const pts = pg.points;
+      for (let i = 0; i < pts.length; i++) {
+        const p1 = pts[i];
+        const p2 = pts[(i + 1) % pts.length];
+        if (
+          worldCursor.x < Math.min(p1.x, p2.x) - minDistance ||
+          worldCursor.x > Math.max(p1.x, p2.x) + minDistance ||
+          worldCursor.y < Math.min(p1.y, p2.y) - minDistance ||
+          worldCursor.y > Math.max(p1.y, p2.y) + minDistance
+        ) continue;
+        segs.push({ p1, p2, ownerId: pg.id });
+      }
+    }
+
+    for (let i = 0; i < segs.length; i++) {
+      for (let j = i + 1; j < segs.length; j++) {
+        if (segs[i].ownerId === segs[j].ownerId) continue;
+        const hit = lineIntersection(segs[i].p1, segs[i].p2, segs[j].p1, segs[j].p2);
+        if (hit) {
+          const d = distance2D(worldCursor, hit);
+          if (d < minDistance) {
+            minDistance = d;
+            bestSnap = { point: hit, type: 'intersection', label: '교차점 (Intersection)' };
+          }
+        }
+      }
+    }
+  }
+
+  // 4. Midpoints
   if (enabledSnapTypes.midpoint !== false) {
     for (const line of lines) {
       const mid = midpoint2D(line.start, line.end);
@@ -260,7 +328,7 @@ export function findSnapPoint(opts: FindSnapOptions): SnapPoint | null {
     }
   }
 
-  // 4. Nearest along segments (within bounding box)
+  // 5. Nearest along segments (lines & polylines within bounding box)
   if (!bestSnap && enabledSnapTypes.nearest !== false) {
     for (const line of lines) {
       const minX = Math.min(line.start.x, line.end.x) - minDistance;
@@ -273,6 +341,36 @@ export function findSnapPoint(opts: FindSnapOptions): SnapPoint | null {
       if (distance < minDistance) {
         minDistance = distance;
         bestSnap = { point, type: 'nearest', label: '선 상의 점 (Nearest)' };
+      }
+    }
+
+    for (const pl of polylines) {
+      const pts = pl.points;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const p1 = pts[i];
+        const p2 = pts[i + 1];
+        if (
+          worldCursor.x < Math.min(p1.x, p2.x) - minDistance ||
+          worldCursor.x > Math.max(p1.x, p2.x) + minDistance ||
+          worldCursor.y < Math.min(p1.y, p2.y) - minDistance ||
+          worldCursor.y > Math.max(p1.y, p2.y) + minDistance
+        ) continue;
+        const { point, distance } = closestPointOnSegment(worldCursor, p1, p2);
+        if (distance < minDistance) {
+          minDistance = distance;
+          bestSnap = { point, type: 'nearest', label: '선 상의 점 (Nearest)' };
+        }
+      }
+      if (pl.isClosed && pts.length >= 2) {
+        const p1 = pts[pts.length - 1];
+        const p2 = pts[0];
+        if (p1.x !== p2.x || p1.y !== p2.y) {
+          const { point, distance } = closestPointOnSegment(worldCursor, p1, p2);
+          if (distance < minDistance) {
+            minDistance = distance;
+            bestSnap = { point, type: 'nearest', label: '선 상의 점 (Nearest)' };
+          }
+        }
       }
     }
   }

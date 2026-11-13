@@ -26,10 +26,29 @@ import {
   isPolylineInOrIntersectBox, 
   BoundingBox2D 
 } from '../utils/geometry';
+import {
+  CADGeometryMutation,
+  LinearTargetHit,
+  breakEntityAtPoint,
+  breakEntityBetweenPoints,
+  computeBreakGapPreview,
+  computeExtendByDistanceOperation,
+  computeExtendToBoundaryOperation,
+  computeTrimOperation,
+  createCirclePolyline,
+  createRectangleByDimensions,
+  createRectanglePolyline,
+  findClosestLinearTarget
+} from '../utils/cadOperations';
 
 interface CADCanvasProps {
   theme?: 'light' | 'dark';
   tool: ToolMode;
+  breakMode?: 'split' | 'gap';
+  extendMode?: 'distance' | 'boundary';
+  extendDistance?: number | null;
+  rectDimSpec?: { width: number; height: number; anchor: 'corner' | 'center'; locked: boolean } | null;
+  circleDimSpec?: { radius: number; locked: boolean } | null;
   snapEnabled: boolean;
   layers: CADLayer[];
   points: CADPoint[];
@@ -47,6 +66,7 @@ interface CADCanvasProps {
   onAddLine: (line: CADLine) => void;
   onAddPolyline: (polyline: CADPolyline) => void;
   onAddPolygon: (polygon: CADPolygon) => void;
+  onApplyGeometryMutation?: (description: string, mutation: CADGeometryMutation) => void;
   onCursorMove: (world: Point2D | null, snap: SnapPoint | null) => void;
   onLiveMeasurementChange?: (data: { currentSegment: number; totalLength: number; area?: number; pointCount: number }) => void;
   activePoints: Point2D[];
@@ -57,6 +77,11 @@ interface CADCanvasProps {
 export const CADCanvas: React.FC<CADCanvasProps> = ({
   theme = 'dark',
   tool,
+  breakMode = 'split',
+  extendMode = 'distance',
+  extendDistance = null,
+  rectDimSpec = null,
+  circleDimSpec = null,
   snapEnabled,
   layers,
   points,
@@ -74,6 +99,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
   onAddLine,
   onAddPolyline,
   onAddPolygon,
+  onApplyGeometryMutation,
   onCursorMove,
   onLiveMeasurementChange,
   activePoints,
@@ -117,6 +143,13 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
   // Toast / feedback message when polyline click is not on a node
   const [nodeHintToast, setNodeHintToast] = useState<string | null>(null);
   const hintTimeoutRef = useRef<any>(null);
+
+  // First picked point for 2-point CAD Break (gap mode)
+  const [breakFirstHit, setBreakFirstHit] = useState<LinearTargetHit | null>(null);
+
+  useEffect(() => {
+    setBreakFirstHit(null);
+  }, [tool, breakMode]);
 
   const showNodeHint = (msg: string) => {
     if (hintTimeoutRef.current) clearTimeout(hintTimeoutRef.current);
@@ -275,21 +308,46 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
   useEffect(() => {
     if (!onLiveMeasurementChange) return;
 
+    const targetPoint = cursorWorld ? (activeSnap ? activeSnap.point : cursorWorld) : null;
+
+    if (tool === 'rectangle' && activePoints.length === 1 && targetPoint) {
+      const p1 = activePoints[0];
+      const w = Math.abs(targetPoint.x - p1.x);
+      const h = Math.abs(targetPoint.y - p1.y);
+      onLiveMeasurementChange({
+        currentSegment: distance2D(p1, targetPoint),
+        totalLength: 2 * (w + h),
+        area: w * h,
+        pointCount: 1
+      });
+      return;
+    }
+
+    if (tool === 'circle' && activePoints.length === 1 && targetPoint) {
+      const r = distance2D(activePoints[0], targetPoint);
+      onLiveMeasurementChange({
+        currentSegment: r,
+        totalLength: 2 * Math.PI * r,
+        area: Math.PI * r * r,
+        pointCount: 1
+      });
+      return;
+    }
+
     let totalLength = 0;
     for (let i = 0; i < activePoints.length - 1; i++) {
       totalLength += distance2D(activePoints[i], activePoints[i + 1]);
     }
 
     let currentSegment = 0;
-    if (activePoints.length > 0 && cursorWorld) {
+    if (activePoints.length > 0 && targetPoint) {
       const activeLast = activePoints[activePoints.length - 1];
-      const targetPoint = activeSnap ? activeSnap.point : cursorWorld;
       currentSegment = distance2D(activeLast, targetPoint);
     }
 
     let area = 0;
-    if (tool === 'polygon' && activePoints.length >= 2 && cursorWorld) {
-      const pts = [...activePoints, activeSnap ? activeSnap.point : cursorWorld];
+    if (tool === 'polygon' && activePoints.length >= 2 && targetPoint) {
+      const pts = [...activePoints, targetPoint];
       for (let i = 0; i < pts.length; i++) {
         const j = (i + 1) % pts.length;
         area += pts[i].x * pts[j].y;
@@ -305,6 +363,46 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       pointCount: activePoints.length
     });
   }, [activePoints, cursorWorld, activeSnap, tool, onLiveMeasurementChange]);
+
+  // Live hover previews for Break and Trim CAD tools
+  const resolveBreakHit = useCallback((worldPt: Point2D, snapPt?: Point2D | null, onlyId?: string): LinearTargetHit | null => {
+    const hitRadius = 18 / view.zoom;
+    const baseHit = findClosestLinearTarget(worldPt, hitRadius, lines, polylines, layers, onlyId);
+    if (!baseHit) return null;
+    if (snapPt) {
+      const snapHit = findClosestLinearTarget(snapPt, Math.max(0.05, hitRadius * 0.6), lines, polylines, layers, baseHit.id);
+      if (snapHit && snapHit.distance <= Math.max(0.02, 4 / view.zoom)) {
+        return snapHit;
+      }
+    }
+    return baseHit;
+  }, [view.zoom, lines, polylines, layers]);
+
+  const hoveredBreakHit = useMemo(() => {
+    if (tool !== 'break' || !cursorWorld) return null;
+    const onlyId = breakMode === 'gap' && breakFirstHit ? breakFirstHit.id : undefined;
+    return resolveBreakHit(cursorWorld, activeSnap?.point, onlyId);
+  }, [tool, cursorWorld, activeSnap, breakMode, breakFirstHit, resolveBreakHit]);
+
+  const hoveredTrimPreview = useMemo(() => {
+    if (tool !== 'trim' || !cursorWorld) return null;
+    const hitRadius = 18 / view.zoom;
+    const hit = findClosestLinearTarget(cursorWorld, hitRadius, lines, polylines, layers);
+    if (!hit) return null;
+    return computeTrimOperation(hit, lines, polylines, polygons, layers).preview;
+  }, [tool, cursorWorld, view.zoom, lines, polylines, polygons, layers]);
+
+  const hoveredExtendPreview = useMemo(() => {
+    if (tool !== 'extend' || !cursorWorld) return null;
+    const hitRadius = 18 / view.zoom;
+    const hit = findClosestLinearTarget(cursorWorld, hitRadius, lines, polylines, layers);
+    if (!hit) return null;
+    if (extendMode === 'boundary') {
+      return computeExtendToBoundaryOperation(hit, lines, polylines, polygons, layers).preview;
+    }
+    if (!extendDistance || !isFinite(extendDistance) || extendDistance <= 0) return null;
+    return computeExtendByDistanceOperation(hit, extendDistance, lines, polylines, layers).preview;
+  }, [tool, cursorWorld, view.zoom, lines, polylines, polygons, layers, extendMode, extendDistance]);
 
   // High-performance Spatial Hash Index including texts
   const spatialIndex = useMemo(() => {
@@ -847,9 +945,169 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       return;
     }
 
-    // 6. POLYGON TOOL
+    // 6. RECTANGLE TOOL (2-click corner-to-corner or 1-click locked dimension stamp)
+    if (tool === 'rectangle') {
+      if (rectDimSpec?.locked && Math.abs(rectDimSpec.width) > 1e-4 && Math.abs(rectDimSpec.height) > 1e-4) {
+        onAddPolyline(
+          createRectangleByDimensions(
+            snapRes.effectiveWorld,
+            rectDimSpec.width,
+            rectDimSpec.height,
+            rectDimSpec.anchor,
+            activeLayerId,
+            `사각형_${polylines.length + 1}`
+          )
+        );
+        setActivePoints([]);
+        return;
+      }
+      if (activePoints.length === 0) {
+        setActivePoints([snapRes.effectiveWorld]);
+      } else {
+        const p1 = activePoints[0];
+        const p2 = snapRes.effectiveWorld;
+        if (Math.abs(p2.x - p1.x) > 1e-4 && Math.abs(p2.y - p1.y) > 1e-4) {
+          onAddPolyline(createRectanglePolyline(p1, p2, activeLayerId, `사각형_${polylines.length + 1}`));
+        }
+        setActivePoints([]);
+      }
+      return;
+    }
+
+    // 7. CIRCLE TOOL (2-click center-to-radius or 1-click locked dimension stamp)
+    if (tool === 'circle') {
+      if (circleDimSpec?.locked && circleDimSpec.radius > 1e-4) {
+        onAddPolyline(
+          createCirclePolyline(
+            snapRes.effectiveWorld,
+            circleDimSpec.radius,
+            activeLayerId,
+            64,
+            `원_${polylines.length + 1}`
+          )
+        );
+        setActivePoints([]);
+        return;
+      }
+      if (activePoints.length === 0) {
+        setActivePoints([snapRes.effectiveWorld]);
+      } else {
+        const center = activePoints[0];
+        const radius = distance2D(center, snapRes.effectiveWorld);
+        if (radius > 1e-4) {
+          onAddPolyline(createCirclePolyline(center, radius, activeLayerId, 64, `원_${polylines.length + 1}`));
+        }
+        setActivePoints([]);
+      }
+      return;
+    }
+
+    // 8. POLYGON TOOL
     if (tool === 'polygon') {
       setActivePoints(prev => [...prev, snapRes.effectiveWorld]);
+      return;
+    }
+
+    // 9. BREAK TOOL (1-point split or 2-point gap)
+    if (tool === 'break') {
+      const onlyId = breakMode === 'gap' && breakFirstHit ? breakFirstHit.id : undefined;
+      const hit = resolveBreakHit(targetWorld, snapRes.snap?.point, onlyId);
+      if (!hit) {
+        showNodeHint(breakFirstHit ? '첫 번째 점과 같은 선 위를 클릭하세요.' : '끊을 선(단일선/연속선) 위를 클릭하세요.');
+        return;
+      }
+      if (layerMap.current.get(hit.layerId)?.locked) {
+        showNodeHint('잠긴 레이어의 객체는 수정할 수 없습니다.');
+        return;
+      }
+
+      if (breakMode === 'split') {
+        const { mutation, error } = breakEntityAtPoint(hit, lines, polylines);
+        if (error || !mutation) {
+          showNodeHint(error || '이 위치에서는 선을 끊을 수 없습니다.');
+          return;
+        }
+        onApplyGeometryMutation?.('선 끊기 (Break)', mutation);
+        if (mutation.message) showNodeHint(mutation.message);
+      } else {
+        if (!breakFirstHit) {
+          setBreakFirstHit(hit);
+          showNodeHint('같은 선 위에서 두 번째 지점을 클릭하세요.');
+        } else {
+          const { mutation, error } = breakEntityBetweenPoints(breakFirstHit, hit, lines, polylines);
+          if (error || !mutation) {
+            showNodeHint(error || '구간 끊기에 실패했습니다.');
+            return;
+          }
+          setBreakFirstHit(null);
+          onApplyGeometryMutation?.('구간 끊기 (Break)', mutation);
+          if (mutation.message) showNodeHint(mutation.message);
+        }
+      }
+      return;
+    }
+
+    // 10. TRIM TOOL (Quick Trim against all visible cutting edges)
+    if (tool === 'trim') {
+      const hit = findClosestLinearTarget(targetWorld, 18 / view.zoom, lines, polylines, layers);
+      if (!hit) {
+        showNodeHint('자르기(Trim)할 선 구간을 클릭하세요.');
+        return;
+      }
+      const { preview, error } = computeTrimOperation(hit, lines, polylines, polygons, layers);
+      if (error || !preview) {
+        showNodeHint(error || '교차하는 기준 선이 없어 자르기(Trim)할 수 없습니다.');
+        return;
+      }
+      onApplyGeometryMutation?.('선 자르기 (Trim)', preview.mutation);
+      return;
+    }
+
+    // 10.5 EXTEND TOOL (Extend by typed distance or to boundary edge)
+    if (tool === 'extend') {
+      const hit = findClosestLinearTarget(targetWorld, 18 / view.zoom, lines, polylines, layers);
+      if (!hit) {
+        showNodeHint('연장(Extend)할 선의 끝쪽을 클릭하세요.');
+        return;
+      }
+      if (extendMode === 'distance') {
+        if (!extendDistance || !isFinite(extendDistance) || extendDistance <= 0) {
+          showNodeHint('상단 입력창에 연장할 치수(m)를 0보다 크게 입력해 주세요.');
+          return;
+        }
+        const { preview, error } = computeExtendByDistanceOperation(hit, extendDistance, lines, polylines, layers);
+        if (error || !preview) {
+          showNodeHint(error || '선을 연장할 수 없습니다.');
+          return;
+        }
+        onApplyGeometryMutation?.('선 치수 연장 (Extend)', preview.mutation);
+      } else {
+        const { preview, error } = computeExtendToBoundaryOperation(hit, lines, polylines, polygons, layers);
+        if (error || !preview) {
+          showNodeHint(error || '연장 방향에 닿는 경계 선이 없습니다.');
+          return;
+        }
+        onApplyGeometryMutation?.('선 경계 연장 (Extend)', preview.mutation);
+      }
+      return;
+    }
+
+    // 11. JOIN TOOL (Click lines/polylines to toggle selection for joining)
+    if (tool === 'join') {
+      const hit = findClosestLinearTarget(targetWorld, 18 / view.zoom, lines, polylines, layers);
+      if (!hit) return;
+      if (layerMap.current.get(hit.layerId)?.locked) {
+        showNodeHint('잠긴 레이어의 객체는 결합할 수 없습니다.');
+        return;
+      }
+      if (hit.kind === 'polyline' && hit.isClosed) {
+        showNodeHint('이미 폐합된 도형은 결합할 수 없습니다.');
+        return;
+      }
+      const nextList = selectedEntityIds.includes(hit.id)
+        ? selectedEntityIds.filter(id => id !== hit.id)
+        : [...selectedEntityIds, hit.id];
+      onSelectEntities?.(nextList);
       return;
     }
   };
@@ -1463,6 +1721,89 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       ctx.restore();
     }
 
+    // 7.5 Locked-Dimension Shape Stamp Previews (before 1st click)
+    const effectivePreviewCursor = activeSnap ? activeSnap.point : cursorWorld;
+    if (activePoints.length === 0 && effectivePreviewCursor) {
+      if (tool === 'rectangle' && rectDimSpec?.locked && Math.abs(rectDimSpec.width) > 1e-4 && Math.abs(rectDimSpec.height) > 1e-4) {
+        const previewPoly = createRectangleByDimensions(
+          effectivePreviewCursor,
+          rectDimSpec.width,
+          rectDimSpec.height,
+          rectDimSpec.anchor,
+          activeLayerId
+        );
+        const sPts = previewPoly.points.map(getScreen);
+        ctx.save();
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.14)';
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(sPts[0].x, sPts[0].y);
+        for (let i = 1; i < sPts.length; i++) ctx.lineTo(sPts[i].x, sPts[i].y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        const sc = getScreen(effectivePreviewCursor);
+        ctx.fillStyle = '#10b981';
+        ctx.beginPath();
+        ctx.arc(sc.x, sc.y, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        const label = `${Math.abs(rectDimSpec.width).toFixed(2)}m × ${Math.abs(rectDimSpec.height).toFixed(2)}m (치수고정)`;
+        ctx.font = '12px JetBrains Mono, monospace';
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+        ctx.strokeStyle = '#0284c7';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(sc.x + 12, sc.y - 26, tw + 14, 22, 5);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#38bdf8';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, sc.x + 19, sc.y - 15);
+        ctx.restore();
+      } else if (tool === 'circle' && circleDimSpec?.locked && circleDimSpec.radius > 1e-4) {
+        const sc = getScreen(effectivePreviewCursor);
+        const radiusPx = circleDimSpec.radius * view.zoom;
+        ctx.save();
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.14)';
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.arc(sc.x, sc.y, radiusPx, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = '#10b981';
+        ctx.beginPath();
+        ctx.arc(sc.x, sc.y, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        const label = `R = ${circleDimSpec.radius.toFixed(3)}m (D = ${(circleDimSpec.radius * 2).toFixed(3)}m · 고정)`;
+        ctx.font = '12px JetBrains Mono, monospace';
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+        ctx.strokeStyle = '#0284c7';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(sc.x + 12, sc.y - 26, tw + 14, 22, 5);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#38bdf8';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, sc.x + 19, sc.y - 15);
+        ctx.restore();
+      }
+    }
+
     // 8. Render Active Drawing / Multi-Point Measuring Path
     if (activePoints.length > 0) {
       if (tool === 'measure') {
@@ -1563,8 +1904,90 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
           ctx.textBaseline = 'middle';
           ctx.fillText(label, curSp.x + 19, curSp.y - 17);
         }
+      } else if (tool === 'rectangle' && activePoints.length === 1 && cursorWorld) {
+        const p1 = activePoints[0];
+        const p2 = cursorWorld;
+        const s1 = getScreen(p1);
+        const s2 = getScreen(p2);
+        const rx = Math.min(s1.x, s2.x);
+        const ry = Math.min(s1.y, s2.y);
+        const rw = Math.abs(s2.x - s1.x);
+        const rh = Math.abs(s2.y - s1.y);
+
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.12)';
+        ctx.fillRect(rx, ry, rw, rh);
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([6, 4]);
+        ctx.strokeRect(rx, ry, rw, rh);
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = '#10b981';
+        ctx.beginPath();
+        ctx.arc(s1.x, s1.y, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        const wM = Math.abs(p2.x - p1.x);
+        const hM = Math.abs(p2.y - p1.y);
+        const label = `${wM.toFixed(3)}m × ${hM.toFixed(3)}m (${(wM * hM).toFixed(2)}㎡)`;
+        ctx.font = '12px JetBrains Mono, monospace';
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+        ctx.strokeStyle = '#0284c7';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(s2.x + 12, s2.y - 26, tw + 14, 22, 5);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#38bdf8';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, s2.x + 19, s2.y - 15);
+      } else if (tool === 'circle' && activePoints.length === 1 && cursorWorld) {
+        const center = activePoints[0];
+        const sc = getScreen(center);
+        const sp = getScreen(cursorWorld);
+        const radiusM = distance2D(center, cursorWorld);
+        const radiusPx = radiusM * view.zoom;
+
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.12)';
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.arc(sc.x, sc.y, radiusPx, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Radius guide line
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(sc.x, sc.y);
+        ctx.lineTo(sp.x, sp.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = '#10b981';
+        ctx.beginPath();
+        ctx.arc(sc.x, sc.y, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        const label = `R = ${radiusM.toFixed(3)}m (D = ${(radiusM * 2).toFixed(3)}m)`;
+        ctx.font = '12px JetBrains Mono, monospace';
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+        ctx.strokeStyle = '#0284c7';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(sp.x + 12, sp.y - 26, tw + 14, 22, 5);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#38bdf8';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, sp.x + 19, sp.y - 15);
       } else {
-        // Standard Polyline / Polygon Drawing Preview
+        // Standard Polyline / Polygon / Line Drawing Preview
         ctx.strokeStyle = '#38bdf8';
         ctx.lineWidth = 2.5;
         ctx.setLineDash([5, 5]);
@@ -1624,6 +2047,147 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       }
     }
 
+    // 8.5 CAD Trim & Break Live Overlays
+    if (tool === 'trim' && hoveredTrimPreview) {
+      ctx.save();
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 5;
+      ctx.setLineDash([6, 4]);
+      hoveredTrimPreview.trimSegments.forEach(segPts => {
+        if (segPts.length < 2) return;
+        ctx.beginPath();
+        const p0 = getScreen(segPts[0]);
+        ctx.moveTo(p0.x, p0.y);
+        for (let i = 1; i < segPts.length; i++) {
+          const ps = getScreen(segPts[i]);
+          ctx.lineTo(ps.x, ps.y);
+        }
+        ctx.stroke();
+      });
+      ctx.setLineDash([]);
+
+      // Draw cut X markers at intersection boundaries
+      hoveredTrimPreview.cutPoints.forEach(cp => {
+        const sp = getScreen(cp);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 3.5;
+        ctx.beginPath();
+        ctx.moveTo(sp.x - 5, sp.y - 5);
+        ctx.lineTo(sp.x + 5, sp.y + 5);
+        ctx.moveTo(sp.x + 5, sp.y - 5);
+        ctx.lineTo(sp.x - 5, sp.y + 5);
+        ctx.stroke();
+
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(sp.x - 5, sp.y - 5);
+        ctx.lineTo(sp.x + 5, sp.y + 5);
+        ctx.moveTo(sp.x + 5, sp.y - 5);
+        ctx.lineTo(sp.x - 5, sp.y + 5);
+        ctx.stroke();
+      });
+      ctx.restore();
+    }
+
+    if (tool === 'break') {
+      ctx.save();
+      if (breakFirstHit) {
+        const sp1 = getScreen(breakFirstHit.point);
+        ctx.fillStyle = '#f59e0b';
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(sp1.x, sp1.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+
+      if (breakMode === 'gap' && breakFirstHit && hoveredBreakHit && hoveredBreakHit.id === breakFirstHit.id) {
+        const gapPreview = computeBreakGapPreview(breakFirstHit, hoveredBreakHit, lines, polylines);
+        if (gapPreview && gapPreview.points.length >= 2) {
+          ctx.strokeStyle = '#ef4444';
+          ctx.lineWidth = 5;
+          ctx.setLineDash([6, 4]);
+          ctx.beginPath();
+          const p0 = getScreen(gapPreview.points[0]);
+          ctx.moveTo(p0.x, p0.y);
+          for (let i = 1; i < gapPreview.points.length; i++) {
+            const ps = getScreen(gapPreview.points[i]);
+            ctx.lineTo(ps.x, ps.y);
+          }
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      }
+
+      if (hoveredBreakHit) {
+        const sp = getScreen(hoveredBreakHit.point);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 3.5;
+        ctx.beginPath();
+        ctx.moveTo(sp.x - 6, sp.y - 6);
+        ctx.lineTo(sp.x + 6, sp.y + 6);
+        ctx.moveTo(sp.x + 6, sp.y - 6);
+        ctx.lineTo(sp.x - 6, sp.y + 6);
+        ctx.stroke();
+
+        ctx.strokeStyle = '#ec4899';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(sp.x - 6, sp.y - 6);
+        ctx.lineTo(sp.x + 6, sp.y + 6);
+        ctx.moveTo(sp.x + 6, sp.y - 6);
+        ctx.lineTo(sp.x - 6, sp.y + 6);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    if (tool === 'extend' && hoveredExtendPreview) {
+      const sFrom = getScreen(hoveredExtendPreview.fromPoint);
+      const sTo = getScreen(hoveredExtendPreview.toPoint);
+      ctx.save();
+      ctx.strokeStyle = '#10b981';
+      ctx.lineWidth = 4;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(sFrom.x, sFrom.y);
+      ctx.lineTo(sTo.x, sTo.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = '#f59e0b';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sFrom.x, sFrom.y, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = '#10b981';
+      ctx.beginPath();
+      ctx.arc(sTo.x, sTo.y, 5.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      const label = `+${hoveredExtendPreview.addedLength.toFixed(3)}m`;
+      ctx.font = '12px JetBrains Mono, monospace';
+      const tw = ctx.measureText(label).width;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+      ctx.strokeStyle = '#10b981';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(sTo.x + 12, sTo.y - 24, tw + 14, 20, 5);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#34d399';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, sTo.x + 19, sTo.y - 14);
+      ctx.restore();
+    }
+
     // 9. Marquee Selection Box (AutoCAD Blue Window Style)
     if (selectionBox) {
       const bx = Math.min(selectionBox.startScreen.x, selectionBox.currentScreen.x);
@@ -1666,7 +2230,18 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     selectedSet,
     selectionBox,
     worldToScreen,
-    viewportSize
+    viewportSize,
+    hoveredTrimPreview,
+    hoveredExtendPreview,
+    hoveredBreakHit,
+    breakFirstHit,
+    breakMode,
+    extendMode,
+    extendDistance,
+    rectDimSpec,
+    circleDimSpec,
+    activeLayerId,
+    theme
   ]);
 
   return (

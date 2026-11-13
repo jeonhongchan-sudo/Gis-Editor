@@ -8,10 +8,16 @@ export type ToolMode =
   | 'pan' 
   | 'polyline' 
   | 'line' 
+  | 'rectangle'
+  | 'circle'
   | 'polygon' 
   | 'point' 
   | 'measure' 
   | 'text' 
+  | 'break'
+  | 'trim'
+  | 'extend'
+  | 'join'
   | 'erase';
 
 export interface Point2D {
