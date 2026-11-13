@@ -336,7 +336,11 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
   // 1. Export Points layer if valid points exist
   const validPoints = points.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
   if (validPoints.length > 0) {
-    const standardPointKeysLower = new Set(['id', 'textstring', 'name', 'layer', 'color', 'z']);
+    const standardPointKeysLower = new Set([
+      'id', 'textstring', 'textheight', 'height', 'name', 'title',
+      'layer', 'layerid', 'color', 'marker-color', 'stroke', 'stroke-width',
+      'z', 'dxftype', 'issurveynode'
+    ]);
     const customPtFieldRawKeysSet = new Set<string>();
     validPoints.forEach(p => {
       if (p.attributes) {
@@ -350,25 +354,25 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     });
     const customPtRawKeys = Array.from(customPtFieldRawKeysSet).slice(0, 15);
 
-    const usedPtFieldNames = new Set<string>(['ID', 'TEXTSTRING', 'NAME', 'LAYER', 'COLOR', 'Z']);
+    const usedPtFieldNames = new Set<string>(['ID', 'TEXTSTRING', 'TEXTHEIGHT', 'LAYER', 'Z']);
     const customPtKeyMappings = customPtRawKeys.map(rawKey => ({
       rawKey,
       dbfName: makeUniqueDbfFieldName(rawKey, usedPtFieldNames, encoding)
     }));
 
     const ptFeatures: ShpFeaturePoint[] = validPoints.map((p, idx) => {
-      const layer = layers.find(l => l.id === p.layerId);
       const a = p.attributes || {};
       const textStringVal = String(
         a.TEXTSTRING ?? a.textstring ?? a.TEXT ?? a.text ?? a.STRING ?? a.string ?? p.name ?? ''
       ).trim();
+      const rawH = Number(a.TEXTHEIGHT ?? a.textheight ?? a.HEIGHT ?? a.height);
+      const textHeightVal = Number.isFinite(rawH) && rawH > 0 ? rawH : 1;
 
       const props: Record<string, string | number> = {
         ID: idx + 1,
         TEXTSTRING: textStringVal || p.name || `측점_${idx + 1}`,
-        NAME: p.name || textStringVal || `측점_${idx + 1}`,
+        TEXTHEIGHT: textHeightVal,
         LAYER: getLayerName(p.layerId),
-        COLOR: layer?.color || '#ef4444',
         Z: p.z !== undefined && Number.isFinite(p.z) ? p.z : 0
       };
 
@@ -387,9 +391,8 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     const dbfFields: { name: string; type: 'C' | 'N'; length: number; decimals: number }[] = [
       { name: 'ID', type: 'N', length: 10, decimals: 0 },
       { name: 'TEXTSTRING', type: 'C', length: 254, decimals: 0 },
-      { name: 'NAME', type: 'C', length: 254, decimals: 0 },
+      { name: 'TEXTHEIGHT', type: 'N', length: 8, decimals: 2 },
       { name: 'LAYER', type: 'C', length: 254, decimals: 0 },
-      { name: 'COLOR', type: 'C', length: 20, decimals: 0 },
       { name: 'Z', type: 'N', length: 12, decimals: 3 }
     ];
 
@@ -409,7 +412,8 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
   // Combine single lines and polylines into polyline features with Object Data (OD)
   // Collect all unique custom attribute keys across all lines (case-insensitive exclusion of standard keys)
   const standardLineKeysLower = new Set([
-    'id', 'name', 'layer', 'color', 'length_m', 'category', 'spec', 'material',
+    'id', 'name', 'title', 'layer', 'layerid', 'color', 'marker-color', 'stroke', 'stroke-width',
+    'dxftype', 'isclosed', 'length_m', 'category', 'spec', 'material',
     'depth', 'surv_date', 'surveyor', 'status', 'remark', 'type',
     '시설구분', '규격', '재질', '매설심도', '조사일자', '조사자', '상태', '비고'
   ]);
@@ -431,7 +435,7 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
 
   const customLineRawKeys = Array.from(customFieldRawKeysSet).slice(0, 15);
   const usedLineFieldNames = new Set<string>([
-    'ID', 'NAME', 'LAYER', 'COLOR', 'LENGTH_M', 'CATEGORY', 'SPEC', 'MATERIAL',
+    'ID', 'NAME', 'LAYER', 'LENGTH_M', 'CATEGORY', 'SPEC', 'MATERIAL',
     'DEPTH', 'SURV_DATE', 'SURVEYOR', 'STATUS', 'REMARK', 'TYPE'
   ]);
   const customLineKeyMappings = customLineRawKeys.map(rawKey => ({
@@ -450,12 +454,10 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     }
     const len = Math.sqrt(Math.pow(l.end.x - l.start.x, 2) + Math.pow(l.end.y - l.start.y, 2));
     const a = l.attributes || {};
-    const layer = layers.find(lay => lay.id === l.layerId);
     const props: Record<string, string | number> = {
       ID: lineFeatures.length + 1,
       NAME: l.name || `단일선_${idx + 1}`,
       LAYER: getLayerName(l.layerId),
-      COLOR: layer?.color || '#38bdf8',
       LENGTH_M: Number(len.toFixed(3)),
       CATEGORY: (a.CATEGORY || a.시설구분 || '').toString(),
       SPEC: (a.SPEC || a.규격 || '').toString(),
@@ -493,12 +495,10 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       len += Math.sqrt(Math.pow(exportPts[i + 1].x - exportPts[i].x, 2) + Math.pow(exportPts[i + 1].y - exportPts[i].y, 2));
     }
     const a = pl.attributes || {};
-    const layer = layers.find(lay => lay.id === pl.layerId);
     const props: Record<string, string | number> = {
       ID: lineFeatures.length + 1,
       NAME: pl.name || `연속선_${idx + 1}`,
       LAYER: getLayerName(pl.layerId),
-      COLOR: layer?.color || '#38bdf8',
       LENGTH_M: Number(len.toFixed(3)),
       CATEGORY: (a.CATEGORY || a.시설구분 || '').toString(),
       SPEC: (a.SPEC || a.규격 || '').toString(),
@@ -535,12 +535,10 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       len += Math.sqrt(Math.pow(exportPts[i + 1].x - exportPts[i].x, 2) + Math.pow(exportPts[i + 1].y - exportPts[i].y, 2));
     }
     const a = pg.attributes || {};
-    const layer = layers.find(lay => lay.id === pg.layerId);
     const props: Record<string, string | number> = {
       ID: lineFeatures.length + 1,
       NAME: pg.name || `외곽선_${idx + 1}`,
       LAYER: getLayerName(pg.layerId),
-      COLOR: layer?.color || '#38bdf8',
       LENGTH_M: Number(len.toFixed(3)),
       CATEGORY: (a.CATEGORY || a.시설구분 || '').toString(),
       SPEC: (a.SPEC || a.규격 || '').toString(),
@@ -569,7 +567,6 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       { name: 'ID', type: 'N', length: 10, decimals: 0 },
       { name: 'NAME', type: 'C', length: 254, decimals: 0 },
       { name: 'LAYER', type: 'C', length: 254, decimals: 0 },
-      { name: 'COLOR', type: 'C', length: 20, decimals: 0 },
       { name: 'LENGTH_M', type: 'N', length: 12, decimals: 3 },
       { name: 'CATEGORY', type: 'C', length: 254, decimals: 0 },
       { name: 'SPEC', type: 'C', length: 254, decimals: 0 },

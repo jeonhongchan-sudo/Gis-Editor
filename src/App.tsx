@@ -438,17 +438,36 @@ export default function App() {
     const updateMap = new Map(updates.map(u => [u.id, u]));
     const resolvedPointUpdates = new Map<string, { name: string; attributes: Record<string, string | number> }>();
 
+    const redundantOrColorKeys = new Set([
+      'id', 'name', 'title', 'text', 'layer', 'layerid',
+      'dxftype', 'issurveynode', 'isclosed', 'z',
+      'color', 'marker-color', 'stroke', 'stroke-width'
+    ]);
+
     updates.forEach(u => {
+      const cleanedInput: Record<string, string | number> = {};
+      Object.entries(u.attributes || {}).forEach(([k, v]) => {
+        if (!redundantOrColorKeys.has(k.trim().toLowerCase())) {
+          cleanedInput[k] = v;
+        }
+      });
+
       if (u.type === 'point') {
         const existingPt = points.find(p => p.id === u.id);
-        const attrText = u.attributes.TEXTSTRING !== undefined ? String(u.attributes.TEXTSTRING).trim() : '';
+        const attrText = cleanedInput.TEXTSTRING !== undefined ? String(cleanedInput.TEXTSTRING).trim() : '';
         const nameChanged = u.name !== undefined && existingPt && u.name !== existingPt.name;
         const finalName = nameChanged ? u.name! : (attrText || u.name || existingPt?.name || '');
-        const finalAttrs = {
-          ...u.attributes,
-          TEXTSTRING: nameChanged ? finalName : (attrText || finalName)
+        const rawH = Number(cleanedInput.TEXTHEIGHT ?? cleanedInput.textheight ?? existingPt?.attributes?.TEXTHEIGHT ?? 1);
+        const finalAttrs: Record<string, string | number> = {
+          ...cleanedInput,
+          TEXTSTRING: nameChanged ? finalName : (attrText || finalName),
+          TEXTHEIGHT: Number.isFinite(rawH) && rawH > 0 ? rawH : 1,
+          'marker-symbol': String(cleanedInput['marker-symbol'] || existingPt?.attributes?.['marker-symbol'] || 'circle'),
+          'marker-size': String(cleanedInput['marker-size'] || existingPt?.attributes?.['marker-size'] || 'medium')
         };
         resolvedPointUpdates.set(u.id, { name: finalName, attributes: finalAttrs });
+      } else {
+        u.attributes = cleanedInput;
       }
     });
 
@@ -524,6 +543,9 @@ export default function App() {
       isSurveyNode: true,
       attributes: {
         'TEXTSTRING': '맨홀_MH01',
+        'TEXTHEIGHT': 1,
+        'marker-symbol': 'circle',
+        'marker-size': 'medium',
         '시설종류': '맨홀',
         '규격': 'D600',
         '재질': '철근콘크리트',
@@ -542,6 +564,9 @@ export default function App() {
       isSurveyNode: true,
       attributes: {
         'TEXTSTRING': '전주_P12',
+        'TEXTHEIGHT': 1,
+        'marker-symbol': 'circle',
+        'marker-size': 'medium',
         '시설종류': '전주',
         '규격': '12m',
         '재질': '콘크리트',

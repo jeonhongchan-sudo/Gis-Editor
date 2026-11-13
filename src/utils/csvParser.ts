@@ -259,7 +259,12 @@ export function buildCADPointsFromCSV(
       z: zVal,
       layerId,
       isSurveyNode: true,
-      attributes: { TEXTSTRING: nameVal }
+      attributes: {
+        TEXTSTRING: nameVal,
+        TEXTHEIGHT: 1,
+        'marker-symbol': 'circle',
+        'marker-size': 'medium'
+      }
     });
   });
 

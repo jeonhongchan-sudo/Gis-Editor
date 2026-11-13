@@ -44,13 +44,42 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
 
   console.log(`Exporting GeoJSON: ${points.length} pts, ${lines.length} lines, ${polylines.length} pls, ${polygons.length} pgs, ${texts.length} txts (Target: ${targetCrs || 'RAW'})`);
 
+  const REDUNDANT_OR_COLOR_KEYS = new Set([
+    'id', 'name', 'title', 'text', 'textstring', 'layer', 'layerid',
+    'dxftype', 'issurveynode', 'isclosed', 'z',
+    'color', 'marker-color', 'stroke', 'stroke-width',
+    'marker-size', 'marker-symbol', 'textheight', 'height'
+  ]);
+
+  const pickCustomAttributes = (attrs?: Record<string, string | number>) => {
+    const clean: Record<string, string | number> = {};
+    if (!attrs) return clean;
+    Object.entries(attrs).forEach(([k, v]) => {
+      if (!REDUNDANT_OR_COLOR_KEYS.has(k.trim().toLowerCase()) && v !== undefined && v !== null) {
+        clean[k] = v;
+      }
+    });
+    return clean;
+  };
+
+  const normalizeMarkerSize = (val: unknown): 'minimum' | 'medium' | 'max' => {
+    const s = String(val || '').trim().toLowerCase();
+    if (s === 'minimum' || s === 'min' || s === 'small') return 'minimum';
+    if (s === 'max' || s === 'maximum' || s === 'large') return 'max';
+    return 'medium';
+  };
+
   const features: any[] = [];
   
   // 1. Export Points
   points.forEach(p => {
     if (!p) return;
     const coords = projectPoint(p);
-    const layerObj = layers.find(l => l.id === p.layerId);
+    const a = p.attributes || {};
+    const textString = String(a.TEXTSTRING ?? a.textstring ?? p.name ?? '').trim();
+    const rawHeight = Number(a.TEXTHEIGHT ?? a.textheight ?? a.HEIGHT ?? a.height);
+    const textHeight = Number.isFinite(rawHeight) && rawHeight > 0 ? rawHeight : 1;
+
     features.push({
       type: 'Feature',
       geometry: {
@@ -59,18 +88,14 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       },
       properties: {
         id: p.id,
-        name: p.name,
-        title: p.name,
-        TEXTSTRING: p.name,
+        TEXTSTRING: textString,
         layer: getLayerName(p.layerId),
-        layerId: p.layerId,
-        dxftype: 'POINT',
-        isSurveyNode: p.isSurveyNode,
-        z: p.z !== undefined ? Number(p.z) : undefined,
-        'marker-color': layerObj?.color || '#ef4444',
-        'marker-size': 'medium',
-        'marker-symbol': 'marker',
-        ...(p.attributes || {})
+        TEXTHEIGHT: textHeight,
+        'marker-size': normalizeMarkerSize(a['marker-size']),
+        'marker-symbol': String(a['marker-symbol'] || 'circle'),
+        ...(p.z !== undefined && Number.isFinite(Number(p.z)) ? { z: Number(p.z) } : {}),
+        ...(p.isSurveyNode !== undefined ? { isSurveyNode: p.isSurveyNode } : {}),
+        ...pickCustomAttributes(a)
       }
     });
   });
@@ -79,7 +104,6 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
   texts.forEach(t => {
     if (!t) return;
     const coords = projectPoint({ x: t.x, y: t.y });
-    const layerObj = layers.find(l => l.id === t.layerId);
     features.push({
       type: 'Feature',
       geometry: {
@@ -88,19 +112,12 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       },
       properties: {
         id: t.id,
-        text: t.text,
-        name: t.text,
-        title: t.text,
         TEXTSTRING: t.text,
-        height: t.height,
+        TEXTHEIGHT: Number.isFinite(Number(t.height)) && t.height > 0 ? Number(t.height) : 1,
         rotation: t.rotation,
         layer: getLayerName(t.layerId),
-        layerId: t.layerId,
         dxftype: 'TEXT',
-        color: t.color,
-        'marker-color': t.color || layerObj?.color || '#38bdf8',
-        'marker-size': 'small',
-        'marker-symbol': 'circle'
+        ...pickCustomAttributes(t.attributes)
       }
     });
   });
@@ -108,7 +125,6 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
   // 3. Export Lines
   lines.forEach(l => {
     if (!l || !l.start || !l.end) return;
-    const layerObj = layers.find(lay => lay.id === l.layerId);
     features.push({
       type: 'Feature',
       geometry: {
@@ -118,13 +134,8 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       properties: {
         id: l.id,
         name: l.name,
-        title: l.name,
         layer: getLayerName(l.layerId),
-        layerId: l.layerId,
-        dxftype: 'LINE',
-        'stroke': layerObj?.color || '#38bdf8',
-        'stroke-width': 2,
-        ...(l.attributes || {})
+        ...pickCustomAttributes(l.attributes)
       }
     });
   });
@@ -140,7 +151,6 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
         coords.push([first[0], first[1]]);
       }
     }
-    const layerObj = layers.find(l => l.id === pl.layerId);
     features.push({
       type: 'Feature',
       geometry: {
@@ -150,14 +160,9 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       properties: {
         id: pl.id,
         name: pl.name,
-        title: pl.name,
         layer: getLayerName(pl.layerId),
-        layerId: pl.layerId,
-        dxftype: 'LWPOLYLINE',
-        isClosed: pl.isClosed,
-        'stroke': layerObj?.color || '#38bdf8',
-        'stroke-width': 2,
-        ...(pl.attributes || {})
+        ...(pl.isClosed ? { isClosed: true } : {}),
+        ...pickCustomAttributes(pl.attributes)
       }
     });
   });
@@ -173,7 +178,6 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
         coords.push([first[0], first[1]]);
       }
     }
-    const layerObj = layers.find(l => l.id === pg.layerId);
     features.push({
       type: 'Feature',
       geometry: {
@@ -183,25 +187,21 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       properties: {
         id: pg.id,
         name: pg.name,
-        title: pg.name,
         layer: getLayerName(pg.layerId),
-        layerId: pg.layerId,
-        dxftype: 'LWPOLYLINE',
         isClosed: true,
-        'stroke': layerObj?.color || '#38bdf8',
-        'stroke-width': 2,
-        ...(pg.attributes || {})
+        ...pickCustomAttributes(pg.attributes)
       }
     });
   });
 
+  const isWgs84 = targetCrs === 'EPSG:4326';
   const geojson: any = {
     type: 'FeatureCollection',
     metadata: {
       generator: 'Web GIS/CAD App',
       version: '1.0.0',
       exportedAt: new Date().toISOString(),
-      layers: layers,
+      ...(isWgs84 ? {} : { layers: layers.map(({ color: _color, ...rest }) => rest) }),
       crs: targetCrs || 'RAW_TM',
       sourceCrs: sourceCrs
     },

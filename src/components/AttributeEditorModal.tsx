@@ -50,6 +50,39 @@ const CATEGORY_PRESETS = [
   '전주', '가로등', '도로경계', '지적경계', '건물', '기타시설'
 ];
 
+const MARKER_SYMBOL_OPTIONS = [
+  { value: 'circle', label: '원 (기본)' },
+  { value: 'marker', label: '원+십자' },
+  { value: 'square', label: '사각형' },
+  { value: 'triangle', label: '삼각형' },
+  { value: 'diamond', label: '마름모' },
+  { value: 'cross', label: '십자' },
+  { value: 'star', label: '별' }
+] as const;
+
+const MARKER_SIZE_OPTIONS = [
+  { value: 'minimum', label: 'Minimum' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'max', label: 'Max' }
+] as const;
+
+const REDUNDANT_OR_COLOR_KEYS_LOWER = new Set([
+  'id', 'name', 'title', 'text', 'textstring', 'layer', 'layerid',
+  'dxftype', 'issurveynode', 'isclosed', 'z',
+  'color', 'marker-color', 'stroke', 'stroke-width'
+]);
+
+const POINT_STYLE_KEYS_LOWER = new Set([
+  'marker-symbol', 'marker-sym', 'marker-size', 'marker-siz', 'textheight', 'height'
+]);
+
+const normalizeMarkerSizeValue = (val: unknown): 'minimum' | 'medium' | 'max' => {
+  const s = String(val || '').trim().toLowerCase();
+  if (s === 'minimum' || s === 'min' || s === 'small') return 'minimum';
+  if (s === 'max' || s === 'maximum' || s === 'large') return 'max';
+  return 'medium';
+};
+
 const TemplateItem: React.FC<{ 
   tpl: AttributeTemplate; 
   onEdit: (t: AttributeTemplate) => void; 
@@ -241,9 +274,13 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
   }, [allEntitiesList, selectedIds]);
 
   const firstEntity = targetEntities[0] || null;
+  const hasPointTarget = useMemo(() => targetEntities.some(e => e.type === 'point'), [targetEntities]);
 
   // Form Fields
   const [entityName, setEntityName] = useState<string>('');
+  const [markerSymbol, setMarkerSymbol] = useState<string>('circle');
+  const [markerSize, setMarkerSize] = useState<string>('medium');
+  const [textHeight, setTextHeight] = useState<string>('1');
   const [customFields, setCustomFields] = useState<Array<{ key: string; value: string }>>([]);
 
   // Update form fields when selection changes
@@ -253,15 +290,35 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
       const existing = firstEntity.attributes || {};
       const fields: Array<{ key: string; value: string }> = [];
       Object.entries(existing).forEach(([k, v]) => {
+        const lower = k.trim().toLowerCase();
+        if (REDUNDANT_OR_COLOR_KEYS_LOWER.has(lower)) return;
+        if (firstEntity.type === 'point' && POINT_STYLE_KEYS_LOWER.has(lower)) return;
         fields.push({ key: k, value: String(v) });
       });
       setCustomFields(fields);
+
+      if (firstEntity.type === 'point') {
+        setMarkerSymbol(String(existing['marker-symbol'] || existing['marker-sym'] || 'circle'));
+        setMarkerSize(normalizeMarkerSizeValue(existing['marker-size'] ?? existing['marker-siz']));
+        const rawH = Number(existing.TEXTHEIGHT ?? existing.textheight ?? existing.HEIGHT ?? existing.height);
+        setTextHeight(Number.isFinite(rawH) && rawH > 0 ? String(rawH) : '1');
+      } else {
+        setMarkerSymbol('circle');
+        setMarkerSize('medium');
+        setTextHeight('1');
+      }
     } else if (targetEntities.length > 1) {
       setEntityName(`${targetEntities.length}개 객체 선택됨`);
       setCustomFields([]); // Clear for batch mode
+      setMarkerSymbol('');
+      setMarkerSize('');
+      setTextHeight('');
     } else {
       setEntityName('');
       setCustomFields([]);
+      setMarkerSymbol('circle');
+      setMarkerSize('medium');
+      setTextHeight('1');
     }
   }, [selectedIds, allEntitiesList]);
 
@@ -278,11 +335,12 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
     });
   }, [allEntitiesList, tableSearch]);
 
-  // Extract unique attribute keys for table columns
+  // Extract unique attribute keys for table columns (excluding redundant/color keys)
   const tableAttributeKeys = useMemo(() => {
     const keys = new Set<string>();
     filteredEntities.forEach(e => {
       Object.keys(e.attributes).forEach(k => {
+        if (REDUNDANT_OR_COLOR_KEYS_LOWER.has(k.trim().toLowerCase())) return;
         if (e.attributes[k] !== undefined && e.attributes[k] !== '') {
           keys.add(k);
         }
@@ -314,24 +372,50 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
     const baseAttributes: Record<string, string | number> = {};
     customFields.forEach(cf => {
       const trimmedKey = cf.key.trim();
-      if (trimmedKey) {
+      const lower = trimmedKey.toLowerCase();
+      if (trimmedKey && !REDUNDANT_OR_COLOR_KEYS_LOWER.has(lower)) {
+        if (hasPointTarget && POINT_STYLE_KEYS_LOWER.has(lower)) return;
         const trimmedVal = cf.value.trim();
         const numVal = parseFloat(trimmedVal);
         baseAttributes[trimmedKey] = (!isNaN(numVal) && String(numVal) === trimmedVal) ? numVal : trimmedVal;
       }
     });
 
+    const parsedInputHeight = Number(textHeight.trim());
+    const hasValidInputHeight = textHeight.trim() !== '' && Number.isFinite(parsedInputHeight) && parsedInputHeight > 0;
+
     const updates = targetEntities.map(ent => {
       let finalAttributes: Record<string, string | number>;
       if (targetEntities.length === 1) {
-        finalAttributes = baseAttributes;
+        finalAttributes = { ...baseAttributes };
       } else {
-        finalAttributes = { ...ent.attributes, ...baseAttributes };
+        const cleanedExisting: Record<string, string | number> = {};
+        Object.entries(ent.attributes || {}).forEach(([k, v]) => {
+          if (!REDUNDANT_OR_COLOR_KEYS_LOWER.has(k.trim().toLowerCase())) {
+            cleanedExisting[k] = v;
+          }
+        });
+        finalAttributes = { ...cleanedExisting, ...baseAttributes };
       }
+
+      const nextName = targetEntities.length === 1 && entityName.trim() ? entityName.trim() : ent.name;
+
+      if (ent.type === 'point') {
+        finalAttributes.TEXTSTRING = nextName;
+        const prevSymbol = String(ent.attributes?.['marker-symbol'] || ent.attributes?.['marker-sym'] || 'circle');
+        const prevSize = normalizeMarkerSizeValue(ent.attributes?.['marker-size'] ?? ent.attributes?.['marker-siz']);
+        const prevHeightRaw = Number(ent.attributes?.TEXTHEIGHT ?? ent.attributes?.textheight ?? ent.attributes?.HEIGHT ?? ent.attributes?.height);
+        const prevHeight = Number.isFinite(prevHeightRaw) && prevHeightRaw > 0 ? prevHeightRaw : 1;
+
+        finalAttributes['marker-symbol'] = markerSymbol || prevSymbol;
+        finalAttributes['marker-size'] = markerSize ? normalizeMarkerSizeValue(markerSize) : prevSize;
+        finalAttributes.TEXTHEIGHT = hasValidInputHeight ? parsedInputHeight : prevHeight;
+      }
+
       return {
         id: ent.id,
         type: ent.type,
-        name: targetEntities.length === 1 && entityName.trim() ? entityName.trim() : ent.name,
+        name: nextName,
         attributes: finalAttributes
       };
     });
@@ -406,7 +490,11 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
 
   const handleExportCSV = () => {
     const allKeys = new Set<string>();
-    allEntitiesList.forEach(e => Object.keys(e.attributes).forEach(k => allKeys.add(k)));
+    allEntitiesList.forEach(e => Object.keys(e.attributes).forEach(k => {
+      if (!REDUNDANT_OR_COLOR_KEYS_LOWER.has(k.trim().toLowerCase())) {
+        allKeys.add(k);
+      }
+    }));
     const keys = Array.from(allKeys);
     const headers = ['번호', '명칭', '종류', '레이어', '정보', ...keys];
     const rows = [headers.join(',')];
@@ -583,6 +671,106 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
                           <button type="button" onClick={() => onFocusEntity(firstEntity!.points)} className="p-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 text-slate-500 shadow-sm"><Crosshair className="w-3.5 h-3.5" /></button>
                         )}
                       </div>
+
+                      {/* Point Marker & CAD Text Height Controls */}
+                      {hasPointTarget && (
+                        <div className="p-3 bg-sky-50/60 dark:bg-sky-950/20 border border-sky-200/80 dark:border-sky-800/60 rounded-xl space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-bold text-sky-700 dark:text-sky-300 flex items-center gap-1.5">
+                              <MapPin className="w-3.5 h-3.5" />
+                              <span>측점 마커 &amp; CAD 문자 설정</span>
+                            </span>
+                            <span className="text-[10px] text-slate-500">
+                              레이어: {firstEntity?.layerName}
+                            </span>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-bold text-slate-500 uppercase">마커 종류 (marker-symbol)</label>
+                            <div className="grid grid-cols-4 gap-1.5">
+                              {targetEntities.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setMarkerSymbol('')}
+                                  className={`px-2 py-1.5 rounded-lg text-[10px] font-bold border transition ${
+                                    markerSymbol === ''
+                                      ? 'bg-sky-600 text-white border-sky-600'
+                                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-sky-400'
+                                  }`}
+                                >
+                                  유지
+                                </button>
+                              )}
+                              {MARKER_SYMBOL_OPTIONS.map(opt => (
+                                <button
+                                  key={opt.value}
+                                  type="button"
+                                  onClick={() => setMarkerSymbol(opt.value)}
+                                  className={`px-2 py-1.5 rounded-lg text-[10px] font-bold border transition ${
+                                    markerSymbol === opt.value
+                                      ? 'bg-sky-600 text-white border-sky-600 shadow-sm'
+                                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-sky-400'
+                                  }`}
+                                >
+                                  {opt.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] font-bold text-slate-500 uppercase">마커 크기 (marker-size)</label>
+                              <div className="flex gap-1">
+                                {targetEntities.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setMarkerSize('')}
+                                    className={`flex-1 py-1.5 px-2 rounded-lg text-[10px] font-bold border transition ${
+                                      markerSize === ''
+                                        ? 'bg-sky-600 text-white border-sky-600'
+                                        : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-sky-400'
+                                    }`}
+                                  >
+                                    유지
+                                  </button>
+                                )}
+                                {MARKER_SIZE_OPTIONS.map(opt => (
+                                  <button
+                                    key={opt.value}
+                                    type="button"
+                                    onClick={() => setMarkerSize(opt.value)}
+                                    className={`flex-1 py-1.5 px-2 rounded-lg text-[10px] font-bold border transition ${
+                                      markerSize === opt.value
+                                        ? 'bg-sky-600 text-white border-sky-600 shadow-sm'
+                                        : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-sky-400'
+                                    }`}
+                                  >
+                                    {opt.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] font-bold text-slate-500 uppercase">CAD 문자 높이 (TEXTHEIGHT)</label>
+                              <input
+                                type="number"
+                                step="any"
+                                min="0.01"
+                                value={textHeight}
+                                onChange={e => setTextHeight(e.target.value)}
+                                placeholder={targetEntities.length > 1 ? '유지 (예: 1)' : '1'}
+                                className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs outline-none focus:ring-1 focus:ring-sky-500 font-mono"
+                              />
+                            </div>
+                          </div>
+
+                          <p className="text-[10px] text-slate-500 leading-relaxed">
+                            객체명은 <span className="font-mono font-bold text-sky-600 dark:text-sky-400">TEXTSTRING</span>으로 통합 저장되며, SHP/GeoJSON 내보내기 시 색상은 제외됩니다.
+                          </p>
+                        </div>
+                      )}
 
                       {/* Template Application Area */}
                       <div className="space-y-2">

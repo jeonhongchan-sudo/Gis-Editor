@@ -202,6 +202,7 @@ export function parseDxfBuffer(
           updateBounds(tPos);
           const textContent = (ent.text || ent.textString || '').trim();
           if (!textContent) break;
+          const dxfTextH = Number(ent.textHeight ?? ent.height);
 
           // Convert text to point to avoid double rendering in CADCanvas (which labels points)
           addOrUpdatePoint({
@@ -212,7 +213,14 @@ export function parseDxfBuffer(
             z: tPos.z,
             layerId,
             isSurveyNode: true,
-            attributes: { ...attributes, origin: 'TEXT', TEXTSTRING: textContent }
+            attributes: {
+              ...attributes,
+              origin: 'TEXT',
+              TEXTSTRING: textContent,
+              TEXTHEIGHT: Number.isFinite(dxfTextH) && dxfTextH > 0 ? dxfTextH : 1,
+              'marker-symbol': 'circle',
+              'marker-size': 'medium'
+            }
           });
           break;
 
@@ -228,7 +236,14 @@ export function parseDxfBuffer(
             z: iPos.z,
             layerId,
             isSurveyNode: true,
-            attributes: { ...attributes, blockName: ent.name, TEXTSTRING: insName }
+            attributes: {
+              ...attributes,
+              blockName: ent.name,
+              TEXTSTRING: insName,
+              TEXTHEIGHT: 1,
+              'marker-symbol': 'circle',
+              'marker-size': 'medium'
+            }
           });
           break;
 

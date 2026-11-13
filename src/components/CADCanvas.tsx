@@ -820,7 +820,12 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         y: snapRes.effectiveWorld.y,
         layerId: activeLayerId,
         isSurveyNode: false,
-        attributes: { TEXTSTRING: ptName }
+        attributes: {
+          TEXTSTRING: ptName,
+          TEXTHEIGHT: 1,
+          'marker-symbol': 'circle',
+          'marker-size': 'medium'
+        }
       });
       return;
     }
@@ -1186,36 +1191,94 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       pointScreenCoords.set(pt.id, sp);
       const isSelected = selectedSet.has(pt.id);
       const layer = layerMap.current.get(pt.layerId);
+      const attrs = pt.attributes || {};
+      const sizeStr = String(attrs['marker-size'] ?? attrs['marker-siz'] ?? 'medium').trim().toLowerCase();
+      const symbolStr = String(attrs['marker-symbol'] ?? attrs['marker-sym'] ?? 'circle').trim().toLowerCase();
+      const r = (sizeStr === 'minimum' || sizeStr === 'min' || sizeStr === 'small')
+        ? 2.5
+        : (sizeStr === 'max' || sizeStr === 'maximum' || sizeStr === 'large')
+          ? 6.5
+          : 4;
 
       if (isSelected) {
         // Multi-select glow ring
         ctx.strokeStyle = '#f59e0b';
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(sp.x, sp.y, 7.5, 0, Math.PI * 2);
+        ctx.arc(sp.x, sp.y, r + 4, 0, Math.PI * 2);
         ctx.stroke();
       }
 
-      ctx.strokeStyle = isSelected ? '#fbbf24' : (layer?.color || '#ef4444');
-      ctx.fillStyle = isSelected ? '#fbbf24' : (layer?.color || '#ef4444');
+      const ptColor = isSelected ? '#fbbf24' : (layer?.color || '#ef4444');
+      ctx.strokeStyle = ptColor;
+      ctx.fillStyle = ptColor;
+      ctx.lineWidth = 1.5;
 
-      ctx.beginPath();
-      ctx.arc(sp.x, sp.y, 3.5, 0, Math.PI * 2);
-      ctx.stroke();
+      if (symbolStr === 'circle') {
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (symbolStr === 'square') {
+        ctx.fillRect(sp.x - r, sp.y - r, r * 2, r * 2);
+      } else if (symbolStr === 'triangle') {
+        const h = r * 1.25;
+        ctx.beginPath();
+        ctx.moveTo(sp.x, sp.y - h);
+        ctx.lineTo(sp.x + h * 0.9, sp.y + h * 0.75);
+        ctx.lineTo(sp.x - h * 0.9, sp.y + h * 0.75);
+        ctx.closePath();
+        ctx.fill();
+      } else if (symbolStr === 'diamond') {
+        const d = r * 1.25;
+        ctx.beginPath();
+        ctx.moveTo(sp.x, sp.y - d);
+        ctx.lineTo(sp.x + d, sp.y);
+        ctx.lineTo(sp.x, sp.y + d);
+        ctx.lineTo(sp.x - d, sp.y);
+        ctx.closePath();
+        ctx.fill();
+      } else if (symbolStr === 'cross') {
+        const c = r * 1.35;
+        ctx.lineWidth = isSelected ? 2.5 : 2;
+        ctx.beginPath();
+        ctx.moveTo(sp.x - c, sp.y);
+        ctx.lineTo(sp.x + c, sp.y);
+        ctx.moveTo(sp.x, sp.y - c);
+        ctx.lineTo(sp.x, sp.y + c);
+        ctx.stroke();
+      } else if (symbolStr === 'star') {
+        const outerR = r * 1.35;
+        const innerR = r * 0.58;
+        ctx.beginPath();
+        for (let k = 0; k < 10; k++) {
+          const rad = k % 2 === 0 ? outerR : innerR;
+          const angle = (Math.PI / 5) * k - Math.PI / 2;
+          const px = sp.x + Math.cos(angle) * rad;
+          const py = sp.y + Math.sin(angle) * rad;
+          if (k === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.fill();
+      } else {
+        // Default 'marker': circle + crosshair
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, r, 0, Math.PI * 2);
+        ctx.stroke();
 
-      ctx.beginPath();
-      ctx.moveTo(sp.x - 5, sp.y);
-      ctx.lineTo(sp.x + 5, sp.y);
-      ctx.moveTo(sp.x, sp.y - 5);
-      ctx.lineTo(sp.x, sp.y + 5);
-      ctx.stroke();
+        const c = r * 1.45;
+        ctx.beginPath();
+        ctx.moveTo(sp.x - c, sp.y);
+        ctx.lineTo(sp.x + c, sp.y);
+        ctx.moveTo(sp.x, sp.y - c);
+        ctx.lineTo(sp.x, sp.y + c);
+        ctx.stroke();
+      }
     }
 
     // Step B: QGIS-style Dynamic Label Placement Engine (PAL Collision Avoidance)
     const showPointLabels = (visiblePoints.length <= 2500 && view.zoom > 0.0001) || selectedSet.size > 0;
     if (showPointLabels) {
-      ctx.font = '10px Pretendard, sans-serif';
-
       // Keep track of screen bounding boxes already occupied by points or labels
       interface LabelBox {
         minX: number;
@@ -1225,15 +1288,24 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       }
       const occupiedBoxes: LabelBox[] = [];
 
-      // Register point centers as small obstacles to prevent labels from completely masking adjacent nodes
+      const getPointRadius = (pt: CADPoint): number => {
+        const sizeStr = String(pt.attributes?.['marker-size'] ?? pt.attributes?.['marker-siz'] ?? 'medium').trim().toLowerCase();
+        if (sizeStr === 'minimum' || sizeStr === 'min' || sizeStr === 'small') return 2.5;
+        if (sizeStr === 'max' || sizeStr === 'maximum' || sizeStr === 'large') return 6.5;
+        return 4;
+      };
+
+      // Register point centers as small obstacles sized by marker radius to prevent labels from masking nodes
       for (let i = 0; i < visiblePoints.length; i++) {
-        const sp = pointScreenCoords.get(visiblePoints[i].id);
+        const pt = visiblePoints[i];
+        const sp = pointScreenCoords.get(pt.id);
         if (sp) {
+          const pad = getPointRadius(pt) + 1;
           occupiedBoxes.push({
-            minX: sp.x - 4,
-            minY: sp.y - 4,
-            maxX: sp.x + 4,
-            maxY: sp.y + 4
+            minX: sp.x - pad,
+            minY: sp.y - pad,
+            maxX: sp.x + pad,
+            maxY: sp.y + pad
           });
         }
       }
@@ -1265,7 +1337,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 
         const isSelected = selectedSet.has(pt.id);
         const layerRef = layerMap.current.get(pt.layerId);
-        const labelText = pt.name || '';
+        const labelText = String(pt.attributes?.TEXTSTRING ?? pt.name ?? '');
         if (!labelText.trim()) continue;
 
         // Create a unique key for this label at this location (with 2px screen tolerance)
@@ -1273,23 +1345,42 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         if (drawnLabels.has(labelKey) && !isSelected) continue;
         drawnLabels.add(labelKey);
 
+        const rawHeight = Number(pt.attributes?.TEXTHEIGHT ?? pt.attributes?.textheight ?? pt.attributes?.HEIGHT ?? pt.attributes?.height);
+        const textHeightVal = Number.isFinite(rawHeight) && rawHeight > 0 ? rawHeight : 1;
+        const r = getPointRadius(pt);
+
+        // Reflect TEXTHEIGHT immediately on screen (12px baseline at default 1.0) and scale further when zoomed in
+        const screenFallbackPx = Math.min(40, Math.max(8, 12 * textHeightVal));
+        const fontPx = Math.round(Math.min(72, Math.max(screenFallbackPx, textHeightVal * view.zoom)));
+        const fontSpec = `bold ${fontPx}px Pretendard, sans-serif`;
+        ctx.font = fontSpec;
+
         const tw = ctx.measureText(labelText).width;
-        const th = 11;
+        const lh = fontPx;
+        const offset = Math.round(r + 3);
+        const extOffset = Math.round(r + 13);
+
+        const makeBox = (tx: number, ty: number): LabelBox => ({
+          minX: tx - 1,
+          minY: ty - lh,
+          maxX: tx + tw + 1,
+          maxY: ty + 3
+        });
 
         // 8 standard QGIS compass candidate positions + 4 extended offset positions
         const candidates: { tx: number; ty: number; box: LabelBox; isExtended: boolean }[] = [
-          { tx: sp.x + 6, ty: sp.y - 3, box: { minX: sp.x + 5, minY: sp.y - 14, maxX: sp.x + 7 + tw, maxY: sp.y + 1 }, isExtended: false },
-          { tx: sp.x + 6, ty: sp.y + 12, box: { minX: sp.x + 5, minY: sp.y + 1, maxX: sp.x + 7 + tw, maxY: sp.y + 16 }, isExtended: false },
-          { tx: sp.x - tw - 6, ty: sp.y - 3, box: { minX: sp.x - tw - 7, minY: sp.y - 14, maxX: sp.x - 5, maxY: sp.y + 1 }, isExtended: false },
-          { tx: sp.x - tw - 6, ty: sp.y + 12, box: { minX: sp.x - tw - 7, minY: sp.y + 1, maxX: sp.x - 5, maxY: sp.y + 16 }, isExtended: false },
-          { tx: sp.x - tw / 2, ty: sp.y - 8, box: { minX: sp.x - tw / 2 - 1, minY: sp.y - 19, maxX: sp.x + tw / 2 + 1, maxY: sp.y - 4 }, isExtended: false },
-          { tx: sp.x - tw / 2, ty: sp.y + 16, box: { minX: sp.x - tw / 2 - 1, minY: sp.y + 5, maxX: sp.x + tw / 2 + 1, maxY: sp.y + 20 }, isExtended: false },
-          { tx: sp.x + 8, ty: sp.y + 4, box: { minX: sp.x + 7, minY: sp.y - 7, maxX: sp.x + 9 + tw, maxY: sp.y + 8 }, isExtended: false },
-          { tx: sp.x - tw - 8, ty: sp.y + 4, box: { minX: sp.x - tw - 9, minY: sp.y - 7, maxX: sp.x - 7, maxY: sp.y + 8 }, isExtended: false },
-          { tx: sp.x + 16, ty: sp.y - 12, box: { minX: sp.x + 15, minY: sp.y - 23, maxX: sp.x + 17 + tw, maxY: sp.y - 8 }, isExtended: true },
-          { tx: sp.x + 16, ty: sp.y + 20, box: { minX: sp.x + 15, minY: sp.y + 9, maxX: sp.x + 17 + tw, maxY: sp.y + 24 }, isExtended: true },
-          { tx: sp.x - tw - 16, ty: sp.y - 12, box: { minX: sp.x - tw - 17, minY: sp.y - 23, maxX: sp.x - 15, maxY: sp.y - 8 }, isExtended: true },
-          { tx: sp.x - tw - 16, ty: sp.y + 20, box: { minX: sp.x - tw - 17, minY: sp.y + 9, maxX: sp.x - 15, maxY: sp.y + 24 }, isExtended: true }
+          { tx: sp.x + offset, ty: sp.y - 3, box: makeBox(sp.x + offset, sp.y - 3), isExtended: false },
+          { tx: sp.x + offset, ty: sp.y + lh, box: makeBox(sp.x + offset, sp.y + lh), isExtended: false },
+          { tx: sp.x - tw - offset, ty: sp.y - 3, box: makeBox(sp.x - tw - offset, sp.y - 3), isExtended: false },
+          { tx: sp.x - tw - offset, ty: sp.y + lh, box: makeBox(sp.x - tw - offset, sp.y + lh), isExtended: false },
+          { tx: sp.x - tw / 2, ty: sp.y - offset - 2, box: makeBox(sp.x - tw / 2, sp.y - offset - 2), isExtended: false },
+          { tx: sp.x - tw / 2, ty: sp.y + offset + lh, box: makeBox(sp.x - tw / 2, sp.y + offset + lh), isExtended: false },
+          { tx: sp.x + offset + 2, ty: sp.y + Math.round(lh * 0.35), box: makeBox(sp.x + offset + 2, sp.y + Math.round(lh * 0.35)), isExtended: false },
+          { tx: sp.x - tw - offset - 2, ty: sp.y + Math.round(lh * 0.35), box: makeBox(sp.x - tw - offset - 2, sp.y + Math.round(lh * 0.35)), isExtended: false },
+          { tx: sp.x + extOffset, ty: sp.y - Math.max(10, Math.round(lh * 0.8)), box: makeBox(sp.x + extOffset, sp.y - Math.max(10, Math.round(lh * 0.8))), isExtended: true },
+          { tx: sp.x + extOffset, ty: sp.y + lh + 8, box: makeBox(sp.x + extOffset, sp.y + lh + 8), isExtended: true },
+          { tx: sp.x - tw - extOffset, ty: sp.y - Math.max(10, Math.round(lh * 0.8)), box: makeBox(sp.x - tw - extOffset, sp.y - Math.max(10, Math.round(lh * 0.8))), isExtended: true },
+          { tx: sp.x - tw - extOffset, ty: sp.y + lh + 8, box: makeBox(sp.x - tw - extOffset, sp.y + lh + 8), isExtended: true }
         ];
 
         let chosenCandidate = null;
@@ -1314,17 +1405,17 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
             ctx.beginPath();
             ctx.moveTo(sp.x, sp.y);
             const leaderEndX = chosenCandidate.tx < sp.x ? chosenCandidate.tx + tw : chosenCandidate.tx;
-            ctx.lineTo(leaderEndX, chosenCandidate.ty - 3);
+            ctx.lineTo(leaderEndX, chosenCandidate.ty - Math.round(lh * 0.3));
             ctx.stroke();
             ctx.restore();
           }
 
           ctx.save();
-          ctx.font = 'bold 12px Pretendard, sans-serif';
+          ctx.font = fontSpec;
           ctx.textAlign = 'left';
           ctx.lineJoin = 'round';
           ctx.strokeStyle = theme === 'dark' ? '#090d16' : '#ffffff';
-          ctx.lineWidth = 2.5;
+          ctx.lineWidth = Math.max(2, Math.min(4.5, fontPx * 0.2));
           ctx.strokeText(labelText, chosenCandidate.tx, chosenCandidate.ty);
 
           ctx.fillStyle = isSelected ? '#fbbf24' : (layerRef?.color || (theme === 'dark' ? '#e2e8f0' : '#334155'));

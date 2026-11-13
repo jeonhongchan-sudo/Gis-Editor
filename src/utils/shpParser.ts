@@ -259,6 +259,56 @@ export function parseShpBuffer(
     const dbfLayer = findDbfValue(LAYER_KEYS);
     const effectiveLayerId = dbfLayer ? `layer-${dbfLayer.trim().replace(/[\s\.]/g, '_')}` : layerId;
 
+    const REDUNDANT_OR_COLOR_KEYS = new Set([
+      'id', 'name', 'title', 'text', 'textstring', 'string', 'label', 'cname',
+      'layer', 'layerid', 'dxftype', 'issurveynode', 'isclosed', 'z',
+      'color', 'marker-color', 'stroke', 'stroke-width',
+      'textheight', 'height', 'marker-size', 'marker-siz', 'marker-symbol', 'marker-sym'
+    ]);
+
+    const normalizeMarkerSize = (val: unknown): 'minimum' | 'medium' | 'max' => {
+      const s = String(val || '').trim().toLowerCase();
+      if (s === 'minimum' || s === 'min' || s === 'small') return 'minimum';
+      if (s === 'max' || s === 'maximum' || s === 'large') return 'max';
+      return 'medium';
+    };
+
+    const buildCleanPointAttributes = (ptLabel: string): Record<string, string | number> => {
+      const attrs: Record<string, string | number> = {};
+      if (dbfRec) {
+        Object.entries(dbfRec).forEach(([k, v]) => {
+          if (!REDUNDANT_OR_COLOR_KEYS.has(k.trim().toLowerCase()) && v !== undefined && v !== null && String(v).trim() !== '') {
+            attrs[k] = v;
+          }
+        });
+      }
+      attrs.TEXTSTRING = ptLabel;
+      const rawHeight = dbfRec
+        ? Number(dbfRec.TEXTHEIGHT ?? dbfRec.textheight ?? dbfRec.HEIGHT ?? dbfRec.height)
+        : NaN;
+      attrs.TEXTHEIGHT = Number.isFinite(rawHeight) && rawHeight > 0 ? rawHeight : 1;
+      const rawSymbol = dbfRec
+        ? String(dbfRec['marker-symbol'] ?? dbfRec['MARKER-SYMBOL'] ?? dbfRec['marker-sym'] ?? dbfRec['MARKER-SYM'] ?? '').trim()
+        : '';
+      attrs['marker-symbol'] = rawSymbol || 'circle';
+      const rawSize = dbfRec
+        ? (dbfRec['marker-size'] ?? dbfRec['MARKER-SIZE'] ?? dbfRec['marker-siz'] ?? dbfRec['MARKER-SIZ'])
+        : undefined;
+      attrs['marker-size'] = normalizeMarkerSize(rawSize);
+      return attrs;
+    };
+
+    const buildCleanLineAttributes = (): Record<string, string | number> | undefined => {
+      if (!dbfRec) return undefined;
+      const attrs: Record<string, string | number> = {};
+      Object.entries(dbfRec).forEach(([k, v]) => {
+        if (!REDUNDANT_OR_COLOR_KEYS.has(k.trim().toLowerCase()) && v !== undefined && v !== null && String(v).trim() !== '') {
+          attrs[k] = v;
+        }
+      });
+      return Object.keys(attrs).length > 0 ? attrs : undefined;
+    };
+
     // 1. Points: Point (1), PointZ (11), PointM (21) - Crucial for QGIS DXF converted text/points!
     if (recShapeType === 1 || recShapeType === 11 || recShapeType === 21) {
       const x = view.getFloat64(offset + 12, true);
@@ -299,11 +349,6 @@ export function parseShpBuffer(
         ptName = `${cleanName}_${recordIndex}`;
       }
 
-      const ptAttrs: Record<string, string | number> = dbfRec ? { ...dbfRec } : {};
-      if (ptAttrs.TEXTSTRING === undefined || String(ptAttrs.TEXTSTRING).trim() === '') {
-        ptAttrs.TEXTSTRING = ptName;
-      }
-
       points.push({
         id: `shp-pt-${now}-${fileIndex}-${recordIndex}`,
         name: ptName,
@@ -312,7 +357,7 @@ export function parseShpBuffer(
         z: zVal,
         layerId: effectiveLayerId,
         isSurveyNode: true,
-        attributes: ptAttrs
+        attributes: buildCleanPointAttributes(ptName)
       });
     } 
     // 2. MultiPoints: MultiPoint (8), MultiPointZ (18), MultiPointM (28)
@@ -324,10 +369,6 @@ export function parseShpBuffer(
         const px = view.getFloat64(ptsStart + p * 16, true);
         const py = view.getFloat64(ptsStart + p * 16 + 8, true);
         const mptName = `${ptName}_${p + 1}`;
-        const mptAttrs: Record<string, string | number> = dbfRec ? { ...dbfRec } : {};
-        if (mptAttrs.TEXTSTRING === undefined || String(mptAttrs.TEXTSTRING).trim() === '') {
-          mptAttrs.TEXTSTRING = mptName;
-        }
         points.push({
           id: `shp-mpt-${now}-${fileIndex}-${recordIndex}-${p + 1}`,
           name: mptName,
@@ -335,7 +376,7 @@ export function parseShpBuffer(
           y: py,
           layerId: effectiveLayerId,
           isSurveyNode: true,
-          attributes: mptAttrs
+          attributes: buildCleanPointAttributes(mptName)
         });
       }
     }
@@ -359,6 +400,7 @@ export function parseShpBuffer(
       }
 
       const baseName = findDbfValue(NAME_KEYS) || `${cleanName}_선_${recordIndex}`;
+      const lineAttrs = buildCleanLineAttributes();
       const partRanges = numParts > 0
         ? partStarts.map((startIdx, idx) => [startIdx, idx + 1 < partStarts.length ? partStarts[idx + 1] : numPoints])
         : [[0, numPoints]];
@@ -372,7 +414,7 @@ export function parseShpBuffer(
             isClosed: false,
             layerId: effectiveLayerId,
             name: partRanges.length > 1 ? `${baseName}_${partIdx + 1}` : baseName,
-            attributes: dbfRec ? { ...dbfRec } : undefined
+            attributes: lineAttrs ? { ...lineAttrs } : undefined
           });
         }
       });
@@ -397,6 +439,7 @@ export function parseShpBuffer(
       }
 
       const baseName = findDbfValue(NAME_KEYS) || `${cleanName}_외곽선_${recordIndex}`;
+      const polyAttrs = buildCleanLineAttributes();
       const partRanges = numParts > 0
         ? partStarts.map((startIdx, idx) => [startIdx, idx + 1 < partStarts.length ? partStarts[idx + 1] : numPoints])
         : [[0, numPoints]];
@@ -415,7 +458,7 @@ export function parseShpBuffer(
             isClosed: true,
             layerId: effectiveLayerId,
             name: partRanges.length > 1 ? `${baseName}_${partIdx + 1}` : baseName,
-            attributes: dbfRec ? { ...dbfRec } : undefined
+            attributes: polyAttrs ? { ...polyAttrs } : undefined
           });
         }
       });

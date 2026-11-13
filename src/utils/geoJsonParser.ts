@@ -45,6 +45,40 @@ export function parseGeoJson(
     });
   }
 
+  const STRIPPED_GEOJSON_ATTR_KEYS = new Set([
+    'id', 'name', 'title', 'text', 'layer', 'layerid', 'dxftype',
+    'issurveynode', 'isclosed', 'z', 'color', 'marker-color', 'stroke', 'stroke-width'
+  ]);
+
+  const normalizeMarkerSize = (val: unknown): 'minimum' | 'medium' | 'max' => {
+    const s = String(val || '').trim().toLowerCase();
+    if (s === 'minimum' || s === 'min' || s === 'small') return 'minimum';
+    if (s === 'max' || s === 'maximum' || s === 'large') return 'max';
+    return 'medium';
+  };
+
+  const cleanAttributes = (rawProps: Record<string, any>, pointLabel?: string): Record<string, string | number> => {
+    const cleaned: Record<string, string | number> = {};
+    Object.entries(rawProps).forEach(([k, v]) => {
+      const lk = k.trim().toLowerCase();
+      if (!k.trim() || STRIPPED_GEOJSON_ATTR_KEYS.has(lk) || v === undefined || v === null) return;
+      if (lk === 'height' || lk === 'textheight') return; // Unified into TEXTHEIGHT below for points
+      if (lk === 'marker-size') {
+        cleaned['marker-size'] = normalizeMarkerSize(v);
+        return;
+      }
+      cleaned[k] = typeof v === 'number' || typeof v === 'string' ? v : String(v);
+    });
+    if (pointLabel !== undefined) {
+      cleaned.TEXTSTRING = String(rawProps.TEXTSTRING || pointLabel);
+      if (!cleaned['marker-size']) cleaned['marker-size'] = 'medium';
+      if (!cleaned['marker-symbol']) cleaned['marker-symbol'] = String(rawProps['marker-symbol'] || 'circle');
+      const rawH = Number(rawProps.TEXTHEIGHT ?? rawProps.textheight ?? rawProps.HEIGHT ?? rawProps.height);
+      cleaned.TEXTHEIGHT = Number.isFinite(rawH) && rawH > 0 ? rawH : 1;
+    }
+    return cleaned;
+  };
+
   const features = json.features || (json.type === 'Feature' ? [json] : []);
 
   features.forEach((feature: any, idx: number) => {
@@ -87,8 +121,7 @@ export function parseGeoJson(
       const dxftype = (props.dxftype || props.entity || '').toUpperCase();
       
       if (dxftype === 'TEXT') {
-        const name = String(props.text || props.TEXTSTRING || props.label || props.name || `TXT_${idx + 1}`);
-        const ptAttrs = { ...props, TEXTSTRING: props.TEXTSTRING || name };
+        const name = String(props.TEXTSTRING || props.text || props.title || props.label || props.name || `TXT_${idx + 1}`);
         points.push({
           id: props.id || `gj-pt-txt-${Date.now()}-${idx}`,
           name,
@@ -97,11 +130,10 @@ export function parseGeoJson(
           z: pt.z,
           layerId: layer.id,
           isSurveyNode: true,
-          attributes: ptAttrs
+          attributes: cleanAttributes(props, name)
         });
       } else {
-        const name = String(props.TEXTSTRING || props.text || props.label || props.name || props.PT_NAME || `PT_${idx + 1}`);
-        const ptAttrs = { ...props, TEXTSTRING: props.TEXTSTRING || name };
+        const name = String(props.TEXTSTRING || props.text || props.title || props.label || props.name || props.PT_NAME || `PT_${idx + 1}`);
 
         points.push({
           id: props.id || `gj-pt-${Date.now()}-${idx}`,
@@ -111,7 +143,7 @@ export function parseGeoJson(
           z: pt.z,
           layerId: layer.id,
           isSurveyNode: props.isSurveyNode !== undefined ? !!props.isSurveyNode : true,
-          attributes: ptAttrs
+          attributes: cleanAttributes(props, name)
         });
       }
     } 
@@ -119,7 +151,7 @@ export function parseGeoJson(
     else if (geom.type === 'MultiPoint') {
       geom.coordinates.forEach((c: number[], subIdx: number) => {
         const pt = getPoint(c);
-        const mptName = String(props.TEXTSTRING || props.name || `MPT_${idx + 1}_${subIdx + 1}`);
+        const mptName = String(props.TEXTSTRING || props.name || props.title || `MPT_${idx + 1}_${subIdx + 1}`);
         points.push({
           id: props.id ? `${props.id}_${subIdx}` : `gj-mpt-${Date.now()}-${idx}-${subIdx}`,
           name: mptName,
@@ -128,7 +160,7 @@ export function parseGeoJson(
           z: pt.z,
           layerId: layer.id,
           isSurveyNode: true,
-          attributes: { ...props, TEXTSTRING: props.TEXTSTRING || mptName }
+          attributes: cleanAttributes(props, mptName)
         });
       });
     }
@@ -145,21 +177,21 @@ export function parseGeoJson(
       }
       polylines.push({
         id: props.id || `gj-pl-${Date.now()}-${idx}`,
-        name: props.name || `LINE_${idx + 1}`,
+        name: props.NAME || props.name || props.title || `LINE_${idx + 1}`,
         points: pts,
         layerId: layer.id,
         isClosed,
-        attributes: props
+        attributes: cleanAttributes(props)
       });
     } else if (geom.type === 'MultiLineString') {
       geom.coordinates.forEach((line: number[][], subIdx: number) => {
         const pts = line.map((c: number[]) => getPoint(c));
         polylines.push({
           id: props.id ? `${props.id}_${subIdx}` : `gj-mpl-${Date.now()}-${idx}-${subIdx}`,
-          name: props.name || `MLINE_${idx + 1}_${subIdx + 1}`,
+          name: props.NAME || props.name || props.title || `MLINE_${idx + 1}_${subIdx + 1}`,
           points: pts,
           layerId: layer.id,
-          attributes: props
+          attributes: cleanAttributes(props)
         });
       });
     }
@@ -174,7 +206,7 @@ export function parseGeoJson(
           if (first.x !== last.x || first.y !== last.y) {
             pts.push({ ...first });
           }
-          const baseName = props.name || `외곽선_${idx + 1}`;
+          const baseName = props.NAME || props.name || props.title || `외곽선_${idx + 1}`;
           polylines.push({
             id: props.id
               ? (ringIdx === 0 ? `${props.id}` : `${props.id}_ring${ringIdx}`)
@@ -183,7 +215,7 @@ export function parseGeoJson(
             points: pts,
             layerId: layer.id,
             isClosed: true,
-            attributes: props
+            attributes: cleanAttributes(props)
           });
         }
       });
@@ -199,7 +231,7 @@ export function parseGeoJson(
             if (first.x !== last.x || first.y !== last.y) {
               pts.push({ ...first });
             }
-            const baseName = props.name || `외곽선_${idx + 1}_${subIdx + 1}`;
+            const baseName = props.NAME || props.name || props.title || `외곽선_${idx + 1}_${subIdx + 1}`;
             polylines.push({
               id: props.id
                 ? (ringIdx === 0 ? `${props.id}_${subIdx}` : `${props.id}_${subIdx}_ring${ringIdx}`)
@@ -208,7 +240,7 @@ export function parseGeoJson(
               points: pts,
               layerId: layer.id,
               isClosed: true,
-              attributes: props
+              attributes: cleanAttributes(props)
             });
           }
         });

@@ -47,7 +47,12 @@ export const ManualPointModal: React.FC<ManualPointModalProps> = ({
       z: numZ,
       layerId: activeLayerId,
       isSurveyNode: false,
-      attributes: { TEXTSTRING: ptName }
+      attributes: {
+        TEXTSTRING: ptName,
+        TEXTHEIGHT: 1,
+        'marker-symbol': 'circle',
+        'marker-size': 'medium'
+      }
     });
     
     onClose();
