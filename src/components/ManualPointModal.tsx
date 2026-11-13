@@ -37,14 +37,17 @@ export const ManualPointModal: React.FC<ManualPointModalProps> = ({
       return;
     }
 
+    const ptName = name.trim() || `측점_${nextPointNumber}`;
+
     onAdd({
       id: `point-${Date.now()}`,
-      name: name.trim() || `측점_${nextPointNumber}`,
+      name: ptName,
       x: numX,
       y: numY,
       z: numZ,
       layerId: activeLayerId,
-      isSurveyNode: false
+      isSurveyNode: false,
+      attributes: { TEXTSTRING: ptName }
     });
     
     onClose();
@@ -90,7 +93,7 @@ export const ManualPointModal: React.FC<ManualPointModalProps> = ({
               </label>
               <input
                 type="number"
-                step="0.001"
+                step="any"
                 value={x}
                 onChange={e => setX(e.target.value)}
                 required
@@ -107,7 +110,7 @@ export const ManualPointModal: React.FC<ManualPointModalProps> = ({
               </label>
               <input
                 type="number"
-                step="0.001"
+                step="any"
                 value={y}
                 onChange={e => setY(e.target.value)}
                 required
@@ -121,7 +124,7 @@ export const ManualPointModal: React.FC<ManualPointModalProps> = ({
             <label className="text-[11px] text-slate-500 dark:text-slate-400 font-bold ml-1">표고 (Optional Z)</label>
             <input
               type="number"
-              step="0.001"
+              step="any"
               value={z}
               onChange={e => setZ(e.target.value)}
               className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-200 text-sm font-mono rounded-xl p-2.5 focus:outline-none focus:ring-1 focus:ring-sky-500"

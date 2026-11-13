@@ -20,6 +20,46 @@ interface ShpFeaturePolyline {
 
 import { encodeText, safeByteClip } from './encoding';
 
+function clipStringToMaxBytes(str: string, maxBytes: number, encoding: 'utf-8' | 'euc-kr'): string {
+  let result = '';
+  for (const ch of str) {
+    const candidate = result + ch;
+    if (encodeText(candidate, encoding).length > maxBytes) {
+      break;
+    }
+    result = candidate;
+  }
+  return result;
+}
+
+function makeUniqueDbfFieldName(
+  rawKey: string,
+  usedUpperNames: Set<string>,
+  encoding: 'utf-8' | 'euc-kr'
+): string {
+  const clean = rawKey.trim();
+  let base = clipStringToMaxBytes(clean, 10, encoding);
+  if (!base) base = 'ATTR';
+  if (!usedUpperNames.has(base.toUpperCase())) {
+    usedUpperNames.add(base.toUpperCase());
+    return base;
+  }
+  let counter = 1;
+  while (counter < 100) {
+    const suffix = `_${counter}`;
+    const prefix = clipStringToMaxBytes(clean, Math.max(1, 10 - suffix.length), encoding);
+    const candidate = `${prefix}${suffix}`;
+    if (!usedUpperNames.has(candidate.toUpperCase())) {
+      usedUpperNames.add(candidate.toUpperCase());
+      return candidate;
+    }
+    counter++;
+  }
+  const fallback = `F_${usedUpperNames.size}`;
+  usedUpperNames.add(fallback.toUpperCase());
+  return fallback;
+}
+
 /**
  * Creates DBF file buffer from fields and records
  */
@@ -68,19 +108,31 @@ function createDbfBuffer(
   records.forEach(rec => {
     u8[offset++] = 0x20; // ' ' not deleted flag
     fields.forEach(f => {
-      const val = rec[f.name] !== undefined ? String(rec[f.name]) : '';
-      
-      // Encode and clip string based on target encoding to prevent broken multibyte sequences
-      const clipped = safeByteClip(val, f.length, encoding === 'euc-kr' ? 'euc-kr' : 'utf-8');
-      
+      const rawVal = rec[f.name];
+      const val = rawVal !== undefined && rawVal !== null ? String(rawVal) : '';
+
       if (f.type === 'N') {
-        // Numbers: pad left with spaces
-        const str = val.padStart(f.length, ' ').slice(0, f.length);
-        for (let i = 0; i < f.length; i++) {
-          u8[offset + i] = str.charCodeAt(i);
+        const trimmed = val.trim();
+        const num = typeof rawVal === 'number' ? rawVal : Number(trimmed);
+        if (!trimmed || !Number.isFinite(num)) {
+          u8.fill(0x20, offset, offset + f.length);
+        } else {
+          let numStr = f.decimals > 0 ? num.toFixed(f.decimals) : String(Math.round(num));
+          if (numStr.length > f.length) {
+            numStr = String(Math.round(num));
+          }
+          if (numStr.length > f.length) {
+            u8.fill(0x20, offset, offset + f.length);
+          } else {
+            const padded = numStr.padStart(f.length, ' ');
+            for (let i = 0; i < f.length; i++) {
+              u8[offset + i] = padded.charCodeAt(i);
+            }
+          }
         }
       } else {
         // Characters: pad right with spaces
+        const clipped = safeByteClip(val, f.length, encoding === 'euc-kr' ? 'euc-kr' : 'utf-8');
         u8.fill(0x20, offset, offset + f.length);
         u8.set(clipped, offset);
       }
@@ -274,42 +326,57 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
   // .cpg content
   const cpgContent = encoding === 'utf-8' ? 'UTF-8' : '949';
 
-  // 1. Export Points layer if points exist
-  if (points.length > 0) {
-    const customPtFieldKeysSet = new Set<string>();
-    points.forEach(p => {
+  const getLayerName = (id: string): string => {
+    const l = layers.find(lay => lay.id === id);
+    if (l) return l.name;
+    if (id.startsWith('layer-')) return id.replace(/^layer-/, '');
+    return id || '0';
+  };
+
+  // 1. Export Points layer if valid points exist
+  const validPoints = points.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+  if (validPoints.length > 0) {
+    const standardPointKeysLower = new Set(['id', 'textstring', 'name', 'layer', 'color', 'z']);
+    const customPtFieldRawKeysSet = new Set<string>();
+    validPoints.forEach(p => {
       if (p.attributes) {
         Object.keys(p.attributes).forEach(k => {
-          if (k.trim()) customPtFieldKeysSet.add(k.trim());
+          const trimmed = k.trim();
+          if (trimmed && !standardPointKeysLower.has(trimmed.toLowerCase())) {
+            customPtFieldRawKeysSet.add(trimmed);
+          }
         });
       }
     });
-    const customPtFieldKeys = Array.from(customPtFieldKeysSet).slice(0, 15);
+    const customPtRawKeys = Array.from(customPtFieldRawKeysSet).slice(0, 15);
 
-    const getLayerName = (id: string): string => {
-      const l = layers.find(lay => lay.id === id);
-      if (l) return l.name;
-      // Fallback: extract name from ID if it follows "layer-NAME" pattern
-      if (id.startsWith('layer-')) return id.replace(/^layer-/, '');
-      return id || '0';
-    };
+    const usedPtFieldNames = new Set<string>(['ID', 'TEXTSTRING', 'NAME', 'LAYER', 'COLOR', 'Z']);
+    const customPtKeyMappings = customPtRawKeys.map(rawKey => ({
+      rawKey,
+      dbfName: makeUniqueDbfFieldName(rawKey, usedPtFieldNames, encoding)
+    }));
 
-    const ptFeatures: ShpFeaturePoint[] = points.map((p, idx) => {
+    const ptFeatures: ShpFeaturePoint[] = validPoints.map((p, idx) => {
       const layer = layers.find(l => l.id === p.layerId);
+      const a = p.attributes || {};
+      const textStringVal = String(
+        a.TEXTSTRING ?? a.textstring ?? a.TEXT ?? a.text ?? a.STRING ?? a.string ?? p.name ?? ''
+      ).trim();
+
       const props: Record<string, string | number> = {
         ID: idx + 1,
-        NAME: p.name,
+        TEXTSTRING: textStringVal || p.name || `측점_${idx + 1}`,
+        NAME: p.name || textStringVal || `측점_${idx + 1}`,
         LAYER: getLayerName(p.layerId),
         COLOR: layer?.color || '#ef4444',
-        Z: p.z !== undefined ? p.z : 0
+        Z: p.z !== undefined && Number.isFinite(p.z) ? p.z : 0
       };
-      
-      if (p.attributes) {
-        customPtFieldKeys.forEach(k => {
-          props[k] = p.attributes![k] !== undefined ? p.attributes![k] : '';
-        });
-      }
-      
+
+      customPtKeyMappings.forEach(({ rawKey, dbfName }) => {
+        const val = a[rawKey];
+        props[dbfName] = val !== undefined && val !== null ? val : '';
+      });
+
       return {
         x: p.x,
         y: p.y,
@@ -319,14 +386,15 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
 
     const dbfFields: { name: string; type: 'C' | 'N'; length: number; decimals: number }[] = [
       { name: 'ID', type: 'N', length: 10, decimals: 0 },
+      { name: 'TEXTSTRING', type: 'C', length: 254, decimals: 0 },
       { name: 'NAME', type: 'C', length: 254, decimals: 0 },
       { name: 'LAYER', type: 'C', length: 254, decimals: 0 },
       { name: 'COLOR', type: 'C', length: 20, decimals: 0 },
       { name: 'Z', type: 'N', length: 12, decimals: 3 }
     ];
 
-    customPtFieldKeys.forEach(k => {
-      dbfFields.push({ name: k.slice(0, 10), type: 'C', length: 254, decimals: 0 });
+    customPtKeyMappings.forEach(({ dbfName }) => {
+      dbfFields.push({ name: dbfName, type: 'C', length: 254, decimals: 0 });
     });
 
     const { shp, shx } = createPointShpAndShx(ptFeatures);
@@ -339,19 +407,20 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
   }
 
   // Combine single lines and polylines into polyline features with Object Data (OD)
-  // Collect all unique custom attribute keys across all lines
-  const standardODKeys = new Set([
-    'ID', 'NAME', 'LAYER', 'LENGTH_M', 'CATEGORY', 'SPEC', 'MATERIAL',
-    'DEPTH', 'SURV_DATE', 'SURVEYOR', 'STATUS', 'REMARK', 'TYPE',
+  // Collect all unique custom attribute keys across all lines (case-insensitive exclusion of standard keys)
+  const standardLineKeysLower = new Set([
+    'id', 'name', 'layer', 'color', 'length_m', 'category', 'spec', 'material',
+    'depth', 'surv_date', 'surveyor', 'status', 'remark', 'type',
     '시설구분', '규격', '재질', '매설심도', '조사일자', '조사자', '상태', '비고'
   ]);
 
-  const customFieldKeysSet = new Set<string>();
+  const customFieldRawKeysSet = new Set<string>();
   const collectCustomKeys = (attrs?: Record<string, string | number>) => {
     if (!attrs) return;
     Object.keys(attrs).forEach(k => {
-      if (!standardODKeys.has(k) && k.trim()) {
-        customFieldKeysSet.add(k.trim());
+      const trimmed = k.trim();
+      if (trimmed && !standardLineKeysLower.has(trimmed.toLowerCase())) {
+        customFieldRawKeysSet.add(trimmed);
       }
     });
   };
@@ -360,28 +429,34 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
   polylines.forEach(pl => collectCustomKeys(pl.attributes));
   polygons.forEach(pg => collectCustomKeys(pg.attributes));
 
-  // Limit custom keys to prevent DBF header overflow, max 10 custom keys
-  const customFieldKeys = Array.from(customFieldKeysSet).slice(0, 15);
+  const customLineRawKeys = Array.from(customFieldRawKeysSet).slice(0, 15);
+  const usedLineFieldNames = new Set<string>([
+    'ID', 'NAME', 'LAYER', 'COLOR', 'LENGTH_M', 'CATEGORY', 'SPEC', 'MATERIAL',
+    'DEPTH', 'SURV_DATE', 'SURVEYOR', 'STATUS', 'REMARK', 'TYPE'
+  ]);
+  const customLineKeyMappings = customLineRawKeys.map(rawKey => ({
+    rawKey,
+    dbfName: makeUniqueDbfFieldName(rawKey, usedLineFieldNames, encoding)
+  }));
 
   const lineFeatures: ShpFeaturePolyline[] = [];
 
-  const getLayerName = (id: string): string => {
-    const l = layers.find(lay => lay.id === id);
-    if (l) return l.name;
-    if (id.startsWith('layer-')) return id.replace(/^layer-/, '');
-    return id || '0';
-  };
-
   lines.forEach((l, idx) => {
+    if (
+      !Number.isFinite(l.start?.x) || !Number.isFinite(l.start?.y) ||
+      !Number.isFinite(l.end?.x) || !Number.isFinite(l.end?.y)
+    ) {
+      return;
+    }
     const len = Math.sqrt(Math.pow(l.end.x - l.start.x, 2) + Math.pow(l.end.y - l.start.y, 2));
     const a = l.attributes || {};
     const layer = layers.find(lay => lay.id === l.layerId);
     const props: Record<string, string | number> = {
-      ID: idx + 1,
+      ID: lineFeatures.length + 1,
       NAME: l.name || `단일선_${idx + 1}`,
       LAYER: getLayerName(l.layerId),
       COLOR: layer?.color || '#38bdf8',
-      LENGTH_M: len.toFixed(3),
+      LENGTH_M: Number(len.toFixed(3)),
       CATEGORY: (a.CATEGORY || a.시설구분 || '').toString(),
       SPEC: (a.SPEC || a.규격 || '').toString(),
       MATERIAL: (a.MATERIAL || a.재질 || '').toString(),
@@ -392,8 +467,9 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       REMARK: (a.REMARK || a.비고 || '').toString(),
       TYPE: 'LINE'
     };
-    customFieldKeys.forEach(k => {
-      props[k] = a[k] !== undefined ? a[k] : '';
+    customLineKeyMappings.forEach(({ rawKey, dbfName }) => {
+      const val = a[rawKey];
+      props[dbfName] = val !== undefined && val !== null ? val : '';
     });
     lineFeatures.push({
       points: [l.start, l.end],
@@ -402,7 +478,9 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
   });
 
   polylines.forEach((pl, idx) => {
-    const exportPts = [...pl.points];
+    const cleanPts = (pl.points || []).filter(p => Number.isFinite(p?.x) && Number.isFinite(p?.y));
+    if (cleanPts.length < 2) return;
+    const exportPts = [...cleanPts];
     if (pl.isClosed && exportPts.length >= 2) {
       const first = exportPts[0];
       const last = exportPts[exportPts.length - 1];
@@ -417,11 +495,11 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     const a = pl.attributes || {};
     const layer = layers.find(lay => lay.id === pl.layerId);
     const props: Record<string, string | number> = {
-      ID: lines.length + idx + 1,
+      ID: lineFeatures.length + 1,
       NAME: pl.name || `연속선_${idx + 1}`,
       LAYER: getLayerName(pl.layerId),
       COLOR: layer?.color || '#38bdf8',
-      LENGTH_M: len.toFixed(3),
+      LENGTH_M: Number(len.toFixed(3)),
       CATEGORY: (a.CATEGORY || a.시설구분 || '').toString(),
       SPEC: (a.SPEC || a.규격 || '').toString(),
       MATERIAL: (a.MATERIAL || a.재질 || '').toString(),
@@ -432,8 +510,9 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       REMARK: (a.REMARK || a.비고 || '').toString(),
       TYPE: 'POLYLINE'
     };
-    customFieldKeys.forEach(k => {
-      props[k] = a[k] !== undefined ? a[k] : '';
+    customLineKeyMappings.forEach(({ rawKey, dbfName }) => {
+      const val = a[rawKey];
+      props[dbfName] = val !== undefined && val !== null ? val : '';
     });
     lineFeatures.push({
       points: exportPts,
@@ -443,8 +522,9 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
 
   // 폴리곤 객체가 남아있는 경우에도 외곽선 기준 닫힌 선(PolyLine)으로 변환하여 내보내기
   polygons.forEach((pg, idx) => {
-    if (!pg.points || pg.points.length < 2) return;
-    const exportPts = [...pg.points];
+    const cleanPts = (pg.points || []).filter(p => Number.isFinite(p?.x) && Number.isFinite(p?.y));
+    if (cleanPts.length < 2) return;
+    const exportPts = [...cleanPts];
     const first = exportPts[0];
     const last = exportPts[exportPts.length - 1];
     if (first.x !== last.x || first.y !== last.y) {
@@ -457,11 +537,11 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     const a = pg.attributes || {};
     const layer = layers.find(lay => lay.id === pg.layerId);
     const props: Record<string, string | number> = {
-      ID: lines.length + polylines.length + idx + 1,
+      ID: lineFeatures.length + 1,
       NAME: pg.name || `외곽선_${idx + 1}`,
       LAYER: getLayerName(pg.layerId),
       COLOR: layer?.color || '#38bdf8',
-      LENGTH_M: len.toFixed(3),
+      LENGTH_M: Number(len.toFixed(3)),
       CATEGORY: (a.CATEGORY || a.시설구분 || '').toString(),
       SPEC: (a.SPEC || a.규격 || '').toString(),
       MATERIAL: (a.MATERIAL || a.재질 || '').toString(),
@@ -472,8 +552,9 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       REMARK: (a.REMARK || a.비고 || '').toString(),
       TYPE: 'POLYLINE'
     };
-    customFieldKeys.forEach(k => {
-      props[k] = a[k] !== undefined ? a[k] : '';
+    customLineKeyMappings.forEach(({ rawKey, dbfName }) => {
+      const val = a[rawKey];
+      props[dbfName] = val !== undefined && val !== null ? val : '';
     });
     lineFeatures.push({
       points: exportPts,
@@ -501,9 +582,9 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       { name: 'TYPE', type: 'C', length: 254, decimals: 0 }
     ];
 
-    customFieldKeys.forEach(k => {
+    customLineKeyMappings.forEach(({ dbfName }) => {
       dbfFields.push({
-        name: k.slice(0, 10),
+        name: dbfName,
         type: 'C',
         length: 254,
         decimals: 0

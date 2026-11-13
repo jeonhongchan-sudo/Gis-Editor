@@ -87,29 +87,31 @@ export function parseGeoJson(
       const dxftype = (props.dxftype || props.entity || '').toUpperCase();
       
       if (dxftype === 'TEXT') {
-        const name = props.text || props.TEXTSTRING || props.label || props.name || `TXT_${idx + 1}`;
+        const name = String(props.text || props.TEXTSTRING || props.label || props.name || `TXT_${idx + 1}`);
+        const ptAttrs = { ...props, TEXTSTRING: props.TEXTSTRING || name };
         points.push({
           id: props.id || `gj-pt-txt-${Date.now()}-${idx}`,
-          name: String(name),
+          name,
           x: pt.x,
           y: pt.y,
           z: pt.z,
           layerId: layer.id,
           isSurveyNode: true,
-          attributes: props
+          attributes: ptAttrs
         });
       } else {
-        const name = props.TEXTSTRING || props.text || props.label || props.name || props.PT_NAME || `PT_${idx + 1}`;
+        const name = String(props.TEXTSTRING || props.text || props.label || props.name || props.PT_NAME || `PT_${idx + 1}`);
+        const ptAttrs = { ...props, TEXTSTRING: props.TEXTSTRING || name };
 
         points.push({
           id: props.id || `gj-pt-${Date.now()}-${idx}`,
-          name: String(name),
+          name,
           x: pt.x,
           y: pt.y,
           z: pt.z,
           layerId: layer.id,
           isSurveyNode: props.isSurveyNode !== undefined ? !!props.isSurveyNode : true,
-          attributes: props
+          attributes: ptAttrs
         });
       }
     } 
@@ -117,15 +119,16 @@ export function parseGeoJson(
     else if (geom.type === 'MultiPoint') {
       geom.coordinates.forEach((c: number[], subIdx: number) => {
         const pt = getPoint(c);
+        const mptName = String(props.TEXTSTRING || props.name || `MPT_${idx + 1}_${subIdx + 1}`);
         points.push({
           id: props.id ? `${props.id}_${subIdx}` : `gj-mpt-${Date.now()}-${idx}-${subIdx}`,
-          name: props.name || `MPT_${idx + 1}_${subIdx + 1}`,
+          name: mptName,
           x: pt.x,
           y: pt.y,
           z: pt.z,
           layerId: layer.id,
           isSurveyNode: true,
-          attributes: props
+          attributes: { ...props, TEXTSTRING: props.TEXTSTRING || mptName }
         });
       });
     }

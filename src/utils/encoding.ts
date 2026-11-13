@@ -182,9 +182,9 @@ export function encodeText(
 
   if (encoding === 'euc-kr') {
     try {
-      return iconv.encode(text, 'euc-kr');
+      return iconv.encode(text, 'cp949');
     } catch (err) {
-      console.warn('Encoding to euc-kr failed, falling back to utf-8', err);
+      console.warn('Encoding to cp949 failed, falling back to utf-8', err);
     }
   }
 

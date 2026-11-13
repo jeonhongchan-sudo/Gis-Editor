@@ -812,13 +812,15 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 
     // 4. POINT TOOL
     if (tool === 'point') {
+      const ptName = `측점_${points.length + 1}`;
       onAddPoint({
         id: `point-${Date.now()}`,
-        name: `측점_${points.length + 1}`,
+        name: ptName,
         x: snapRes.effectiveWorld.x,
         y: snapRes.effectiveWorld.y,
         layerId: activeLayerId,
-        isSurveyNode: false
+        isSurveyNode: false,
+        attributes: { TEXTSTRING: ptName }
       });
       return;
     }

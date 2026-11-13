@@ -299,6 +299,11 @@ export function parseShpBuffer(
         ptName = `${cleanName}_${recordIndex}`;
       }
 
+      const ptAttrs: Record<string, string | number> = dbfRec ? { ...dbfRec } : {};
+      if (ptAttrs.TEXTSTRING === undefined || String(ptAttrs.TEXTSTRING).trim() === '') {
+        ptAttrs.TEXTSTRING = ptName;
+      }
+
       points.push({
         id: `shp-pt-${now}-${fileIndex}-${recordIndex}`,
         name: ptName,
@@ -307,7 +312,7 @@ export function parseShpBuffer(
         z: zVal,
         layerId: effectiveLayerId,
         isSurveyNode: true,
-        attributes: dbfRec ? { ...dbfRec } : undefined
+        attributes: ptAttrs
       });
     } 
     // 2. MultiPoints: MultiPoint (8), MultiPointZ (18), MultiPointM (28)
@@ -318,14 +323,19 @@ export function parseShpBuffer(
       for (let p = 0; p < numPoints; p++) {
         const px = view.getFloat64(ptsStart + p * 16, true);
         const py = view.getFloat64(ptsStart + p * 16 + 8, true);
+        const mptName = `${ptName}_${p + 1}`;
+        const mptAttrs: Record<string, string | number> = dbfRec ? { ...dbfRec } : {};
+        if (mptAttrs.TEXTSTRING === undefined || String(mptAttrs.TEXTSTRING).trim() === '') {
+          mptAttrs.TEXTSTRING = mptName;
+        }
         points.push({
           id: `shp-mpt-${now}-${fileIndex}-${recordIndex}-${p + 1}`,
-          name: `${ptName}_${p + 1}`,
+          name: mptName,
           x: px,
           y: py,
           layerId: effectiveLayerId,
           isSurveyNode: true,
-          attributes: dbfRec ? { ...dbfRec } : undefined
+          attributes: mptAttrs
         });
       }
     }

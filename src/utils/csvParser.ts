@@ -258,7 +258,8 @@ export function buildCADPointsFromCSV(
       y: cadY,
       z: zVal,
       layerId,
-      isSurveyNode: true
+      isSurveyNode: true,
+      attributes: { TEXTSTRING: nameVal }
     });
   });
 

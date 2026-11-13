@@ -61,12 +61,17 @@ export default function App() {
     const initApp = async () => {
       const lastId = localStorage.getItem('last_project_id');
       if (lastId) {
-        setCurrentProjectId(parseInt(lastId));
-      } else {
-        const latest = await db.projects.orderBy('updatedAt').last();
-        if (latest) {
-          setCurrentProjectId(latest.id!);
+        const parsedId = parseInt(lastId, 10);
+        const existing = !isNaN(parsedId) ? await db.projects.get(parsedId) : undefined;
+        if (existing) {
+          setCurrentProjectId(existing.id!);
+          return;
         }
+        localStorage.removeItem('last_project_id');
+      }
+      const latest = await db.projects.orderBy('updatedAt').last();
+      if (latest) {
+        setCurrentProjectId(latest.id!);
       }
     };
     initApp();
@@ -150,12 +155,23 @@ export default function App() {
   useEffect(() => { if (dbPolygons) setPolygons(dbPolygons); }, [dbPolygons]);
   useEffect(() => { if (dbTexts) setTexts(dbTexts); }, [dbTexts]);
 
-  // Handle Zoom Extents on initial load or project change
+  const lastZoomedProjectRef = useRef<number | null>(null);
+
+  // Handle Zoom Extents on initial load or project change only
   useEffect(() => {
-    if (currentProjectId !== null && dbPoints && dbPoints.length > 0) {
-      setTimeout(() => handleZoomExtents(), 100);
+    if (currentProjectId !== null && lastZoomedProjectRef.current !== currentProjectId) {
+      const hasEntities =
+        (dbPoints && dbPoints.length > 0) ||
+        (dbLines && dbLines.length > 0) ||
+        (dbPolylines && dbPolylines.length > 0);
+      if (hasEntities) {
+        lastZoomedProjectRef.current = currentProjectId;
+        setTimeout(() => handleZoomExtents(), 100);
+      }
+    } else if (currentProjectId === null) {
+      lastZoomedProjectRef.current = null;
     }
-  }, [currentProjectId, handleZoomExtents, dbPoints]);
+  }, [currentProjectId, handleZoomExtents, dbPoints, dbLines, dbPolylines]);
 
   // Selection & Tools
   const [tool, setTool] = useState<ToolMode>('pan');
@@ -283,18 +299,35 @@ export default function App() {
   }, [handleUndo, handleRedo, handleZoomExtents, selectedEntityIds, activePoints, points, lines, polylines, polygons, texts]);
 
   const saveEntityToDb = async (type: 'points'|'lines'|'polylines'|'polygons'|'texts', data: any) => {
-    if (currentProjectId === null) {
-      const pid = await db.projects.add({ name: '새 프로젝트', createdAt: Date.now(), updatedAt: Date.now() });
-      setCurrentProjectId(pid);
-      // Save layers first
-      for (const l of layers) {
-        await db.layers.add({ ...l, projectId: pid });
+    try {
+      let pid = currentProjectId;
+      if (pid === null) {
+        pid = await db.projects.add({ name: '새 프로젝트', createdAt: Date.now(), updatedAt: Date.now() });
+        const layersToSave = layers.length > 0 ? layers : DEFAULT_LAYERS;
+        await db.layers.bulkPut(layersToSave.map(l => ({ ...l, projectId: pid! })));
       }
-      data.projectId = pid;
-    } else {
-      data.projectId = currentProjectId;
+      if (data.layerId) {
+        const existingLayer = await db.layers.get(data.layerId);
+        if (!existingLayer || existingLayer.projectId !== pid) {
+          const matchingLayer = layers.find(l => l.id === data.layerId) || {
+            id: data.layerId,
+            name: data.layerId.replace(/^layer-/, '') || '0',
+            color: '#38bdf8',
+            visible: true,
+            locked: false,
+            lineWidth: 1.5
+          };
+          await db.layers.put({ ...matchingLayer, projectId: pid! });
+        }
+      }
+      await (db as any)[type].put({ ...data, projectId: pid! });
+      if (currentProjectId === null) {
+        lastZoomedProjectRef.current = pid!;
+        setCurrentProjectId(pid!);
+      }
+    } catch (err) {
+      console.error('Failed to save entity to IndexedDB:', err);
     }
-    await (db as any)[type].add(data);
   };
 
   const handleFinishDrawing = async () => {
@@ -403,11 +436,26 @@ export default function App() {
   const handleUpdateEntityAttributes = async (updates: { id: string; type: EntityType; name?: string; attributes: Record<string, string | number> }[]) => {
     if (updates.length === 0) return;
     const updateMap = new Map(updates.map(u => [u.id, u]));
+    const resolvedPointUpdates = new Map<string, { name: string; attributes: Record<string, string | number> }>();
+
+    updates.forEach(u => {
+      if (u.type === 'point') {
+        const existingPt = points.find(p => p.id === u.id);
+        const attrText = u.attributes.TEXTSTRING !== undefined ? String(u.attributes.TEXTSTRING).trim() : '';
+        const nameChanged = u.name !== undefined && existingPt && u.name !== existingPt.name;
+        const finalName = nameChanged ? u.name! : (attrText || u.name || existingPt?.name || '');
+        const finalAttrs = {
+          ...u.attributes,
+          TEXTSTRING: nameChanged ? finalName : (attrText || finalName)
+        };
+        resolvedPointUpdates.set(u.id, { name: finalName, attributes: finalAttrs });
+      }
+    });
 
     // 1. Update UI State
     setPoints(prev => prev.map(p => {
-      const u = updateMap.get(p.id);
-      return (u && u.type === 'point') ? { ...p, name: u.name || p.name, attributes: u.attributes } : p;
+      const rp = resolvedPointUpdates.get(p.id);
+      return rp ? { ...p, name: rp.name || p.name, attributes: rp.attributes } : p;
     }));
     setLines(prev => prev.map(l => {
       const u = updateMap.get(l.id);
@@ -441,10 +489,12 @@ export default function App() {
         }
         
         if (collection) {
-          const updateObj: any = { attributes: u.attributes, projectId: currentProjectId };
-          if (u.name) {
-            if (u.type === 'text') updateObj.text = u.name;
-            else updateObj.name = u.name;
+          const rp = u.type === 'point' ? resolvedPointUpdates.get(u.id) : undefined;
+          const updateObj: any = { attributes: rp ? rp.attributes : u.attributes, projectId: currentProjectId };
+          const nextName = rp ? rp.name : u.name;
+          if (nextName) {
+            if (u.type === 'text') updateObj.text = nextName;
+            else updateObj.name = nextName;
           }
           dbUpdates.push(collection.where('id').equals(u.id).modify(updateObj));
         }
@@ -461,10 +511,8 @@ export default function App() {
     let pid = currentProjectId;
     if (pid === null) {
       pid = await db.projects.add({ name: '샘플 현장 데이터', createdAt: Date.now(), updatedAt: Date.now() });
-      setCurrentProjectId(pid);
-      for (const l of layers) {
-        await db.layers.add({ ...l, projectId: pid });
-      }
+      const layersToSave = layers.length > 0 ? layers : DEFAULT_LAYERS;
+      await db.layers.bulkPut(layersToSave.map(l => ({ ...l, projectId: pid! })));
     }
 
     // 2. Sample Manhole (Point)
@@ -475,6 +523,7 @@ export default function App() {
       layerId: activeLayerId,
       isSurveyNode: true,
       attributes: {
+        'TEXTSTRING': '맨홀_MH01',
         '시설종류': '맨홀',
         '규격': 'D600',
         '재질': '철근콘크리트',
@@ -492,6 +541,7 @@ export default function App() {
       layerId: activeLayerId,
       isSurveyNode: true,
       attributes: {
+        'TEXTSTRING': '전주_P12',
         '시설종류': '전주',
         '규격': '12m',
         '재질': '콘크리트',
@@ -521,8 +571,13 @@ export default function App() {
 
     await Promise.all([
       db.points.bulkPut([{ ...manhole, projectId: pid! }, { ...pole, projectId: pid! }]),
-      db.lines.add({ ...pipeline, projectId: pid! })
+      db.lines.put({ ...pipeline, projectId: pid! })
     ]);
+
+    if (currentProjectId === null) {
+      lastZoomedProjectRef.current = pid!;
+      setCurrentProjectId(pid!);
+    }
 
     handleZoomExtents([manhole, pole]);
     pushHistory('샘플 데이터 생성');
@@ -543,6 +598,7 @@ export default function App() {
   };
 
   const clearEntireDatabase = async () => {
+    localStorage.removeItem('last_project_id');
     await Promise.all([
       db.projects.clear(),
       db.layers.clear(),
@@ -594,17 +650,14 @@ export default function App() {
       setCurrentProjectId(pid!);
     } else {
       // Append Mode
+      const wasNullProject = pid === null;
       if (pid === null) {
         pid = await db.projects.add({ 
           name: data.layerName || '현장 프로젝트', 
           createdAt: Date.now(), 
           updatedAt: Date.now() 
         });
-        // Save initial default layer for new project
-        for (const l of DEFAULT_LAYERS) {
-          await db.layers.add({ ...l, projectId: pid });
-        }
-        setCurrentProjectId(pid);
+        await db.layers.bulkPut(DEFAULT_LAYERS.map(l => ({ ...l, projectId: pid! })));
       }
 
       const incomingLayers = data.layers && data.layers.length > 0 ? data.layers : DEFAULT_LAYERS;
@@ -634,7 +687,7 @@ export default function App() {
       const finalPolygons = remap(data.polygons);
       const finalTexts = remap(data.texts || []);
 
-      // Atomic Database Transaction for Append
+      // Atomic Database Transaction for Append BEFORE updating currentProjectId
       await Promise.all([
         layersToAppend.length > 0 ? db.layers.bulkPut(layersToAppend.map(l => ({ ...l, projectId: pid! }))) : Promise.resolve(),
         db.points.bulkPut(finalPoints.map(p => ({ ...p, projectId: pid! }))),
@@ -643,6 +696,11 @@ export default function App() {
         db.polygons.bulkPut(finalPolygons.map(pg => ({ ...pg, projectId: pid! }))),
         finalTexts.length > 0 ? db.texts.bulkPut(finalTexts.map(t => ({ ...t, projectId: pid! }))) : Promise.resolve()
       ]);
+
+      if (wasNullProject) {
+        lastZoomedProjectRef.current = pid!;
+        setCurrentProjectId(pid!);
+      }
     }
 
     // Zoom and finish
@@ -983,10 +1041,9 @@ export default function App() {
       
       {showManualPointModal && (
         <ManualPointModal
-          onAdd={(pt) => {
-            handleAddPoint(pt);
+          onAdd={async (pt) => {
+            await handleAddPoint(pt);
             setSelectedEntityId(pt.id);
-            // Optionally zoom to the new point
             handleZoomExtents([{ x: pt.x, y: pt.y }]);
           }}
           onClose={() => setShowManualPointModal(false)}
@@ -1168,9 +1225,16 @@ export default function App() {
   }
 
   async function handleUpdatePoint(id: string, updates: Partial<CADPoint>) {
-    setPoints(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
+    const existing = points.find(p => p.id === id);
+    const nextAttributes = updates.name !== undefined
+      ? { ...(existing?.attributes || {}), ...(updates.attributes || {}), TEXTSTRING: updates.name }
+      : updates.attributes;
+    const mergedUpdates: Partial<CADPoint> = nextAttributes !== undefined
+      ? { ...updates, attributes: nextAttributes }
+      : updates;
+    setPoints(prev => prev.map(p => p.id === id ? { ...p, ...mergedUpdates } : p));
     if (currentProjectId !== null) {
-      await db.points.where('id').equals(id).modify(updates);
+      await db.points.where('id').equals(id).modify(mergedUpdates);
     }
   }
 }

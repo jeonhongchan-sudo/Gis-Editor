@@ -98,12 +98,15 @@ export function parseDxfBuffer(
         existing.name = newPt.name;
       }
       
-      existing.attributes = { ...existing.attributes, ...newPt.attributes };
+      existing.attributes = { ...existing.attributes, ...newPt.attributes, TEXTSTRING: existing.name };
       if (newPt.z !== undefined && (existing.z === undefined || existing.z === 0)) {
         existing.z = newPt.z;
       }
     } else {
-      points.push(newPt);
+      points.push({
+        ...newPt,
+        attributes: { ...(newPt.attributes || {}), TEXTSTRING: newPt.attributes?.TEXTSTRING || newPt.name }
+      });
     }
   };
 
@@ -209,22 +212,23 @@ export function parseDxfBuffer(
             z: tPos.z,
             layerId,
             isSurveyNode: true,
-            attributes: { ...attributes, origin: 'TEXT' }
+            attributes: { ...attributes, origin: 'TEXT', TEXTSTRING: textContent }
           });
           break;
 
         case 'INSERT':
           const iPos = getEntityPos(ent);
           updateBounds(iPos);
+          const insName = ent.name || `BLOCK_${idx + 1}`;
           addOrUpdatePoint({
             id: `dxf-ins-${now}-${idx}`,
-            name: ent.name || `BLOCK_${idx + 1}`,
+            name: insName,
             x: iPos.x,
             y: iPos.y,
             z: iPos.z,
             layerId,
             isSurveyNode: true,
-            attributes: { ...attributes, blockName: ent.name }
+            attributes: { ...attributes, blockName: ent.name, TEXTSTRING: insName }
           });
           break;
 
