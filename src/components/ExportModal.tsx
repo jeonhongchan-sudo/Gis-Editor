@@ -57,7 +57,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [csvFileName, setCsvFileName] = useState<string>(() => `현장성과_${todayStr}`);
   const [geoJsonFileName, setGeoJsonFileName] = useState<string>(() => `현장성과_${todayStr}`);
 
-  const totalLinesCount = lines.length + polylines.length;
+  const totalLinesCount = lines.length + polylines.length + polygons.length;
   const isProcessingRef = useRef(false);
 
   const showSuccess = (msg: string) => {
@@ -235,7 +235,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           <div className="flex items-center gap-3 text-slate-500 dark:text-slate-400 text-[11px] shrink-0">
             <span>측점: <strong className="text-sky-600 dark:text-sky-400">{points.length}</strong></span>
             <span>선: <strong className="text-amber-600 dark:text-amber-400">{totalLinesCount}</strong></span>
-            <span>폴리곤: <strong className="text-emerald-600 dark:text-emerald-400">{polygons.length}</strong></span>
           </div>
         </div>
 

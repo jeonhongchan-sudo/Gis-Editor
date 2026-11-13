@@ -336,50 +336,79 @@ export function parseShpBuffer(
       const partsStart = offset + 52;
       const pointsStart = partsStart + numParts * 4;
 
-      const polyPoints: Point2D[] = [];
+      const partStarts: number[] = [];
+      for (let k = 0; k < numParts; k++) {
+        partStarts.push(view.getInt32(partsStart + k * 4, true));
+      }
+
+      const allPoints: Point2D[] = [];
       for (let p = 0; p < numPoints; p++) {
         const px = view.getFloat64(pointsStart + p * 16, true);
         const py = view.getFloat64(pointsStart + p * 16 + 8, true);
-        polyPoints.push({ x: px, y: py });
+        allPoints.push({ x: px, y: py });
       }
 
-      if (polyPoints.length >= 2) {
-        let lineName = findDbfValue(NAME_KEYS) || `${cleanName}_선_${recordIndex}`;
-        polylines.push({
-          id: `shp-pl-${Date.now()}-${recordIndex}`,
-          points: polyPoints,
-          isClosed: false,
-          layerId: effectiveLayerId,
-          name: lineName,
-          attributes: dbfRec ? { ...dbfRec } : undefined
-        });
-      }
+      const baseName = findDbfValue(NAME_KEYS) || `${cleanName}_선_${recordIndex}`;
+      const partRanges = numParts > 0
+        ? partStarts.map((startIdx, idx) => [startIdx, idx + 1 < partStarts.length ? partStarts[idx + 1] : numPoints])
+        : [[0, numPoints]];
+
+      partRanges.forEach(([startIdx, endIdx], partIdx) => {
+        const segPts = allPoints.slice(startIdx, endIdx);
+        if (segPts.length >= 2) {
+          polylines.push({
+            id: `shp-pl-${now}-${fileIndex}-${recordIndex}-${partIdx}`,
+            points: segPts,
+            isClosed: false,
+            layerId: effectiveLayerId,
+            name: partRanges.length > 1 ? `${baseName}_${partIdx + 1}` : baseName,
+            attributes: dbfRec ? { ...dbfRec } : undefined
+          });
+        }
+      });
     } 
-    // 4. Polygons: Polygon (5), PolygonZ (15), PolygonM (25)
+    // 4. Polygons: Polygon (5), PolygonZ (15), PolygonM (25) -> 외곽선 기준 선(Polyline)으로 변환
     else if (recShapeType === 5 || recShapeType === 15 || recShapeType === 25) {
       const numParts = view.getInt32(offset + 44, true);
       const numPoints = view.getInt32(offset + 48, true);
       const partsStart = offset + 52;
       const pointsStart = partsStart + numParts * 4;
 
-      const polyPoints: Point2D[] = [];
+      const partStarts: number[] = [];
+      for (let k = 0; k < numParts; k++) {
+        partStarts.push(view.getInt32(partsStart + k * 4, true));
+      }
+
+      const allPoints: Point2D[] = [];
       for (let p = 0; p < numPoints; p++) {
         const px = view.getFloat64(pointsStart + p * 16, true);
         const py = view.getFloat64(pointsStart + p * 16 + 8, true);
-        polyPoints.push({ x: px, y: py });
+        allPoints.push({ x: px, y: py });
       }
 
-      if (polyPoints.length >= 3) {
-        let polyName = findDbfValue(NAME_KEYS) || `${cleanName}_구역_${recordIndex}`;
-        polygons.push({
-          id: `shp-pg-${Date.now()}-${recordIndex}`,
-          points: polyPoints,
-          layerId: effectiveLayerId,
-          name: polyName,
-          fillOpacity: 0.15,
-          attributes: dbfRec ? { ...dbfRec } : undefined
-        });
-      }
+      const baseName = findDbfValue(NAME_KEYS) || `${cleanName}_외곽선_${recordIndex}`;
+      const partRanges = numParts > 0
+        ? partStarts.map((startIdx, idx) => [startIdx, idx + 1 < partStarts.length ? partStarts[idx + 1] : numPoints])
+        : [[0, numPoints]];
+
+      partRanges.forEach(([startIdx, endIdx], partIdx) => {
+        const ringPts = allPoints.slice(startIdx, endIdx);
+        if (ringPts.length >= 2) {
+          const first = ringPts[0];
+          const last = ringPts[ringPts.length - 1];
+          if (first.x !== last.x || first.y !== last.y) {
+            ringPts.push({ ...first });
+          }
+          polylines.push({
+            id: `shp-pgline-${now}-${fileIndex}-${recordIndex}-${partIdx}`,
+            points: ringPts,
+            isClosed: true,
+            layerId: effectiveLayerId,
+            name: partRanges.length > 1 ? `${baseName}_${partIdx + 1}` : baseName,
+            attributes: dbfRec ? { ...dbfRec } : undefined
+          });
+        }
+      });
     }
 
     offset += 8 + contentLenBytes;

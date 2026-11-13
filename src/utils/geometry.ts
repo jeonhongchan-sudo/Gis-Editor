@@ -241,6 +241,22 @@ export function findSnapPoint(opts: FindSnapOptions): SnapPoint | null {
           bestSnap = { point: mid, type: 'midpoint', label: '중간점 (Midpoint)' };
         }
       }
+      if (pl.isClosed && pl.points.length >= 2) {
+        const p1 = pl.points[pl.points.length - 1];
+        const p2 = pl.points[0];
+        if (p1.x !== p2.x || p1.y !== p2.y) {
+          const midX = (p1.x + p2.x) / 2;
+          const midY = (p1.y + p2.y) / 2;
+          if (Math.abs(midX - worldCursor.x) <= minDistance && Math.abs(midY - worldCursor.y) <= minDistance) {
+            const mid = { x: midX, y: midY };
+            const d = distance2D(worldCursor, mid);
+            if (d < minDistance) {
+              minDistance = d;
+              bestSnap = { point: mid, type: 'midpoint', label: '중간점 (Midpoint)' };
+            }
+          }
+        }
+      }
     }
   }
 
@@ -302,12 +318,15 @@ export function isLineInOrIntersectBox(p1: Point2D, p2: Point2D, box: BoundingBo
   return false;
 }
 
-export function isPolylineInOrIntersectBox(pts: Point2D[], box: BoundingBox2D): boolean {
+export function isPolylineInOrIntersectBox(pts: Point2D[], box: BoundingBox2D, isClosed?: boolean): boolean {
   for (let i = 0; i < pts.length; i++) {
     if (isPointInBox(pts[i], box)) return true;
   }
   for (let i = 0; i < pts.length - 1; i++) {
     if (isLineInOrIntersectBox(pts[i], pts[i + 1], box)) return true;
+  }
+  if (isClosed && pts.length >= 2) {
+    if (isLineInOrIntersectBox(pts[pts.length - 1], pts[0], box)) return true;
   }
   return false;
 }

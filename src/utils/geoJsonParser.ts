@@ -132,12 +132,20 @@ export function parseGeoJson(
     // 3. Line Geometries
     else if (geom.type === 'LineString') {
       const pts = geom.coordinates.map((c: number[]) => getPoint(c));
+      const isClosed = !!props.isClosed;
+      if (isClosed && pts.length >= 2) {
+        const first = pts[0];
+        const last = pts[pts.length - 1];
+        if (first.x !== last.x || first.y !== last.y) {
+          pts.push({ ...first });
+        }
+      }
       polylines.push({
         id: props.id || `gj-pl-${Date.now()}-${idx}`,
         name: props.name || `LINE_${idx + 1}`,
         points: pts,
         layerId: layer.id,
-        isClosed: !!props.isClosed,
+        isClosed,
         attributes: props
       });
     } else if (geom.type === 'MultiLineString') {
@@ -152,43 +160,55 @@ export function parseGeoJson(
         });
       });
     }
-    // 4. Polygon Geometries
+    // 4. Polygon Geometries -> 외곽선 기준 선(Polyline)으로 변환
     else if (geom.type === 'Polygon') {
-      const outerRing = geom.coordinates[0];
-      if (Array.isArray(outerRing) && outerRing.length >= 3) {
-        const pts = outerRing.map((c: number[]) => getPoint(c));
-        // Remove trailing duplicate if it exists (CAD polygons are point lists)
-        const first = pts[0];
-        const last = pts[pts.length - 1];
-        const displayPts = (first.x === last.x && first.y === last.y && pts.length > 2) ? pts.slice(0, -1) : pts;
-        
-        polygons.push({
-          id: props.id || `gj-pg-${Date.now()}-${idx}`,
-          name: props.name || `POLY_${idx + 1}`,
-          points: displayPts,
-          layerId: layer.id,
-          fillOpacity: 0.15,
-          attributes: props
-        });
-      }
-    } else if (geom.type === 'MultiPolygon') {
-      geom.coordinates.forEach((poly: number[][][], subIdx: number) => {
-        const outerRing = poly[0];
-        if (Array.isArray(outerRing) && outerRing.length >= 3) {
-          const pts = outerRing.map((c: number[]) => getPoint(c));
+      const rings: number[][][] = Array.isArray(geom.coordinates) ? geom.coordinates : [];
+      rings.forEach((ring: number[][], ringIdx: number) => {
+        if (Array.isArray(ring) && ring.length >= 2) {
+          const pts = ring.map((c: number[]) => getPoint(c));
           const first = pts[0];
           const last = pts[pts.length - 1];
-          const displayPts = (first.x === last.x && first.y === last.y && pts.length > 2) ? pts.slice(0, -1) : pts;
-          
-          polygons.push({
-            id: props.id ? `${props.id}_${subIdx}` : `gj-mpg-${Date.now()}-${idx}-${subIdx}`,
-            name: props.name || `MPOLY_${idx + 1}_${subIdx + 1}`,
-            points: displayPts,
+          if (first.x !== last.x || first.y !== last.y) {
+            pts.push({ ...first });
+          }
+          const baseName = props.name || `외곽선_${idx + 1}`;
+          polylines.push({
+            id: props.id
+              ? (ringIdx === 0 ? `${props.id}` : `${props.id}_ring${ringIdx}`)
+              : `gj-pgline-${Date.now()}-${idx}-${ringIdx}`,
+            name: ringIdx === 0 ? baseName : `${baseName}_내부${ringIdx}`,
+            points: pts,
             layerId: layer.id,
-            fillOpacity: 0.15,
+            isClosed: true,
             attributes: props
           });
         }
+      });
+    } else if (geom.type === 'MultiPolygon') {
+      const polys: number[][][][] = Array.isArray(geom.coordinates) ? geom.coordinates : [];
+      polys.forEach((poly: number[][][], subIdx: number) => {
+        if (!Array.isArray(poly)) return;
+        poly.forEach((ring: number[][], ringIdx: number) => {
+          if (Array.isArray(ring) && ring.length >= 2) {
+            const pts = ring.map((c: number[]) => getPoint(c));
+            const first = pts[0];
+            const last = pts[pts.length - 1];
+            if (first.x !== last.x || first.y !== last.y) {
+              pts.push({ ...first });
+            }
+            const baseName = props.name || `외곽선_${idx + 1}_${subIdx + 1}`;
+            polylines.push({
+              id: props.id
+                ? (ringIdx === 0 ? `${props.id}_${subIdx}` : `${props.id}_${subIdx}_ring${ringIdx}`)
+                : `gj-mpgline-${Date.now()}-${idx}-${subIdx}-${ringIdx}`,
+              name: ringIdx === 0 ? baseName : `${baseName}_내부${ringIdx}`,
+              points: pts,
+              layerId: layer.id,
+              isClosed: true,
+              attributes: props
+            });
+          }
+        });
       });
     }
   });

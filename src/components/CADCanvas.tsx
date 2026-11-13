@@ -670,7 +670,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         });
         polylines.forEach(pl => {
           const lay = layerMap.current.get(pl.layerId);
-          if (lay?.visible !== false && isPolylineInOrIntersectBox(pl.points, box)) foundIds.push(pl.id);
+          if (lay?.visible !== false && isPolylineInOrIntersectBox(pl.points, box, pl.isClosed)) foundIds.push(pl.id);
         });
         polygons.forEach(pg => {
           const lay = layerMap.current.get(pg.layerId);
@@ -720,6 +720,12 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
               if (distance < hitRadius) {
                 hitId = pl.id;
                 break;
+              }
+            }
+            if (!hitId && pl.isClosed && pl.points.length >= 2) {
+              const { distance } = closestPointOnSegment(targetWorld, pl.points[pl.points.length - 1], pl.points[0]);
+              if (distance < hitRadius) {
+                hitId = pl.id;
               }
             }
             if (hitId) break;
@@ -1772,3 +1778,4 @@ function drawScaleBar(
   const label = barMeters >= 1000 ? `${(barMeters / 1000).toFixed(3)} km` : `${barMeters.toFixed(3)} m`;
   ctx.fillText(label, startX + barPixels / 2, startY - 6);
 }
+

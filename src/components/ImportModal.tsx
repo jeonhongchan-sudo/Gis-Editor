@@ -204,11 +204,30 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
           // Check if it's a ProjectState (our internal format)
           if (parsed.version || parsed.layers || parsed.points || (parsed.texts && Array.isArray(parsed.texts))) {
+            const convertedPolyLines: CADPolyline[] = (parsed.polygons || []).map((pg: CADPolygon, i: number) => {
+              const pts = [...(pg.points || [])];
+              if (pts.length >= 2) {
+                const first = pts[0];
+                const last = pts[pts.length - 1];
+                if (first.x !== last.x || first.y !== last.y) {
+                  pts.push({ ...first });
+                }
+              }
+              return {
+                id: pg.id || `imp-pgline-${Date.now()}-${i}`,
+                name: pg.name || `외곽선_${i + 1}`,
+                points: pts,
+                isClosed: true,
+                layerId: pg.layerId,
+                color: pg.color,
+                attributes: pg.attributes
+              };
+            });
             const unified: SHPParseResult = {
               points: parsed.points || [],
               lines: parsed.lines || [],
-              polylines: parsed.polylines || [],
-              polygons: parsed.polygons || [],
+              polylines: [...(parsed.polylines || []), ...convertedPolyLines],
+              polygons: [],
               texts: parsed.texts || [],
               layers: parsed.layers || [],
               layerName: parsed.name || jsonFile.name
@@ -647,7 +666,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 </div>
 
                 {/* Geometry Stats Grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                   <div className="p-3 bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl text-center shadow-sm">
                     <div className="text-[10px] text-slate-500 dark:text-slate-400">측점 (Point)</div>
                     <div className="text-lg font-bold text-sky-600 dark:text-sky-400 mt-0.5">{shpResult.points.length}개</div>
@@ -655,10 +674,6 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                   <div className="p-3 bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl text-center shadow-sm">
                     <div className="text-[10px] text-slate-500 dark:text-slate-400">선 (Polyline)</div>
                     <div className="text-lg font-bold text-amber-600 dark:text-amber-400 mt-0.5">{shpResult.polylines.length + shpResult.lines.length}개</div>
-                  </div>
-                  <div className="p-3 bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl text-center shadow-sm">
-                    <div className="text-[10px] text-slate-500 dark:text-slate-400">구역 (Polygon)</div>
-                    <div className="text-lg font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">{shpResult.polygons.length}개</div>
                   </div>
                   <div className="p-3 bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl text-center shadow-sm">
                     <div className="text-[10px] text-slate-500 dark:text-slate-400">텍스트 (Text)</div>

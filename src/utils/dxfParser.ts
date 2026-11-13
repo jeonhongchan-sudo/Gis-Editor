@@ -175,28 +175,21 @@ export function parseDxfBuffer(
             return p;
           });
           if (pts.length >= 2) {
-            // AutoCAD closed flag or start/end overlap
+            // AutoCAD closed flag or start/end overlap -> 외곽선 기준 닫힌 선(Polyline)으로 처리
             const isClosed = !!(ent.shape || ent.closed || (pts.length >= 3 && Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y) < 0.05));
-            if (isClosed) {
-              polygons.push({
-                id: `dxf-pg-${now}-${idx}`,
-                name: `POLY_${idx + 1}`,
-                points: pts,
-                layerId,
-                color,
-                attributes
-              });
-            } else {
-              polylines.push({
-                id: `dxf-pl-${now}-${idx}`,
-                name: `PLINE_${idx + 1}`,
-                points: pts,
-                isClosed: false,
-                layerId,
-                color,
-                attributes
-              });
+            const finalPts = [...pts];
+            if (isClosed && Math.hypot(finalPts[0].x - finalPts[finalPts.length - 1].x, finalPts[0].y - finalPts[finalPts.length - 1].y) >= 1e-6) {
+              finalPts.push({ ...finalPts[0] });
             }
+            polylines.push({
+              id: `dxf-pl-${now}-${idx}`,
+              name: `PLINE_${idx + 1}`,
+              points: finalPts,
+              isClosed,
+              layerId,
+              color,
+              attributes
+            });
           }
           break;
 
@@ -252,7 +245,10 @@ export function parseDxfBuffer(
             circlePts.push(p);
           }
           if (ent.type === 'CIRCLE' || (Math.abs(endAngle - startAngle) >= 359.9)) {
-            polygons.push({ id: `dxf-cir-${now}-${idx}`, name: `CIRCLE_${idx + 1}`, points: circlePts, layerId, color, attributes });
+            if (circlePts.length >= 2) {
+              circlePts[circlePts.length - 1] = { ...circlePts[0] };
+            }
+            polylines.push({ id: `dxf-cir-${now}-${idx}`, name: `CIRCLE_${idx + 1}`, points: circlePts, isClosed: true, layerId, color, attributes });
           } else {
             polylines.push({ id: `dxf-arc-${now}-${idx}`, name: `ARC_${idx + 1}`, points: circlePts, isClosed: false, layerId, color, attributes });
           }

@@ -18,11 +18,6 @@ interface ShpFeaturePolyline {
   properties: Record<string, string | number>;
 }
 
-interface ShpFeaturePolygon {
-  points: Point2D[];
-  properties: Record<string, string | number>;
-}
-
 import { encodeText, safeByteClip } from './encoding';
 
 /**
@@ -205,6 +200,7 @@ function createPolylineShpAndShx(features: ShpFeaturePolyline[]) {
     view.setFloat64(36, minX, true);
     view.setFloat64(44, minY, true);
     view.setFloat64(52, maxX, true);
+    view.setFloat64(60, maxY, true);
   };
 
   writeHeader(shpView, shpLength);
@@ -245,107 +241,6 @@ function createPolylineShpAndShx(features: ShpFeaturePolyline[]) {
     shpView.setInt32(shpOffset + 36, 1, true); // NumParts = 1
     shpView.setInt32(shpOffset + 40, f.points.length, true); // NumPoints
     shpView.setInt32(shpOffset + 44, 0, true); // parts[0] = 0
-
-    let ptOffset = shpOffset + 48;
-    f.points.forEach(p => {
-      shpView.setFloat64(ptOffset, p.x, true);
-      shpView.setFloat64(ptOffset + 8, p.y, true);
-      ptOffset += 16;
-    });
-
-    shpOffset += contentLenBytes;
-  });
-
-  return { shp: shpBuf, shx: shxBuf };
-}
-
-/**
- * Generate Polygon Shapefile (.shp, .shx)
- */
-function createPolygonShpAndShx(features: ShpFeaturePolygon[]) {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  features.forEach(f => {
-    f.points.forEach(p => {
-      minX = Math.min(minX, p.x);
-      minY = Math.min(minY, p.y);
-      maxX = Math.max(maxX, p.x);
-      maxY = Math.max(maxY, p.y);
-    });
-  });
-  if (features.length === 0 || minX === Infinity) {
-    minX = 0; minY = 0; maxX = 0; maxY = 0;
-  }
-
-  // Ensure closed loops (last point == first point)
-  const preparedFeatures = features.map(f => {
-    const pts = [...f.points];
-    if (pts.length > 0) {
-      const first = pts[0];
-      const last = pts[pts.length - 1];
-      if (first.x !== last.x || first.y !== last.y) {
-        pts.push({ ...first });
-      }
-    }
-    return { ...f, points: pts };
-  });
-
-  let shpLength = 100;
-  preparedFeatures.forEach(f => {
-    shpLength += 8 + 48 + f.points.length * 16;
-  });
-  const shxLength = 100 + preparedFeatures.length * 8;
-
-  const shpBuf = new ArrayBuffer(shpLength);
-  const shpView = new DataView(shpBuf);
-  const shxBuf = new ArrayBuffer(shxLength);
-  const shxView = new DataView(shxBuf);
-
-  const writeHeader = (view: DataView, fileLenBytes: number) => {
-    view.setInt32(0, 9994, false);
-    view.setInt32(24, fileLenBytes / 2, false);
-    view.setInt32(28, 1000, true);
-    view.setInt32(32, 5, true); // Shape type: 5 = Polygon
-    view.setFloat64(36, minX, true);
-    view.setFloat64(44, minY, true);
-    view.setFloat64(52, maxX, true);
-    view.setFloat64(60, maxY, true);
-  };
-
-  writeHeader(shpView, shpLength);
-  writeHeader(shxView, shxLength);
-
-  let shpOffset = 100;
-  let shxOffset = 100;
-
-  preparedFeatures.forEach((f, idx) => {
-    const recNum = idx + 1;
-    const contentLenBytes = 48 + f.points.length * 16;
-    const contentLenWords = contentLenBytes / 2;
-
-    shxView.setInt32(shxOffset, shpOffset / 2, false);
-    shxView.setInt32(shxOffset + 4, contentLenWords, false);
-    shxOffset += 8;
-
-    shpView.setInt32(shpOffset, recNum, false);
-    shpView.setInt32(shpOffset + 4, contentLenWords, false);
-    shpOffset += 8;
-
-    let fMinX = Infinity, fMinY = Infinity, fMaxX = -Infinity, fMaxY = -Infinity;
-    f.points.forEach(p => {
-      fMinX = Math.min(fMinX, p.x);
-      fMinY = Math.min(fMinY, p.y);
-      fMaxX = Math.max(fMaxX, p.x);
-      fMaxY = Math.max(fMaxY, p.y);
-    });
-
-    shpView.setInt32(shpOffset, 5, true); // Polygon
-    shpView.setFloat64(shpOffset + 4, fMinX, true);
-    shpView.setFloat64(shpOffset + 12, fMinY, true);
-    shpView.setFloat64(shpOffset + 20, fMaxX, true);
-    shpView.setFloat64(shpOffset + 28, fMaxY, true);
-    shpView.setInt32(shpOffset + 36, 1, true); // NumParts = 1
-    shpView.setInt32(shpOffset + 40, f.points.length, true);
-    shpView.setInt32(shpOffset + 44, 0, true);
 
     let ptOffset = shpOffset + 48;
     f.points.forEach(p => {
@@ -463,6 +358,7 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
 
   lines.forEach(l => collectCustomKeys(l.attributes));
   polylines.forEach(pl => collectCustomKeys(pl.attributes));
+  polygons.forEach(pg => collectCustomKeys(pg.attributes));
 
   // Limit custom keys to prevent DBF header overflow, max 10 custom keys
   const customFieldKeys = Array.from(customFieldKeysSet).slice(0, 15);
@@ -506,9 +402,17 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
   });
 
   polylines.forEach((pl, idx) => {
+    const exportPts = [...pl.points];
+    if (pl.isClosed && exportPts.length >= 2) {
+      const first = exportPts[0];
+      const last = exportPts[exportPts.length - 1];
+      if (first.x !== last.x || first.y !== last.y) {
+        exportPts.push({ ...first });
+      }
+    }
     let len = 0;
-    for (let i = 0; i < pl.points.length - 1; i++) {
-      len += Math.sqrt(Math.pow(pl.points[i + 1].x - pl.points[i].x, 2) + Math.pow(pl.points[i + 1].y - pl.points[i].y, 2));
+    for (let i = 0; i < exportPts.length - 1; i++) {
+      len += Math.sqrt(Math.pow(exportPts[i + 1].x - exportPts[i].x, 2) + Math.pow(exportPts[i + 1].y - exportPts[i].y, 2));
     }
     const a = pl.attributes || {};
     const layer = layers.find(lay => lay.id === pl.layerId);
@@ -532,7 +436,47 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       props[k] = a[k] !== undefined ? a[k] : '';
     });
     lineFeatures.push({
-      points: pl.points,
+      points: exportPts,
+      properties: props
+    });
+  });
+
+  // 폴리곤 객체가 남아있는 경우에도 외곽선 기준 닫힌 선(PolyLine)으로 변환하여 내보내기
+  polygons.forEach((pg, idx) => {
+    if (!pg.points || pg.points.length < 2) return;
+    const exportPts = [...pg.points];
+    const first = exportPts[0];
+    const last = exportPts[exportPts.length - 1];
+    if (first.x !== last.x || first.y !== last.y) {
+      exportPts.push({ ...first });
+    }
+    let len = 0;
+    for (let i = 0; i < exportPts.length - 1; i++) {
+      len += Math.sqrt(Math.pow(exportPts[i + 1].x - exportPts[i].x, 2) + Math.pow(exportPts[i + 1].y - exportPts[i].y, 2));
+    }
+    const a = pg.attributes || {};
+    const layer = layers.find(lay => lay.id === pg.layerId);
+    const props: Record<string, string | number> = {
+      ID: lines.length + polylines.length + idx + 1,
+      NAME: pg.name || `외곽선_${idx + 1}`,
+      LAYER: getLayerName(pg.layerId),
+      COLOR: layer?.color || '#38bdf8',
+      LENGTH_M: len.toFixed(3),
+      CATEGORY: (a.CATEGORY || a.시설구분 || '').toString(),
+      SPEC: (a.SPEC || a.규격 || '').toString(),
+      MATERIAL: (a.MATERIAL || a.재질 || '').toString(),
+      DEPTH: a.DEPTH !== undefined ? a.DEPTH : (a.매설심도 !== undefined ? a.매설심도 : 0),
+      SURV_DATE: (a.SURV_DATE || a.조사일자 || '').toString(),
+      SURVEYOR: (a.SURVEYOR || a.조사자 || '').toString(),
+      STATUS: (a.STATUS || a.상태 || '').toString(),
+      REMARK: (a.REMARK || a.비고 || '').toString(),
+      TYPE: 'POLYLINE'
+    };
+    customFieldKeys.forEach(k => {
+      props[k] = a[k] !== undefined ? a[k] : '';
+    });
+    lineFeatures.push({
+      points: exportPts,
       properties: props
     });
   });
@@ -578,75 +522,7 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
     zip.file('cad_lines.cpg', cpgContent);
   }
 
-  // 3. Export Polygons if any
-  if (polygons.length > 0) {
-    const customPgFieldKeysSet = new Set<string>();
-    polygons.forEach(pg => {
-      if (pg.attributes) {
-        Object.keys(pg.attributes).forEach(k => {
-          if (k.trim()) customPgFieldKeysSet.add(k.trim());
-        });
-      }
-    });
-    const customPgFieldKeys = Array.from(customPgFieldKeysSet).slice(0, 15);
-
-    const getLayerName = (id: string): string => {
-      const l = layers.find(lay => lay.id === id);
-      if (l) return l.name;
-      if (id.startsWith('layer-')) return id.replace(/^layer-/, '');
-      return id || '0';
-    };
-
-    const polyFeatures: ShpFeaturePolygon[] = polygons.map((poly, idx) => {
-      let area = 0;
-      for (let i = 0; i < poly.points.length; i++) {
-        const j = (i + 1) % poly.points.length;
-        area += poly.points[i].x * poly.points[j].y;
-        area -= poly.points[j].x * poly.points[i].y;
-      }
-      area = Math.abs(area) / 2.0;
-
-      const layer = layers.find(l => l.id === poly.layerId);
-      const props: Record<string, string | number> = {
-        ID: idx + 1,
-        LAYER: getLayerName(poly.layerId),
-        COLOR: layer?.color || '#38bdf8',
-        AREA_M2: area.toFixed(3),
-        AREA_PY: (area / 3.305785).toFixed(3)
-      };
-
-      if (poly.attributes) {
-        customPgFieldKeys.forEach(k => {
-          props[k] = poly.attributes![k] !== undefined ? poly.attributes![k] : '';
-        });
-      }
-
-      return {
-        points: poly.points,
-        properties: props
-      };
-    });
-
-    const dbfFields: { name: string; type: 'C' | 'N'; length: number; decimals: number }[] = [
-      { name: 'ID', type: 'N', length: 10, decimals: 0 },
-      { name: 'LAYER', type: 'C', length: 254, decimals: 0 },
-      { name: 'COLOR', type: 'C', length: 20, decimals: 0 },
-      { name: 'AREA_M2', type: 'N', length: 14, decimals: 3 },
-      { name: 'AREA_PY', type: 'N', length: 12, decimals: 3 }
-    ];
-
-    customPgFieldKeys.forEach(k => {
-      dbfFields.push({ name: k.slice(0, 10), type: 'C', length: 254, decimals: 0 });
-    });
-
-    const { shp, shx } = createPolygonShpAndShx(polyFeatures);
-    const dbf = createDbfBuffer(dbfFields, polyFeatures.map(f => f.properties), encoding);
-
-    zip.file('cad_polygons.shp', shp);
-    zip.file('cad_polygons.shx', shx);
-    zip.file('cad_polygons.dbf', dbf);
-    zip.file('cad_polygons.cpg', cpgContent);
-  }
+  // Generate and return zip blob (모든 선 및 외곽선은 cad_lines.shp로 통합 출력됨)
 
   // Generate and return zip blob
   return await zip.generateAsync({ type: 'blob' });

@@ -131,13 +131,21 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
 
   // 4. Export Polylines
   polylines.forEach(pl => {
-    if (!pl || !Array.isArray(pl.points)) return;
+    if (!pl || !Array.isArray(pl.points) || pl.points.length < 2) return;
+    const coords = pl.points.map(p => projectPoint(p));
+    if (pl.isClosed && coords.length >= 2) {
+      const first = coords[0];
+      const last = coords[coords.length - 1];
+      if (first[0] !== last[0] || first[1] !== last[1]) {
+        coords.push([first[0], first[1]]);
+      }
+    }
     const layerObj = layers.find(l => l.id === pl.layerId);
     features.push({
       type: 'Feature',
       geometry: {
         type: 'LineString',
-        coordinates: pl.points.map(p => projectPoint(p))
+        coordinates: coords
       },
       properties: {
         id: pl.id,
@@ -154,9 +162,9 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
     });
   });
 
-  // 5. Export Polygons
+  // 5. Export Polygons as closed LineStrings (외곽선 기준 선으로 통일 출력)
   polygons.forEach(pg => {
-    if (!pg || !Array.isArray(pg.points) || pg.points.length < 3) return;
+    if (!pg || !Array.isArray(pg.points) || pg.points.length < 2) return;
     const coords = pg.points.map(p => projectPoint(p));
     if (coords.length > 0) {
       const first = coords[0];
@@ -169,8 +177,8 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
     features.push({
       type: 'Feature',
       geometry: {
-        type: 'Polygon',
-        coordinates: [coords]
+        type: 'LineString',
+        coordinates: coords
       },
       properties: {
         id: pg.id,
@@ -178,11 +186,10 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
         title: pg.name,
         layer: getLayerName(pg.layerId),
         layerId: pg.layerId,
-        dxftype: 'POLYGON',
+        dxftype: 'LWPOLYLINE',
+        isClosed: true,
         'stroke': layerObj?.color || '#38bdf8',
         'stroke-width': 2,
-        'fill': layerObj?.color || '#38bdf8',
-        'fill-opacity': 0.2,
         ...(pg.attributes || {})
       }
     });

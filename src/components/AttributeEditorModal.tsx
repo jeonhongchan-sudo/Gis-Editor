@@ -170,6 +170,13 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
       for (let i = 0; i < pl.points.length - 1; i++) {
         len += distance2D(pl.points[i], pl.points[i + 1]);
       }
+      if (pl.isClosed && pl.points.length >= 2) {
+        const first = pl.points[0];
+        const last = pl.points[pl.points.length - 1];
+        if (first.x !== last.x || first.y !== last.y) {
+          len += distance2D(last, first);
+        }
+      }
       list.push({
         id: pl.id,
         type: 'polyline',

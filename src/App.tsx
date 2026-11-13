@@ -646,8 +646,15 @@ export default function App() {
     }
 
     // Zoom and finish
+    const zoomTargets = data.points.length > 0
+      ? data.points
+      : [
+          ...data.lines.flatMap(l => [l.start, l.end]),
+          ...data.polylines.flatMap(pl => pl.points),
+          ...data.polygons.flatMap(pg => pg.points)
+        ];
     setTimeout(() => {
-      handleZoomExtents(data.points);
+      handleZoomExtents(zoomTargets);
     }, 200);
     pushHistory(`${data.layerName || '데이터'} 불러오기`);
   };
@@ -1023,8 +1030,27 @@ export default function App() {
     const layers = state.layers || DEFAULT_LAYERS;
     const points = state.points || [];
     const lines = state.lines || [];
-    const polylines = state.polylines || [];
-    const polygons = state.polygons || [];
+    const convertedPolyLines: CADPolyline[] = (state.polygons || []).map((pg, idx) => {
+      const pts = [...(pg.points || [])];
+      if (pts.length >= 2) {
+        const first = pts[0];
+        const last = pts[pts.length - 1];
+        if (first.x !== last.x || first.y !== last.y) {
+          pts.push({ ...first });
+        }
+      }
+      return {
+        id: pg.id || `proj-pgline-${Date.now()}-${idx}`,
+        name: pg.name || `외곽선_${idx + 1}`,
+        points: pts,
+        isClosed: true,
+        layerId: pg.layerId,
+        color: pg.color,
+        attributes: pg.attributes
+      };
+    });
+    const polylines = [...(state.polylines || []), ...convertedPolyLines];
+    const polygons: CADPolygon[] = [];
     const texts = state.texts || [];
 
     await Promise.all([
@@ -1032,7 +1058,6 @@ export default function App() {
       db.points.bulkPut(points.map(p => ({ ...p, projectId: pid }))),
       db.lines.bulkPut(lines.map(l => ({ ...l, projectId: pid }))),
       db.polylines.bulkPut(polylines.map(p => ({ ...p, projectId: pid }))),
-      db.polygons.bulkPut(polygons.map(p => ({ ...p, projectId: pid }))),
       db.texts.bulkPut(texts.map(t => ({ ...t, projectId: pid })))
     ]);
 
