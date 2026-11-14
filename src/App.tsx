@@ -7,6 +7,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { Focus, Trash2, Ruler, X, Check, Layers, CheckSquare, Database, Unlink, Scissors, ArrowUpRight, Link2, Square, Circle, Lock } from 'lucide-react';
 import { distance2D } from './utils/geometry';
 import { CADGeometryMutation, createCirclePolyline, createRectangleByDimensions, joinLinearEntities } from './utils/cadOperations';
+import { forceRefreshAppFromServer } from './utils/pwaRefresh';
 import { 
   CADLayer, 
   CADLine, 
@@ -923,6 +924,13 @@ export default function App() {
     return measureSegments.reduce((sum: number, s: { index: number; dist: number }) => sum + s.dist, 0);
   }, [measureSegments]);
 
+  const handleRefreshApp = useCallback(async () => {
+    const result = await forceRefreshAppFromServer();
+    if (!result.refreshed) {
+      showCadToast('오프라인 상태입니다. 저장된 도면과 현재 버전을 유지합니다.');
+    }
+  }, [showCadToast]);
+
   return (
     <div className="relative w-screen h-screen overflow-hidden flex flex-col bg-slate-950 font-sans">
       <OfflineIndicator />
@@ -942,6 +950,7 @@ export default function App() {
         onToggleLayerPanel={() => setShowLayerPanel(prev => !prev)}
         onOpenHelp={() => setShowHelpModal(true)}
         onOpenManualPoint={() => setShowManualPointModal(true)}
+        onRefreshApp={handleRefreshApp}
       />
 
       <main className="relative flex-1 w-full h-full overflow-hidden bg-slate-50 dark:bg-slate-950">

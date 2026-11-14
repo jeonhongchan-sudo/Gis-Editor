@@ -17,7 +17,9 @@ import {
   Sun,
   Moon,
   MapPin,
-  Database
+  Database,
+  ArrowDown,
+  RefreshCw
 } from 'lucide-react';
 import { Point2D, SnapPoint } from '../types/cad';
 import { PWAInstallButton } from './PWAInstallButton';
@@ -40,6 +42,7 @@ interface CoordinateBarProps {
   onToggleLayerPanel: () => void;
   onOpenHelp: () => void;
   onOpenManualPoint: () => void;
+  onRefreshApp?: () => Promise<void>;
   theme: 'light' | 'dark';
   setTheme: (t: 'light' | 'dark') => void;
 }
@@ -57,13 +60,137 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
   onToggleLayerPanel,
   onOpenHelp,
   onOpenManualPoint,
+  onRefreshApp,
   theme,
   setTheme
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const pullStateRef = React.useRef<{
+    active: boolean;
+    captured: boolean;
+    pointerId: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
+
+  const PULL_THRESHOLD = 52;
+  const MAX_PULL = 80;
+
+  const handleHeaderPointerDown = (e: React.PointerEvent<HTMLElement>) => {
+    if (isRefreshing || !onRefreshApp || mobileMenuOpen) return;
+    if (!e.isPrimary || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button, a, input, select, textarea')) return;
+
+    pullStateRef.current = {
+      active: true,
+      captured: false,
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY
+    };
+  };
+
+  const handleHeaderPointerMove = (e: React.PointerEvent<HTMLElement>) => {
+    const st = pullStateRef.current;
+    if (!st || !st.active || st.pointerId !== e.pointerId) return;
+
+    const dx = e.clientX - st.startX;
+    const dy = e.clientY - st.startY;
+
+    if (dy <= 6) {
+      if (pullDistance !== 0) setPullDistance(0);
+      return;
+    }
+
+    if (Math.abs(dx) > dy * 1.15 && pullDistance === 0) {
+      pullStateRef.current = null;
+      return;
+    }
+
+    if (!st.captured) {
+      st.captured = true;
+      try {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      } catch {
+        // ignore if unsupported
+      }
+    }
+
+    const damped = Math.min(MAX_PULL, Math.max(0, (dy - 6) * 0.6));
+    setPullDistance(damped);
+  };
+
+  const handleHeaderPointerEnd = async (e: React.PointerEvent<HTMLElement>) => {
+    const st = pullStateRef.current;
+    if (!st || st.pointerId !== e.pointerId) return;
+    pullStateRef.current = null;
+
+    if (pullDistance >= PULL_THRESHOLD && onRefreshApp && !isRefreshing) {
+      setIsRefreshing(true);
+      setPullDistance(PULL_THRESHOLD);
+      try {
+        await onRefreshApp();
+      } finally {
+        setIsRefreshing(false);
+        setPullDistance(0);
+      }
+    } else {
+      setPullDistance(0);
+    }
+  };
+
+  const readyToRefresh = pullDistance >= PULL_THRESHOLD;
+  const pullHeightClass =
+    pullDistance <= 0 && !isRefreshing
+      ? 'h-0 opacity-0'
+      : pullDistance < 20
+        ? 'h-6 opacity-85'
+        : pullDistance < 38
+          ? 'h-9 opacity-95'
+          : pullDistance < PULL_THRESHOLD && !isRefreshing
+            ? 'h-11 opacity-100'
+            : 'h-12 opacity-100';
 
   return (
-    <header className="relative z-30 flex flex-col border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md">
+    <header
+      onPointerDown={handleHeaderPointerDown}
+      onPointerMove={handleHeaderPointerMove}
+      onPointerUp={handleHeaderPointerEnd}
+      onPointerCancel={handleHeaderPointerEnd}
+      className="relative z-30 flex flex-col border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md touch-none"
+    >
+      {/* Pull-to-Refresh Drawer Bar */}
+      <div
+        className={`w-full overflow-hidden transition-all duration-150 flex items-center justify-center gap-2 text-xs font-semibold ${pullHeightClass} ${
+          isRefreshing
+            ? 'bg-sky-500/15 text-sky-600 dark:text-sky-300 border-b border-sky-500/30'
+            : readyToRefresh
+              ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 border-b border-emerald-500/30'
+              : 'bg-slate-100 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300'
+        }`}
+      >
+        {isRefreshing ? (
+          <>
+            <RefreshCw className="w-3.5 h-3.5 animate-spin text-sky-500" />
+            <span>최신 배포 버전 확인 및 새로고침 중...</span>
+          </>
+        ) : (
+          <>
+            <ArrowDown
+              className={`w-3.5 h-3.5 transition-transform duration-150 ${
+                readyToRefresh ? 'rotate-180 text-emerald-500' : 'text-sky-500'
+              }`}
+            />
+            <span>
+              {readyToRefresh ? '놓으면 최신 버전으로 새로고침' : '아래로 당겨서 새로고침'}
+            </span>
+          </>
+        )}
+      </div>
+
       {/* Top Main Navigation Bar */}
       <div className="flex items-center justify-between px-2.5 py-1.5 md:px-4 md:py-2">
         {/* Left: Brand Logo & Title */}
