@@ -4,7 +4,16 @@
  */
 
 import React, { useRef, useEffect, useCallback, useState, useMemo } from 'react';
-import { Focus, MapPin } from 'lucide-react';
+import { Focus, MapPin, Map as MapIcon, X, EyeOff, LocateFixed } from 'lucide-react';
+import { COORDINATE_SYSTEMS } from '../utils/projections';
+import {
+  VWorldMapLayer,
+  VWorldOverlayConfig,
+  VWORLD_LAYERS,
+  drawVWorldOverlay,
+  getDefaultKoreaCenterWorld,
+  lonLatToWorld
+} from '../utils/vworldTiles';
 import { 
   CADLayer, 
   CADLine, 
@@ -71,6 +80,8 @@ interface CADCanvasProps {
   activePoints: Point2D[];
   setActivePoints: React.Dispatch<React.SetStateAction<Point2D[]>>;
   zoomExtentsTrigger?: number | { timestamp: number; targetPoints?: Point2D[] } | null;
+  mapConfig: VWorldOverlayConfig;
+  onChangeMapConfig: React.Dispatch<React.SetStateAction<VWorldOverlayConfig>>;
 }
 
 export const CADCanvas: React.FC<CADCanvasProps> = ({
@@ -102,9 +113,30 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
   onLiveMeasurementChange,
   activePoints,
   setActivePoints,
-  zoomExtentsTrigger
+  zoomExtentsTrigger,
+  mapConfig,
+  onChangeMapConfig
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const offscreenMapCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [tileRenderTick, setTileRenderTick] = useState(0);
+  const tileRafRef = useRef<number | null>(null);
+  const [mapMenuOpen, setMapMenuOpen] = useState(false);
+  const [mapTileError, setMapTileError] = useState(false);
+  const mapLoadSuccessCountRef = useRef(0);
+
+  // Pure display-only live GPS tracking (never persisted to IndexedDB)
+  const [gpsEnabled, setGpsEnabled] = useState(false);
+  const [gpsFollow, setGpsFollow] = useState(false);
+  const [gpsRaw, setGpsRaw] = useState<{
+    lon: number;
+    lat: number;
+    accuracy: number;
+    heading: number | null;
+  } | null>(null);
+  const gpsWatchIdRef = useRef<number | null>(null);
+  const gpsFollowRef = useRef(false);
+  gpsFollowRef.current = gpsFollow;
 
   // Viewport state: CAD world coordinate at canvas center
   const [view, setView] = useState<{ panX: number; panY: number; zoom: number }>({
@@ -152,16 +184,157 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
   useEffect(() => {
     return () => {
       if (hintTimeoutRef.current) clearTimeout(hintTimeoutRef.current);
+      if (tileRafRef.current !== null) cancelAnimationFrame(tileRafRef.current);
+      if (gpsWatchIdRef.current !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
+        navigator.geolocation.clearWatch(gpsWatchIdRef.current);
+        gpsWatchIdRef.current = null;
+      }
     };
   }, []);
 
-  const showNodeHint = (msg: string) => {
+  const showNodeHint = useCallback((msg: string) => {
     if (hintTimeoutRef.current) clearTimeout(hintTimeoutRef.current);
     setNodeHintToast(msg);
     hintTimeoutRef.current = setTimeout(() => {
       setNodeHintToast(null);
     }, 2400);
-  };
+  }, []);
+
+  const scheduleTileRedraw = useCallback(() => {
+    mapLoadSuccessCountRef.current += 1;
+    setMapTileError(false);
+    if (tileRafRef.current !== null) return;
+    tileRafRef.current = requestAnimationFrame(() => {
+      tileRafRef.current = null;
+      setTileRenderTick(t => t + 1);
+    });
+  }, []);
+
+  const handleTileError = useCallback(() => {
+    if (mapLoadSuccessCountRef.current === 0) {
+      setMapTileError(true);
+    }
+  }, []);
+
+  const selectMapLayer = useCallback((nextLayer: VWorldMapLayer) => {
+    if (nextLayer !== 'off') {
+      mapLoadSuccessCountRef.current = 0;
+      setMapTileError(false);
+
+      const hasEntities =
+        points.length > 0 ||
+        lines.length > 0 ||
+        polylines.length > 0 ||
+        polygons.length > 0 ||
+        texts.length > 0;
+
+      if (!hasEntities && Math.abs(view.panX) < 5000 && Math.abs(view.panY) < 5000) {
+        const center = getDefaultKoreaCenterWorld(mapConfig.sourceCrs);
+        setView({ panX: center.x, panY: center.y, zoom: 0.7 });
+        showNodeHint('원점(0,0) 상태여서 서울 중심으로 지도를 표시합니다.');
+      } else if (hasEntities && Math.abs(view.panX) < 5000 && Math.abs(view.panY) < 5000) {
+        showNodeHint('로컬 상대좌표 도면은 실제 한국 TM 좌표와 위치가 다를 수 있습니다.');
+      }
+    } else {
+      setMapTileError(false);
+    }
+
+    onChangeMapConfig(prev => ({ ...prev, layer: nextLayer }));
+  }, [points.length, lines.length, polylines.length, polygons.length, texts.length, view.panX, view.panY, mapConfig.sourceCrs, onChangeMapConfig, showNodeHint]);
+
+  const gpsWorldPos = useMemo(() => {
+    if (!gpsEnabled || !gpsRaw) return null;
+    const pt = lonLatToWorld(gpsRaw.lon, gpsRaw.lat, mapConfig.sourceCrs);
+    if (!pt) return null;
+    return {
+      ...pt,
+      accuracy: gpsRaw.accuracy,
+      heading: gpsRaw.heading
+    };
+  }, [gpsEnabled, gpsRaw, mapConfig.sourceCrs]);
+
+  const sourceCrsRef = useRef(mapConfig.sourceCrs);
+  sourceCrsRef.current = mapConfig.sourceCrs;
+
+  const stopGpsWatch = useCallback(() => {
+    if (gpsWatchIdRef.current !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
+      navigator.geolocation.clearWatch(gpsWatchIdRef.current);
+      gpsWatchIdRef.current = null;
+    }
+    setGpsEnabled(false);
+    setGpsFollow(false);
+    setGpsRaw(null);
+  }, []);
+
+  const handleGpsButtonClick = useCallback(() => {
+    if (!gpsEnabled) {
+      if (typeof navigator === 'undefined' || !navigator.geolocation) {
+        showNodeHint('이 기기/브라우저에서는 GPS 위치 기능을 지원하지 않습니다.');
+        return;
+      }
+      setGpsEnabled(true);
+      setGpsFollow(true);
+      gpsFollowRef.current = true;
+      showNodeHint('내 위치를 찾는 중... (이동 시 파란 점이 따라 움직입니다)');
+
+      gpsWatchIdRef.current = navigator.geolocation.watchPosition(
+        pos => {
+          const { longitude, latitude, accuracy, heading } = pos.coords;
+          const validHeading = typeof heading === 'number' && Number.isFinite(heading) ? heading : null;
+          setGpsRaw({
+            lon: longitude,
+            lat: latitude,
+            accuracy: Number.isFinite(accuracy) ? accuracy : 20,
+            heading: validHeading
+          });
+
+          if (gpsFollowRef.current) {
+            const wp = lonLatToWorld(longitude, latitude, sourceCrsRef.current);
+            if (wp) {
+              setView(prev => ({
+                panX: wp.x,
+                panY: wp.y,
+                zoom: prev.zoom < 0.25 ? 1.5 : prev.zoom
+              }));
+            }
+          }
+        },
+        err => {
+          if (err.code === err.PERMISSION_DENIED) {
+            showNodeHint('위치 권한이 거부되었습니다. 브라우저 설정에서 위치 권한을 허용해 주세요.');
+            stopGpsWatch();
+          } else if (err.code === err.POSITION_UNAVAILABLE) {
+            showNodeHint('GPS 신호를 수신할 수 없습니다.');
+          } else {
+            showNodeHint('위치 수신이 지연되고 있습니다. 실외에서 다시 시도해 주세요.');
+          }
+        },
+        {
+          enableHighAccuracy: true,
+          maximumAge: 2500,
+          timeout: 15000
+        }
+      );
+      return;
+    }
+
+    if (!gpsFollow) {
+      setGpsFollow(true);
+      gpsFollowRef.current = true;
+      if (gpsWorldPos) {
+        setView(prev => ({
+          panX: gpsWorldPos.x,
+          panY: gpsWorldPos.y,
+          zoom: prev.zoom < 0.25 ? 1.5 : prev.zoom
+        }));
+      }
+      showNodeHint('내 위치 따라가기 켜짐 (한 번 더 누르면 종료)');
+      return;
+    }
+
+    stopGpsWatch();
+    showNodeHint('내 위치 표시를 종료했습니다.');
+  }, [gpsEnabled, gpsFollow, gpsWorldPos, showNodeHint, stopGpsWatch]);
 
   // Listen for Spacebar key to enable pan freely while drawing
   useEffect(() => {
@@ -624,6 +797,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     if (!canvas) return;
 
     if (isPanning && panStartRef.current) {
+      if (gpsFollowRef.current) setGpsFollow(false);
       const panStart = panStartRef.current;
       const dx = e.clientX - panStart.clientX;
       const dy = e.clientY - panStart.clientY;
@@ -1225,6 +1399,9 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 
         const dx = newMidX - touchStart.midX;
         const dy = newMidY - touchStart.midY;
+        if (gpsFollowRef.current && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
+          setGpsFollow(false);
+        }
 
         setView({
           panX: touchStart.panX - dx / targetZoom,
@@ -1300,12 +1477,31 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     ctx.save();
     ctx.scale(dpr, dpr);
 
-    // 1. Dark CAD Background
+    // 1. Dark/Light CAD Background
     ctx.fillStyle = theme === 'dark' ? '#090d16' : '#f8fafc';
     ctx.fillRect(0, 0, width, height);
 
+    // 1.5 VWorld WMTS Background Map Overlay (EPSG:3857 -> Korean TM Affine)
+    const mapActive = mapConfig.layer !== 'off';
+    if (mapActive) {
+      if (!offscreenMapCanvasRef.current) {
+        offscreenMapCanvasRef.current = document.createElement('canvas');
+      }
+      drawVWorldOverlay({
+        ctx,
+        offscreenCanvas: offscreenMapCanvasRef.current,
+        width,
+        height,
+        dpr,
+        view,
+        config: mapConfig,
+        onTileLoaded: scheduleTileRedraw,
+        onTileError: handleTileError
+      });
+    }
+
     // 2. Metric CAD Grid
-    drawCADGrid(ctx, width, height, view, theme);
+    drawCADGrid(ctx, width, height, view, theme, mapActive);
 
     const getScreen = (p: Point2D) => worldToScreen(p, width, height);
 
@@ -1366,10 +1562,17 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         }
         area = Math.abs(area) / 2.0;
 
-        ctx.fillStyle = isSelected ? '#fbbf24' : '#ffffff';
-        ctx.font = '11px Pretendard, sans-serif';
+        ctx.font = 'bold 11px Pretendard, sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText(`${area.toFixed(3)}㎡ (${(area / 3.305785).toFixed(3)}평)`, screenC.x, screenC.y);
+        const areaText = `${area.toFixed(3)}㎡ (${(area / 3.305785).toFixed(3)}평)`;
+        if (mapActive) {
+          ctx.lineJoin = 'round';
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = theme === 'dark' ? '#090d16' : '#ffffff';
+          ctx.strokeText(areaText, screenC.x, screenC.y);
+        }
+        ctx.fillStyle = isSelected ? '#fbbf24' : (theme === 'dark' ? '#ffffff' : '#0f172a');
+        ctx.fillText(areaText, screenC.x, screenC.y);
       }
     });
 
@@ -1735,9 +1938,15 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         ctx.rotate((-txt.rotation * Math.PI) / 180);
       }
       ctx.font = `${renderPxHeight}px Pretendard, sans-serif`;
-      ctx.fillStyle = isSelected ? '#fbbf24' : (txt.color || tLayer?.color || (theme === 'dark' ? '#ffffff' : '#1e293b'));
       ctx.textAlign = 'left';
       ctx.textBaseline = 'bottom';
+      if (mapActive) {
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = Math.max(2, Math.min(4.5, renderPxHeight * 0.2));
+        ctx.strokeStyle = theme === 'dark' ? '#090d16' : '#ffffff';
+        ctx.strokeText(txt.text, 4, 0);
+      }
+      ctx.fillStyle = isSelected ? '#fbbf24' : (txt.color || tLayer?.color || (theme === 'dark' ? '#ffffff' : '#1e293b'));
       ctx.fillText(txt.text, 4, 0);
 
       if (isSelected) {
@@ -2234,6 +2443,72 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       }
     }
 
+    // 9.5 Live GPS Location Dot (Pure Display Only)
+    if (gpsWorldPos) {
+      const sp = getScreen(gpsWorldPos);
+      ctx.save();
+
+      // Accuracy radius circle (skip huge low-precision IP radius > 500m)
+      if (gpsWorldPos.accuracy > 0 && gpsWorldPos.accuracy <= 500) {
+        const accPx = Math.max(10, gpsWorldPos.accuracy * view.zoom);
+        ctx.fillStyle = 'rgba(59, 130, 246, 0.14)';
+        ctx.strokeStyle = 'rgba(59, 130, 246, 0.48)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, accPx, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+
+      // Heading direction cone when moving
+      if (gpsWorldPos.heading !== null) {
+        const headingRad = ((gpsWorldPos.heading - 90) * Math.PI) / 180;
+        const coneR = 26;
+        const spread = Math.PI / 6;
+        const grad = ctx.createRadialGradient(sp.x, sp.y, 4, sp.x, sp.y, coneR);
+        grad.addColorStop(0, 'rgba(37, 99, 235, 0.55)');
+        grad.addColorStop(1, 'rgba(37, 99, 235, 0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.moveTo(sp.x, sp.y);
+        ctx.arc(sp.x, sp.y, coneR, headingRad - spread, headingRad + spread);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // White halo + vivid blue core dot
+      ctx.shadowColor = 'rgba(15, 23, 42, 0.45)';
+      ctx.shadowBlur = 6;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(sp.x, sp.y, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      ctx.fillStyle = '#2563eb';
+      ctx.beginPath();
+      ctx.arc(sp.x, sp.y, 5.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Compact accuracy badge
+      const accLabel = `내 위치 ±${Math.round(gpsWorldPos.accuracy)}m`;
+      ctx.font = 'bold 10px Pretendard, sans-serif';
+      const tw = ctx.measureText(accLabel).width;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+      ctx.strokeStyle = 'rgba(96, 165, 250, 0.7)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(sp.x - tw / 2 - 6, sp.y + 12, tw + 12, 18, 9);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#e0f2fe';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(accLabel, sp.x, sp.y + 21);
+
+      ctx.restore();
+    }
+
     // 10. Magnetic Snap Indicator
     if (activeSnap) {
       const snapSp = getScreen(activeSnap.point);
@@ -2241,7 +2516,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     }
 
     // 11. Scale Bar
-    drawScaleBar(ctx, height, view.zoom, theme);
+    drawScaleBar(ctx, height, view.zoom, theme, mapActive);
 
     ctx.restore();
   }, [
@@ -2269,8 +2544,15 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     rectDimSpec,
     circleDimSpec,
     activeLayerId,
-    theme
+    theme,
+    mapConfig,
+    tileRenderTick,
+    scheduleTileRedraw,
+    handleTileError,
+    gpsWorldPos
   ]);
+
+  const activeMapSpec = VWORLD_LAYERS.find(l => l.id === mapConfig.layer);
 
   return (
     <div className="relative w-full h-full overflow-hidden select-none touch-none">
@@ -2288,8 +2570,155 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         onDoubleClick={handleDoubleClick}
       />
 
-      {/* Floating AutoCAD Z-E (Zoom Extents) Button (icon only as requested) */}
-      <div className="absolute right-3.5 bottom-7 z-10 pointer-events-none flex flex-col items-end gap-1.5">
+      {/* VWorld Attribution Watermark when Map is Active */}
+      {mapConfig.layer !== 'off' && (
+        <div className="pointer-events-none absolute left-3 bottom-1 sm:bottom-2 z-10 px-2 py-0.5 rounded-md bg-slate-950/60 text-slate-200 text-[9px] font-sans backdrop-blur-sm border border-white/10">
+          © VWorld (국토교통부) · {mapConfig.sourceCrs}
+        </div>
+      )}
+
+      {/* Floating Map Overlay Selector + AutoCAD Z-E (Zoom Extents) Button */}
+      <div className="absolute right-3.5 bottom-20 sm:bottom-7 z-20 pointer-events-none flex flex-col items-end gap-2">
+        {mapMenuOpen && (
+          <div className="pointer-events-auto w-72 max-w-[calc(100vw-28px)] bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200 dark:border-slate-700/90 rounded-2xl shadow-2xl p-3 space-y-2.5 animate-in fade-in slide-in-from-bottom-2 duration-150">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
+              <div className="flex items-center gap-1.5">
+                <MapIcon className="w-4 h-4 text-sky-600 dark:text-sky-400" />
+                <span className="text-xs font-bold text-slate-900 dark:text-white">VWorld 배경지도</span>
+              </div>
+              <button
+                onClick={() => setMapMenuOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+                title="닫기"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-1.5">
+              <button
+                onClick={() => selectMapLayer('off')}
+                className={`px-2 py-1.5 rounded-xl text-[11px] font-semibold flex items-center justify-center gap-1 border transition ${
+                  mapConfig.layer === 'off'
+                    ? 'bg-slate-800 dark:bg-slate-100 text-white dark:text-slate-900 border-slate-800 dark:border-slate-100 shadow-sm'
+                    : 'bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                }`}
+              >
+                <EyeOff className="w-3 h-3" />
+                <span>끄기</span>
+              </button>
+              {VWORLD_LAYERS.map(layerSpec => {
+                const isSelected = mapConfig.layer === layerSpec.id;
+                return (
+                  <button
+                    key={layerSpec.id}
+                    onClick={() => selectMapLayer(isSelected ? 'off' : layerSpec.id)}
+                    className={`px-2 py-1.5 rounded-xl text-[11px] font-semibold border transition truncate ${
+                      isSelected
+                        ? 'bg-sky-600 text-white border-sky-500 shadow-md shadow-sky-600/25'
+                        : 'bg-slate-50 dark:bg-slate-800/70 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-sky-50 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    {layerSpec.shortLabel}
+                  </button>
+                );
+              })}
+            </div>
+
+            {mapConfig.layer !== 'off' && (
+              <div className="space-y-2 pt-1 border-t border-slate-100 dark:border-slate-800">
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="font-semibold text-slate-600 dark:text-slate-300">지도 투명도</span>
+                    <span className="font-mono font-bold text-sky-600 dark:text-sky-400">
+                      {Math.round(mapConfig.opacity * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={20}
+                    max={100}
+                    step={5}
+                    value={Math.round(mapConfig.opacity * 100)}
+                    onChange={e => {
+                      const pct = Number(e.target.value);
+                      onChangeMapConfig(prev => ({ ...prev, opacity: pct / 100 }));
+                    }}
+                    className="w-full accent-sky-500 cursor-pointer h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+                    도면 좌표계 (TM)
+                  </label>
+                  <select
+                    value={mapConfig.sourceCrs}
+                    onChange={e => onChangeMapConfig(prev => ({ ...prev, sourceCrs: e.target.value }))}
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-sky-300 text-[11px] rounded-xl px-2 py-1.5 outline-none font-semibold"
+                  >
+                    {Object.values(COORDINATE_SYSTEMS)
+                      .filter(cs => cs.isTM)
+                      .map(cs => (
+                        <option key={cs.code} value={cs.code}>
+                          {cs.code} · {cs.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+
+                {mapTileError && (
+                  <div className="p-2 rounded-xl bg-amber-50 dark:bg-amber-950/70 border border-amber-200 dark:border-amber-700/70 text-[10px] text-amber-800 dark:text-amber-300 leading-relaxed">
+                    지도 타일을 불러오지 못했습니다. 네트워크 상태 또는 VWorld API 키 허용 도메인을 확인해 주세요.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        <button
+          onClick={handleGpsButtonClick}
+          title={
+            !gpsEnabled
+              ? '현재 내 위치 표시 (실시간 이동)'
+              : gpsFollow
+                ? '내 위치 추적 중 (누르면 끄기)'
+                : '내 위치로 화면 이동'
+          }
+          className={`pointer-events-auto relative flex items-center justify-center p-2.5 rounded-2xl shadow-xl backdrop-blur-md border transition active:scale-95 ${
+            gpsEnabled && gpsFollow
+              ? 'bg-blue-600 hover:bg-blue-500 text-white border-blue-400 shadow-blue-600/35'
+              : gpsEnabled
+                ? 'bg-blue-50 dark:bg-slate-900 text-blue-600 dark:text-blue-400 border-blue-400 dark:border-blue-500 shadow-blue-500/20'
+                : 'bg-white/90 dark:bg-slate-900/90 hover:bg-blue-600 text-slate-700 dark:text-slate-200 hover:text-white border-slate-200 dark:border-slate-700 hover:border-blue-500'
+          }`}
+        >
+          <LocateFixed className={`w-5 h-5 ${gpsEnabled && !gpsRaw ? 'animate-pulse' : ''}`} />
+          {gpsEnabled && (
+            <span
+              className={`absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border border-white dark:border-slate-900 ${
+                gpsFollow ? 'bg-emerald-400 animate-ping' : 'bg-blue-500'
+              }`}
+            />
+          )}
+        </button>
+
+        <button
+          onClick={() => setMapMenuOpen(prev => !prev)}
+          title="VWorld 배경지도 설정"
+          className={`pointer-events-auto flex items-center gap-1.5 px-2.5 py-2.5 rounded-2xl shadow-xl backdrop-blur-md border transition active:scale-95 ${
+            mapConfig.layer !== 'off'
+              ? 'bg-sky-600 hover:bg-sky-500 text-white border-sky-400 shadow-sky-600/30'
+              : 'bg-white/90 dark:bg-slate-900/90 hover:bg-sky-600 text-slate-700 dark:text-slate-200 hover:text-white border-slate-200 dark:border-slate-700 hover:border-sky-500'
+          }`}
+        >
+          <MapIcon className="w-5 h-5" />
+          {activeMapSpec && (
+            <span className="text-[11px] font-bold pr-0.5">{activeMapSpec.shortLabel}</span>
+          )}
+        </button>
+
         <button
           onClick={() => zoomExtents()}
           title="전체 맞춤"
@@ -2317,7 +2746,8 @@ function drawCADGrid(
   width: number,
   height: number,
   view: { panX: number; panY: number; zoom: number },
-  theme: 'light' | 'dark' = 'dark'
+  theme: 'light' | 'dark' = 'dark',
+  mapActive: boolean = false
 ) {
   const minPixelsBetweenLines = 60;
   const rawSpacing = minPixelsBetweenLines / view.zoom;
@@ -2336,7 +2766,9 @@ function drawCADGrid(
   const startX = Math.floor(left / spacing) * spacing;
   const startY = Math.floor(bottom / spacing) * spacing;
 
-  ctx.strokeStyle = theme === 'dark' ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.06)';
+  ctx.strokeStyle = mapActive
+    ? (theme === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(15, 23, 42, 0.05)')
+    : (theme === 'dark' ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.06)');
   ctx.lineWidth = 1;
   ctx.beginPath();
 
@@ -2354,7 +2786,9 @@ function drawCADGrid(
   ctx.stroke();
 
   ctx.font = '9px JetBrains Mono, monospace';
-  ctx.fillStyle = theme === 'dark' ? 'rgba(148, 163, 184, 0.45)' : 'rgba(71, 85, 105, 0.5)';
+  ctx.fillStyle = mapActive
+    ? (theme === 'dark' ? 'rgba(226, 232, 240, 0.8)' : 'rgba(15, 23, 42, 0.75)')
+    : (theme === 'dark' ? 'rgba(148, 163, 184, 0.45)' : 'rgba(71, 85, 105, 0.5)');
   ctx.textAlign = 'left';
 
   for (let x = startX; x <= right; x += spacing * 2) {
@@ -2440,7 +2874,8 @@ function drawScaleBar(
   ctx: CanvasRenderingContext2D,
   height: number,
   zoom: number,
-  theme: 'light' | 'dark' = 'dark'
+  theme: 'light' | 'dark' = 'dark',
+  mapActive: boolean = false
 ) {
   const targetPixels = 100;
   const metersRaw = targetPixels / zoom;
@@ -2453,9 +2888,22 @@ function drawScaleBar(
 
   const barPixels = barMeters * zoom;
   const startX = 20;
-  const startY = height - 20;
+  const startY = mapActive ? height - 30 : height - 20;
 
-  ctx.strokeStyle = '#f8fafc';
+  if (mapActive) {
+    ctx.strokeStyle = theme === 'dark' ? 'rgba(9, 13, 22, 0.85)' : 'rgba(255, 255, 255, 0.9)';
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    ctx.lineTo(startX + barPixels, startY);
+    ctx.moveTo(startX, startY - 4);
+    ctx.lineTo(startX, startY + 4);
+    ctx.moveTo(startX + barPixels, startY - 4);
+    ctx.lineTo(startX + barPixels, startY + 4);
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = theme === 'dark' ? '#f8fafc' : '#0f172a';
   ctx.lineWidth = 2.5;
   ctx.beginPath();
   ctx.moveTo(startX, startY);
@@ -2466,11 +2914,17 @@ function drawScaleBar(
   ctx.lineTo(startX + barPixels, startY + 4);
   ctx.stroke();
 
-  ctx.font = '10px JetBrains Mono, monospace';
-  ctx.fillStyle = theme === 'dark' ? '#f8fafc' : '#475569';
+  ctx.font = 'bold 10px JetBrains Mono, monospace';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
   const label = barMeters >= 1000 ? `${(barMeters / 1000).toFixed(3)} km` : `${barMeters.toFixed(3)} m`;
+  if (mapActive) {
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = theme === 'dark' ? '#090d16' : '#ffffff';
+    ctx.strokeText(label, startX + barPixels / 2, startY - 6);
+  }
+  ctx.fillStyle = theme === 'dark' ? '#f8fafc' : '#0f172a';
   ctx.fillText(label, startX + barPixels / 2, startY - 6);
 }
 

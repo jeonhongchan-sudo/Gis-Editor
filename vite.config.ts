@@ -93,6 +93,20 @@ export default defineConfig(() => {
                 },
               },
             },
+            {
+              urlPattern: /^https:\/\/api\.vworld\.kr\/req\/wmts\/.*/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'vworld-wmts-tiles',
+                expiration: {
+                  maxEntries: 600,
+                  maxAgeSeconds: 60 * 60 * 24 * 7,
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
           ],
         },
         devOptions: {

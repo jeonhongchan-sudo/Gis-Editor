@@ -14,7 +14,6 @@ import {
   Info,
   FileText
 } from 'lucide-react';
-import JSZip from 'jszip';
 import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText } from '../types/cad';
 import { downloadBlob, downloadTextFile, exportToShapefileZip } from '../utils/shpExporter';
 import { exportToGeoJson } from '../utils/geoJsonExporter';
@@ -27,6 +26,7 @@ interface ExportModalProps {
   polylines: CADPolyline[];
   polygons: CADPolygon[];
   texts: CADText[];
+  defaultSourceCrs?: string;
   onClose: () => void;
 }
 
@@ -37,6 +37,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   polylines,
   polygons,
   texts,
+  defaultSourceCrs,
   onClose
 }) => {
   const [isExportingShp, setIsExportingShp] = useState(false);
@@ -55,7 +56,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [csvFileName, setCsvFileName] = useState<string>(() => `현장성과_${todayStr}`);
   const [geoJsonFileName, setGeoJsonFileName] = useState<string>(() => `현장성과_${todayStr}`);
 
-  const totalPointsCount = points.length + texts.length;
   const totalLinesCount = lines.length + polylines.length + polygons.length;
   const isProcessingRef = useRef(false);
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -74,108 +74,33 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   // GeoJSON Specific states
   const [geoJsonMode, setGeoJsonMode] = useState<'backup' | 'wgs84'>('backup');
-  const [sourceCrs, setSourceCrs] = useState<string>('EPSG:5186');
+  const [sourceCrs, setSourceCrs] = useState<string>(() => defaultSourceCrs || 'EPSG:5186');
 
-  // 0. Export GeoJSON (Backup TM or Mobile GIS Map WGS84)
-  const handleExportGeoJson = async (variant: 'auto' | 'points' | 'lines' | 'zip' | 'combined' = 'auto') => {
+  // 0. Export GeoJSON (Backup TM or Single Map WGS84)
+  const handleExportGeoJson = async () => {
     if (isProcessingRef.current) return;
     try {
       isProcessingRef.current = true;
 
       const isWgs84 = geoJsonMode === 'wgs84';
+      const geojson = exportToGeoJson({
+        points,
+        lines,
+        polylines,
+        polygons,
+        texts,
+        layers,
+        targetCrs: isWgs84 ? 'EPSG:4326' : undefined,
+        sourceCrs: isWgs84 ? sourceCrs : undefined
+      });
+
+      const jsonStr = JSON.stringify(geojson, null, 2);
       const cleanName = (geoJsonFileName.trim() || `field_data_${todayStr}`).replace(/\.geojson$/i, '');
+      const suffix = isWgs84 ? '_wgs84' : '_backup';
+      const filename = `${cleanName}${suffix}.geojson`;
 
-      if (!isWgs84 || variant === 'combined') {
-        const geojson = exportToGeoJson({
-          points,
-          lines,
-          polylines,
-          polygons,
-          texts,
-          layers,
-          targetCrs: isWgs84 ? 'EPSG:4326' : undefined,
-          sourceCrs: isWgs84 ? sourceCrs : undefined,
-          geometryFilter: 'all'
-        });
-
-        const jsonStr = JSON.stringify(geojson, null, 2);
-        const suffix = isWgs84 ? '_wgs84' : '_backup';
-        const filename = `${cleanName}${suffix}.geojson`;
-
-        await downloadTextFile(jsonStr, filename, 'utf-8', 'application/geo+json');
-        showSuccess(`${isWgs84 ? '통합 WGS84 지도용' : '기기 통합 백업'} 파일(${filename})이 저장되었습니다.`);
-        return;
-      }
-
-      if (variant === 'points' || variant === 'lines') {
-        const geojson = exportToGeoJson({
-          points,
-          lines,
-          polylines,
-          polygons,
-          texts,
-          layers,
-          targetCrs: 'EPSG:4326',
-          sourceCrs,
-          geometryFilter: variant
-        });
-        const jsonStr = JSON.stringify(geojson, null, 2);
-        const suffix = variant === 'points' ? '_points_wgs84' : '_lines_wgs84';
-        const filename = `${cleanName}${suffix}.geojson`;
-        await downloadTextFile(jsonStr, filename, 'utf-8', 'application/geo+json');
-        showSuccess(`${variant === 'points' ? '점·텍스트 전용' : '선 전용'} GeoJSON(${filename})이 저장되었습니다.`);
-        return;
-      }
-
-      // variant === 'zip' (or 'auto' in wgs84): bundle separated Point & Line GeoJSON files cleanly
-      const zip = new JSZip();
-      let fileCount = 0;
-
-      if (totalPointsCount > 0) {
-        const ptsGeoJson = exportToGeoJson({
-          points,
-          lines,
-          polylines,
-          polygons,
-          texts,
-          layers,
-          targetCrs: 'EPSG:4326',
-          sourceCrs,
-          geometryFilter: 'points'
-        });
-        if (ptsGeoJson.features.length > 0) {
-          zip.file(`${cleanName}_points_wgs84.geojson`, JSON.stringify(ptsGeoJson, null, 2));
-          fileCount++;
-        }
-      }
-
-      if (totalLinesCount > 0) {
-        const linesGeoJson = exportToGeoJson({
-          points,
-          lines,
-          polylines,
-          polygons,
-          texts,
-          layers,
-          targetCrs: 'EPSG:4326',
-          sourceCrs,
-          geometryFilter: 'lines'
-        });
-        if (linesGeoJson.features.length > 0) {
-          zip.file(`${cleanName}_lines_wgs84.geojson`, JSON.stringify(linesGeoJson, null, 2));
-          fileCount++;
-        }
-      }
-
-      if (fileCount === 0) {
-        alert('변환 가능한 유효 좌표 데이터가 없습니다.');
-        return;
-      }
-
-      const blob = await zip.generateAsync({ type: 'blob' });
-      const zipName = `${cleanName}_wgs84_geojson.zip`;
-      await downloadBlob(blob, zipName);
-      showSuccess(`점·선 분리 GeoJSON 묶음(${zipName})이 저장되었습니다.`);
+      await downloadTextFile(jsonStr, filename, 'utf-8', 'application/geo+json');
+      showSuccess(`${isWgs84 ? 'WGS84 지도용' : '기기 통합 백업'} 파일(${filename})이 저장되었습니다.`);
     } catch (err: any) {
       alert('GeoJSON 생성 중 오류가 발생했습니다: ' + err.message);
     } finally {
@@ -364,7 +289,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
                 {geoJsonMode === 'backup' 
                   ? '모든 레이어와 속성을 유지하여 다른 기기(폰, PC)에서 그대로 불러올 수 있습니다.' 
-                  : '스마트폰 GIS·지도 앱에서 점(텍스트)과 선이 누락 없이 표시되도록 표준 라벨·색상 속성 및 점/선 분리 파일을 제공합니다.'}
+                  : '선택하신 좌표계를 위경도(WGS84)로 변환하여 외부 지도 앱용 단일 GeoJSON 파일을 생성합니다.'}
               </p>
             </div>
 
@@ -379,7 +304,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   className="bg-transparent text-sky-700 dark:text-sky-400 font-semibold outline-none flex-1 min-w-0"
                 />
                 <span className="text-[11px] font-mono text-slate-400 dark:text-slate-500 shrink-0">
-                  {geoJsonMode === 'wgs84' ? '_points/lines_wgs84.geojson' : '_backup.geojson'}
+                  {geoJsonMode === 'wgs84' ? '_wgs84.geojson' : '_backup.geojson'}
                 </span>
               </div>
 
@@ -402,55 +327,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               )}
             </div>
 
-            {geoJsonMode === 'backup' ? (
-              <button
-                onClick={() => handleExportGeoJson('auto')}
-                disabled={points.length === 0 && totalLinesCount === 0 && polygons.length === 0 && texts.length === 0}
-                className="w-full py-2.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-md shadow-sky-600/30 flex items-center justify-center gap-1.5 transition active:scale-98"
-              >
-                <Download className="w-4 h-4" />
-                백업용 GeoJSON 다운로드
-              </button>
-            ) : (
-              <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => handleExportGeoJson('points')}
-                    disabled={totalPointsCount === 0}
-                    className="py-2.5 px-3 bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white text-xs font-semibold rounded-xl shadow-md shadow-amber-600/20 flex items-center justify-center gap-1.5 transition active:scale-98"
-                  >
-                    <Download className="w-3.5 h-3.5 shrink-0" />
-                    <span>점·텍스트 ({totalPointsCount})</span>
-                  </button>
-                  <button
-                    onClick={() => handleExportGeoJson('lines')}
-                    disabled={totalLinesCount === 0}
-                    className="py-2.5 px-3 bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white text-xs font-semibold rounded-xl shadow-md shadow-sky-600/20 flex items-center justify-center gap-1.5 transition active:scale-98"
-                  >
-                    <Download className="w-3.5 h-3.5 shrink-0" />
-                    <span>선·폴리선 ({totalLinesCount})</span>
-                  </button>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => handleExportGeoJson('zip')}
-                    disabled={totalPointsCount === 0 && totalLinesCount === 0}
-                    className="py-2 px-2.5 bg-white dark:bg-slate-900 hover:bg-sky-50 dark:hover:bg-slate-800 disabled:opacity-40 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 text-[11px] font-semibold rounded-xl flex items-center justify-center gap-1.5 transition"
-                  >
-                    <Archive className="w-3.5 h-3.5 shrink-0" />
-                    <span>점·선 분리 ZIP 저장</span>
-                  </button>
-                  <button
-                    onClick={() => handleExportGeoJson('combined')}
-                    disabled={totalPointsCount === 0 && totalLinesCount === 0}
-                    className="py-2 px-2.5 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 text-[11px] font-semibold rounded-xl flex items-center justify-center gap-1.5 transition"
-                  >
-                    <Download className="w-3.5 h-3.5 shrink-0" />
-                    <span>통합 1파일 (.geojson)</span>
-                  </button>
-                </div>
-              </div>
-            )}
+            <button
+              onClick={handleExportGeoJson}
+              disabled={points.length === 0 && totalLinesCount === 0 && polygons.length === 0 && texts.length === 0}
+              className="w-full py-2.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-md shadow-sky-600/30 flex items-center justify-center gap-1.5 transition active:scale-98"
+            >
+              <Download className="w-4 h-4" />
+              {geoJsonMode === 'wgs84' ? '지도용 WGS84 GeoJSON 다운로드' : '백업용 GeoJSON 다운로드'}
+            </button>
           </div>
 
           {/* Option 1: ESRI Shapefile ZIP (SHP) */}

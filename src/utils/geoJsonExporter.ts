@@ -15,7 +15,6 @@ interface GeoJsonExportOptions {
   layers: CADLayer[];
   targetCrs?: string; // e.g. "EPSG:4326" for WGS84
   sourceCrs?: string; // The TM CRS to convert from
-  geometryFilter?: 'all' | 'points' | 'lines';
 }
 
 function normalizeHexColor(val: unknown, fallback = '#38bdf8'): string {
@@ -58,8 +57,7 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
     texts = [],
     layers = [],
     targetCrs,
-    sourceCrs,
-    geometryFilter = 'all'
+    sourceCrs
   } = options;
 
   const isWgs84 = targetCrs === 'EPSG:4326';
@@ -131,11 +129,8 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
   };
 
   const features: any[] = [];
-  const includePoints = geometryFilter === 'all' || geometryFilter === 'points';
-  const includeLines = geometryFilter === 'all' || geometryFilter === 'lines';
 
-  if (includePoints) {
-    // 1. Export Points (including DXF/SHP text points)
+  // 1. Export Points (including DXF/SHP text points)
     points.forEach(p => {
       if (!p) return;
       const coords = projectPoint(p);
@@ -231,11 +226,9 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
               ...pickCustomAttributes(t.attributes)
             }
       });
-    });
-  }
+  });
 
-  if (includeLines) {
-    // 3. Export Lines
+  // 3. Export Lines
     lines.forEach(l => {
       if (!l || !l.start || !l.end) return;
       const c1 = projectPoint(l.start);
@@ -368,9 +361,8 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
               isClosed: true,
               ...pickCustomAttributes(pg.attributes)
             }
-      });
     });
-  }
+  });
 
   if (isWgs84) {
     return {

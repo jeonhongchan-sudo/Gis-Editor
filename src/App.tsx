@@ -8,6 +8,7 @@ import { Trash2, Ruler, X, Check, Layers, CheckSquare, Database, Unlink, Scissor
 import { distance2D } from './utils/geometry';
 import { CADGeometryMutation, createCirclePolyline, createRectangleByDimensions, joinLinearEntities } from './utils/cadOperations';
 import { forceRefreshAppFromServer } from './utils/pwaRefresh';
+import { VWorldMapLayer, VWorldOverlayConfig } from './utils/vworldTiles';
 import { 
   CADLayer, 
   CADLine, 
@@ -55,6 +56,25 @@ export default function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     return (localStorage.getItem('theme') as 'light' | 'dark') || 'dark';
   });
+
+  // VWorld Background Map Overlay Config
+  const [mapConfig, setMapConfig] = useState<VWorldOverlayConfig>(() => {
+    const savedLayer = localStorage.getItem('vworld_map_layer') as VWorldMapLayer | null;
+    const savedOpacity = Number(localStorage.getItem('vworld_map_opacity'));
+    const savedCrs = localStorage.getItem('vworld_source_crs');
+    const validLayers: VWorldMapLayer[] = ['off', 'Base', 'Satellite', 'Hybrid', 'gray', 'midnight'];
+    return {
+      layer: savedLayer && validLayers.includes(savedLayer) ? savedLayer : 'off',
+      opacity: Number.isFinite(savedOpacity) && savedOpacity >= 0.2 && savedOpacity <= 1 ? savedOpacity : 0.75,
+      sourceCrs: savedCrs || 'EPSG:5186'
+    };
+  });
+
+  useEffect(() => {
+    localStorage.setItem('vworld_map_layer', mapConfig.layer);
+    localStorage.setItem('vworld_map_opacity', String(mapConfig.opacity));
+    localStorage.setItem('vworld_source_crs', mapConfig.sourceCrs);
+  }, [mapConfig]);
 
   // On Mount: Load last project if exists
   useEffect(() => {
@@ -1005,6 +1025,8 @@ export default function App() {
           onLiveMeasurementChange={setLiveMeasurement}
           activePoints={activePoints} setActivePoints={setActivePoints}
           zoomExtentsTrigger={zoomExtentsTrigger}
+          mapConfig={mapConfig}
+          onChangeMapConfig={setMapConfig}
         />
 
         {/* CAD Toast Feedback */}
@@ -1591,6 +1613,7 @@ export default function App() {
       {showExportModal && (
         <ExportModal
           layers={layers} points={points} lines={lines} polylines={polylines} polygons={polygons} texts={texts}
+          defaultSourceCrs={mapConfig.sourceCrs}
           onClose={() => setShowExportModal(false)}
         />
       )}
