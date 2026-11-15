@@ -3,21 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   X, 
   Download, 
-  Upload,
   Archive, 
   FileSpreadsheet, 
-  Save, 
   Check, 
-  Layers,
   Globe2,
   Info,
   FileText
 } from 'lucide-react';
-import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText, ProjectState } from '../types/cad';
+import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText } from '../types/cad';
 import { downloadBlob, downloadTextFile, exportToShapefileZip } from '../utils/shpExporter';
 import { exportToGeoJson } from '../utils/geoJsonExporter';
 import { COORDINATE_SYSTEMS } from '../utils/projections';
@@ -45,7 +42,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [exportSuccessMsg, setExportSuccessMsg] = useState<string | null>(null);
 
   // Encoding states
-  const [shpEncoding, setShpEncoding] = useState<'utf-8' | 'euc-kr'>('euc-kr');
+  const shpEncoding = 'euc-kr' as const;
   const [csvEncoding, setCsvEncoding] = useState<'utf-8' | 'euc-kr' | 'utf-8-bom'>('euc-kr');
 
   // Custom User Filename States
@@ -59,10 +56,18 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   const totalLinesCount = lines.length + polylines.length + polygons.length;
   const isProcessingRef = useRef(false);
+  const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (successTimerRef.current) clearTimeout(successTimerRef.current);
+    };
+  }, []);
 
   const showSuccess = (msg: string) => {
+    if (successTimerRef.current) clearTimeout(successTimerRef.current);
     setExportSuccessMsg(msg);
-    setTimeout(() => setExportSuccessMsg(null), 3000);
+    successTimerRef.current = setTimeout(() => setExportSuccessMsg(null), 3000);
   };
 
   // GeoJSON Specific states
@@ -133,12 +138,25 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     try {
       isProcessingRef.current = true;
       
+      const HIDDEN_DXF_CSV_KEYS = new Set([
+        'dxf_type', 'origin', 'handle', 'blockname',
+        'rotation', 'txt_halign', 'txt_valign', 'txt_xscale',
+        'mtext_w', 'mtext_att', 'mtext_dir',
+        'blk_sx', 'blk_sy',
+        'line_type', 'lt_scale', 'lineweight', 'dxf_aci',
+        'pl_width', 'elevation', 'is_closed',
+        'cir_cx', 'cir_cy', 'cir_r', 'arc_sang', 'arc_eang'
+      ]);
+
       // Collect all dynamic attribute keys from points
       const customPtKeysSet = new Set<string>();
       points.forEach(p => {
         if (p.attributes) {
           Object.keys(p.attributes).forEach(k => {
-            if (k.trim()) customPtKeysSet.add(k.trim());
+            const trimmed = k.trim();
+            if (trimmed && !HIDDEN_DXF_CSV_KEYS.has(trimmed.toLowerCase())) {
+              customPtKeysSet.add(trimmed);
+            }
           });
         }
       });

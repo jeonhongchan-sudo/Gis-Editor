@@ -5,7 +5,6 @@
 
 import JSZip from 'jszip';
 import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, Point2D } from '../types/cad';
-import { COORDINATE_SYSTEMS } from './projections';
 
 interface ShpFeaturePoint {
   x: number;
@@ -316,6 +315,79 @@ export interface SHPExportBundleOptions {
   encoding?: 'utf-8' | 'euc-kr';
 }
 
+const DXF_COMPACT_FIELD_SPECS: Record<string, { type: 'C' | 'N'; length: number; decimals: number }> = {
+  dxf_type: { type: 'C', length: 16, decimals: 0 },
+  origin: { type: 'C', length: 16, decimals: 0 },
+  handle: { type: 'C', length: 24, decimals: 0 },
+  blockname: { type: 'C', length: 64, decimals: 0 },
+  line_type: { type: 'C', length: 32, decimals: 0 },
+  'marker-symbol': { type: 'C', length: 24, decimals: 0 },
+  'marker-size': { type: 'C', length: 12, decimals: 0 },
+  dxf_aci: { type: 'N', length: 6, decimals: 0 },
+  lineweight: { type: 'N', length: 6, decimals: 0 },
+  txt_halign: { type: 'N', length: 6, decimals: 0 },
+  txt_valign: { type: 'N', length: 6, decimals: 0 },
+  mtext_att: { type: 'N', length: 6, decimals: 0 },
+  mtext_dir: { type: 'N', length: 6, decimals: 0 },
+  is_closed: { type: 'N', length: 6, decimals: 0 },
+  rotation: { type: 'N', length: 10, decimals: 4 },
+  lt_scale: { type: 'N', length: 10, decimals: 4 },
+  txt_xscale: { type: 'N', length: 10, decimals: 4 },
+  mtext_w: { type: 'N', length: 10, decimals: 4 },
+  blk_sx: { type: 'N', length: 10, decimals: 4 },
+  blk_sy: { type: 'N', length: 10, decimals: 4 },
+  pl_width: { type: 'N', length: 10, decimals: 4 },
+  arc_sang: { type: 'N', length: 10, decimals: 4 },
+  arc_eang: { type: 'N', length: 10, decimals: 4 },
+  elevation: { type: 'N', length: 14, decimals: 4 },
+  cir_cx: { type: 'N', length: 14, decimals: 4 },
+  cir_cy: { type: 'N', length: 14, decimals: 4 },
+  cir_r: { type: 'N', length: 14, decimals: 4 }
+};
+
+function getDbfFieldSpec(
+  rawKey: string,
+  dbfName: string
+): { name: string; type: 'C' | 'N'; length: number; decimals: number } {
+  const spec = DXF_COMPACT_FIELD_SPECS[rawKey.trim().toLowerCase()];
+  if (spec) {
+    return { name: dbfName, type: spec.type, length: spec.length, decimals: spec.decimals };
+  }
+  return { name: dbfName, type: 'C', length: 254, decimals: 0 };
+}
+
+function packCustomDbfFields(
+  rawKeys: string[],
+  standardFields: { name: string; type: 'C' | 'N'; length: number; decimals: number }[],
+  usedUpperNames: Set<string>,
+  encoding: 'utf-8' | 'euc-kr'
+): { mappings: { rawKey: string; dbfName: string }[]; fields: { name: string; type: 'C' | 'N'; length: number; decimals: number }[] } {
+  const MAX_DBF_RECORD_BYTES = 3950;
+  let currentRecordBytes = 1 + standardFields.reduce((sum, f) => sum + f.length, 0);
+  const fields = [...standardFields];
+  const mappings: { rawKey: string; dbfName: string }[] = [];
+
+  // Pack compact DXF round-trip keys first so they are never crowded out by long 254-byte OD fields
+  const orderedKeys = [
+    ...rawKeys.filter(k => !!DXF_COMPACT_FIELD_SPECS[k.trim().toLowerCase()]),
+    ...rawKeys.filter(k => !DXF_COMPACT_FIELD_SPECS[k.trim().toLowerCase()])
+  ];
+
+  for (const rawKey of orderedKeys) {
+    const tentativeSpec = getDbfFieldSpec(rawKey, rawKey);
+    if (currentRecordBytes + tentativeSpec.length > MAX_DBF_RECORD_BYTES) {
+      continue;
+    }
+    const dbfName = makeUniqueDbfFieldName(rawKey, usedUpperNames, encoding);
+    const fieldDef = { ...tentativeSpec, name: dbfName };
+    fields.push(fieldDef);
+    mappings.push({ rawKey, dbfName });
+    currentRecordBytes += fieldDef.length;
+  }
+
+  return { mappings, fields };
+}
+
 /**
  * Export CAD data as complete ESRI Shapefile ZIP bundle with .shp, .shx, .dbf, and .prj
  */
@@ -337,7 +409,7 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
   const validPoints = points.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
   if (validPoints.length > 0) {
     const standardPointKeysLower = new Set([
-      'id', 'textstring', 'textheight', 'height', 'name', 'title',
+      'id', 'textstring', 'textheight', 'height', 'rotation', 'name', 'title',
       'layer', 'layerid', 'color', 'marker-color', 'stroke', 'stroke-width',
       'z', 'dxftype', 'issurveynode'
     ]);
@@ -352,13 +424,22 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
         });
       }
     });
-    const customPtRawKeys = Array.from(customPtFieldRawKeysSet).slice(0, 15);
 
-    const usedPtFieldNames = new Set<string>(['ID', 'TEXTSTRING', 'TEXTHEIGHT', 'LAYER', 'Z']);
-    const customPtKeyMappings = customPtRawKeys.map(rawKey => ({
-      rawKey,
-      dbfName: makeUniqueDbfFieldName(rawKey, usedPtFieldNames, encoding)
-    }));
+    const standardPtDbfFields: { name: string; type: 'C' | 'N'; length: number; decimals: number }[] = [
+      { name: 'ID', type: 'N', length: 10, decimals: 0 },
+      { name: 'TEXTSTRING', type: 'C', length: 254, decimals: 0 },
+      { name: 'TEXTHEIGHT', type: 'N', length: 8, decimals: 2 },
+      { name: 'ROTATION', type: 'N', length: 10, decimals: 4 },
+      { name: 'LAYER', type: 'C', length: 254, decimals: 0 },
+      { name: 'Z', type: 'N', length: 12, decimals: 3 }
+    ];
+    const usedPtFieldNames = new Set<string>(['ID', 'TEXTSTRING', 'TEXTHEIGHT', 'ROTATION', 'LAYER', 'Z']);
+    const { mappings: customPtKeyMappings, fields: dbfFields } = packCustomDbfFields(
+      Array.from(customPtFieldRawKeysSet),
+      standardPtDbfFields,
+      usedPtFieldNames,
+      encoding
+    );
 
     const ptFeatures: ShpFeaturePoint[] = validPoints.map((p, idx) => {
       const a = p.attributes || {};
@@ -367,11 +448,14 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
       ).trim();
       const rawH = Number(a.TEXTHEIGHT ?? a.textheight ?? a.HEIGHT ?? a.height);
       const textHeightVal = Number.isFinite(rawH) && rawH > 0 ? rawH : 1;
+      const rawRot = Number(a.ROTATION ?? a.rotation);
+      const rotationVal = Number.isFinite(rawRot) ? Number(rawRot.toFixed(4)) : 0;
 
       const props: Record<string, string | number> = {
         ID: idx + 1,
         TEXTSTRING: textStringVal || p.name || `측점_${idx + 1}`,
         TEXTHEIGHT: textHeightVal,
+        ROTATION: rotationVal,
         LAYER: getLayerName(p.layerId),
         Z: p.z !== undefined && Number.isFinite(p.z) ? p.z : 0
       };
@@ -386,18 +470,6 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
         y: p.y,
         properties: props
       };
-    });
-
-    const dbfFields: { name: string; type: 'C' | 'N'; length: number; decimals: number }[] = [
-      { name: 'ID', type: 'N', length: 10, decimals: 0 },
-      { name: 'TEXTSTRING', type: 'C', length: 254, decimals: 0 },
-      { name: 'TEXTHEIGHT', type: 'N', length: 8, decimals: 2 },
-      { name: 'LAYER', type: 'C', length: 254, decimals: 0 },
-      { name: 'Z', type: 'N', length: 12, decimals: 3 }
-    ];
-
-    customPtKeyMappings.forEach(({ dbfName }) => {
-      dbfFields.push({ name: dbfName, type: 'C', length: 254, decimals: 0 });
     });
 
     const { shp, shx } = createPointShpAndShx(ptFeatures);
@@ -433,15 +505,31 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
   polylines.forEach(pl => collectCustomKeys(pl.attributes));
   polygons.forEach(pg => collectCustomKeys(pg.attributes));
 
-  const customLineRawKeys = Array.from(customFieldRawKeysSet).slice(0, 15);
+  const standardLineDbfFields: { name: string; type: 'C' | 'N'; length: number; decimals: number }[] = [
+    { name: 'ID', type: 'N', length: 10, decimals: 0 },
+    { name: 'NAME', type: 'C', length: 254, decimals: 0 },
+    { name: 'LAYER', type: 'C', length: 254, decimals: 0 },
+    { name: 'LENGTH_M', type: 'N', length: 12, decimals: 3 },
+    { name: 'CATEGORY', type: 'C', length: 254, decimals: 0 },
+    { name: 'SPEC', type: 'C', length: 254, decimals: 0 },
+    { name: 'MATERIAL', type: 'C', length: 254, decimals: 0 },
+    { name: 'DEPTH', type: 'N', length: 10, decimals: 3 },
+    { name: 'SURV_DATE', type: 'C', length: 254, decimals: 0 },
+    { name: 'SURVEYOR', type: 'C', length: 254, decimals: 0 },
+    { name: 'STATUS', type: 'C', length: 254, decimals: 0 },
+    { name: 'REMARK', type: 'C', length: 254, decimals: 0 },
+    { name: 'TYPE', type: 'C', length: 254, decimals: 0 }
+  ];
   const usedLineFieldNames = new Set<string>([
     'ID', 'NAME', 'LAYER', 'LENGTH_M', 'CATEGORY', 'SPEC', 'MATERIAL',
     'DEPTH', 'SURV_DATE', 'SURVEYOR', 'STATUS', 'REMARK', 'TYPE'
   ]);
-  const customLineKeyMappings = customLineRawKeys.map(rawKey => ({
-    rawKey,
-    dbfName: makeUniqueDbfFieldName(rawKey, usedLineFieldNames, encoding)
-  }));
+  const { mappings: customLineKeyMappings, fields: dbfLineFields } = packCustomDbfFields(
+    Array.from(customFieldRawKeysSet),
+    standardLineDbfFields,
+    usedLineFieldNames,
+    encoding
+  );
 
   const lineFeatures: ShpFeaturePolyline[] = [];
 
@@ -562,34 +650,8 @@ export async function exportToShapefileZip(options: SHPExportBundleOptions): Pro
 
   if (lineFeatures.length > 0) {
     const { shp, shx } = createPolylineShpAndShx(lineFeatures);
-
-    const dbfFields: { name: string; type: 'C' | 'N'; length: number; decimals: number }[] = [
-      { name: 'ID', type: 'N', length: 10, decimals: 0 },
-      { name: 'NAME', type: 'C', length: 254, decimals: 0 },
-      { name: 'LAYER', type: 'C', length: 254, decimals: 0 },
-      { name: 'LENGTH_M', type: 'N', length: 12, decimals: 3 },
-      { name: 'CATEGORY', type: 'C', length: 254, decimals: 0 },
-      { name: 'SPEC', type: 'C', length: 254, decimals: 0 },
-      { name: 'MATERIAL', type: 'C', length: 254, decimals: 0 },
-      { name: 'DEPTH', type: 'N', length: 10, decimals: 3 },
-      { name: 'SURV_DATE', type: 'C', length: 254, decimals: 0 },
-      { name: 'SURVEYOR', type: 'C', length: 254, decimals: 0 },
-      { name: 'STATUS', type: 'C', length: 254, decimals: 0 },
-      { name: 'REMARK', type: 'C', length: 254, decimals: 0 },
-      { name: 'TYPE', type: 'C', length: 254, decimals: 0 }
-    ];
-
-    customLineKeyMappings.forEach(({ dbfName }) => {
-      dbfFields.push({
-        name: dbfName,
-        type: 'C',
-        length: 254,
-        decimals: 0
-      });
-    });
-
     const dbf = createDbfBuffer(
-      dbfFields,
+      dbfLineFields,
       lineFeatures.map(f => f.properties),
       encoding
     );

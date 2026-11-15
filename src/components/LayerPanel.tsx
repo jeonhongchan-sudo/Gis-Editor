@@ -4,14 +4,13 @@
  */
 
 import React, { useState } from 'react';
-import { Eye, EyeOff, Lock, Unlock, Plus, X, Palette, CheckCircle2, Trash2, Edit2, Check } from 'lucide-react';
-import { CADLayer, CADLine, CADPoint, CADPolyline } from '../types/cad';
+import { Eye, EyeOff, Lock, Unlock, Plus, X, Trash2, Edit2 } from 'lucide-react';
+import { CADLayer, CADLine, CADPolyline } from '../types/cad';
 import { distance2D } from '../utils/geometry';
 
 interface LayerPanelProps {
   layers: CADLayer[];
   activeLayerId: string;
-  points: CADPoint[];
   lines: CADLine[];
   polylines: CADPolyline[];
   onSetActiveLayerId: (id: string) => void;
@@ -40,7 +39,6 @@ const PALETTE = [
 export const LayerPanel: React.FC<LayerPanelProps> = ({
   layers,
   activeLayerId,
-  points,
   lines,
   polylines,
   onSetActiveLayerId,

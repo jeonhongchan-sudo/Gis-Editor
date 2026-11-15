@@ -8,16 +8,16 @@ import iconv from 'iconv-lite';
 import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText, Point2D, UnifiedCADData } from '../types/cad';
 import { detectKoreanEncoding, smartDecodeKoreanBytes } from './encoding';
 
-export interface DbfField {
+interface DbfField {
   name: string;
   type: string;
   length: number;
   decimals: number;
 }
 
-export type DbfRecord = Record<string, string | number>;
+type DbfRecord = Record<string, string | number>;
 
-export interface DbfParseResult {
+interface DbfParseResult {
   fields: DbfField[];
   records: DbfRecord[];
   detectedEncoding: 'utf-8' | 'euc-kr';
@@ -30,7 +30,7 @@ const LAYER_COLORS = ['#38bdf8', '#34d399', '#f43f5e', '#fbbf24', '#a855f7', '#6
 /**
  * Attempts to repair Latin-1 mojibake from CP949 Korean characters
  */
-export function tryRepairMojibake(str: string): string {
+function tryRepairMojibake(str: string): string {
   if (!str) return str;
   try {
     const raw = Buffer.from(str, 'latin1');
@@ -45,7 +45,7 @@ export function tryRepairMojibake(str: string): string {
 /**
  * Parse dBASE III / IV (.dbf) binary buffer with auto encoding detection (CP949 vs UTF-8)
  */
-export function parseDbfBuffer(
+function parseDbfBuffer(
   buffer: ArrayBuffer,
   forcedEncoding?: 'utf-8' | 'euc-kr'
 ): DbfParseResult {
@@ -263,7 +263,7 @@ export function parseShpBuffer(
       'id', 'name', 'title', 'text', 'textstring', 'string', 'label', 'cname',
       'layer', 'layerid', 'dxftype', 'issurveynode', 'isclosed', 'z',
       'color', 'marker-color', 'stroke', 'stroke-width',
-      'textheight', 'height', 'marker-size', 'marker-siz', 'marker-symbol', 'marker-sym'
+      'textheight', 'height', 'rotation', 'marker-size', 'marker-siz', 'marker-symbol', 'marker-sym'
     ]);
 
     const normalizeMarkerSize = (val: unknown): 'minimum' | 'medium' | 'max' => {
@@ -287,6 +287,12 @@ export function parseShpBuffer(
         ? Number(dbfRec.TEXTHEIGHT ?? dbfRec.textheight ?? dbfRec.HEIGHT ?? dbfRec.height)
         : NaN;
       attrs.TEXTHEIGHT = Number.isFinite(rawHeight) && rawHeight > 0 ? rawHeight : 1;
+      const rawRotation = dbfRec
+        ? Number(dbfRec.ROTATION ?? dbfRec.rotation)
+        : NaN;
+      if (Number.isFinite(rawRotation)) {
+        attrs.ROTATION = Number(rawRotation.toFixed(4));
+      }
       const rawSymbol = dbfRec
         ? String(dbfRec['marker-symbol'] ?? dbfRec['MARKER-SYMBOL'] ?? dbfRec['marker-sym'] ?? dbfRec['MARKER-SYM'] ?? '').trim()
         : '';
@@ -333,12 +339,28 @@ export function parseShpBuffer(
         for (const [k, v] of Object.entries(dbfRec)) {
           const lk = k.toLowerCase();
           if (
-            typeof v === 'string' && 
-            v.trim() !== '' && 
-            !lk.includes('color') && 
-            !lk.includes('linetype') && 
-            !lk.includes('thickness') && 
-            !lk.includes('handle')
+            typeof v === 'string' &&
+            v.trim() !== '' &&
+            !lk.includes('color') &&
+            !lk.includes('linetype') &&
+            !lk.includes('line_type') &&
+            !lk.includes('lt_scale') &&
+            !lk.includes('lineweight') &&
+            !lk.includes('thickness') &&
+            !lk.includes('handle') &&
+            !lk.startsWith('dxf_') &&
+            !lk.startsWith('txt_') &&
+            !lk.startsWith('mtext_') &&
+            !lk.startsWith('blk_') &&
+            !lk.startsWith('marker-') &&
+            !lk.startsWith('cir_') &&
+            !lk.startsWith('arc_') &&
+            lk !== 'origin' &&
+            lk !== 'rotation' &&
+            lk !== 'blockname' &&
+            lk !== 'elevation' &&
+            lk !== 'pl_width' &&
+            lk !== 'is_closed'
           ) {
             ptName = v.trim();
             break;

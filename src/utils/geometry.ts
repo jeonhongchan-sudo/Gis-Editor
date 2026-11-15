@@ -11,30 +11,6 @@ export function distance2D(p1: Point2D, p2: Point2D): number {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
-export function calculatePolylineLength(points: Point2D[]): number {
-  if (points.length < 2) return 0;
-  let len = 0;
-  for (let i = 0; i < points.length - 1; i++) {
-    len += distance2D(points[i], points[i + 1]);
-  }
-  return len;
-}
-
-export function calculatePolygonArea(points: Point2D[]): number {
-  if (points.length < 3) return 0;
-  let area = 0;
-  for (let i = 0; i < points.length; i++) {
-    const j = (i + 1) % points.length;
-    area += points[i].x * points[j].y;
-    area -= points[j].x * points[i].y;
-  }
-  return Math.abs(area) / 2.0;
-}
-
-export function metersToPyeong(sqMeters: number): number {
-  return sqMeters / 3.305785;
-}
-
 export function midpoint2D(p1: Point2D, p2: Point2D): Point2D {
   return {
     x: (p1.x + p2.x) / 2,
@@ -427,42 +403,4 @@ export function isPolylineInOrIntersectBox(pts: Point2D[], box: BoundingBox2D, i
     if (isLineInOrIntersectBox(pts[pts.length - 1], pts[0], box)) return true;
   }
   return false;
-}
-
-/**
- * Calculate total bounding box across all entities
- */
-export function calculateExtents(
-  points: CADPoint[],
-  lines: CADLine[],
-  polylines: CADPolyline[],
-  polygons: CADPolygon[],
-  texts: import('../types/cad').CADText[] = []
-): { minX: number; minY: number; maxX: number; maxY: number; hasData: boolean } {
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  let count = 0;
-
-  const update = (p: Point2D) => {
-    if (isNaN(p.x) || isNaN(p.y)) return;
-    minX = Math.min(minX, p.x);
-    minY = Math.min(minY, p.y);
-    maxX = Math.max(maxX, p.x);
-    maxY = Math.max(maxY, p.y);
-    count++;
-  };
-
-  points.forEach(update);
-  lines.forEach(l => { update(l.start); update(l.end); });
-  polylines.forEach(pl => pl.points.forEach(update));
-  polygons.forEach(pg => pg.points.forEach(update));
-  texts.forEach(t => update({ x: t.x, y: t.y }));
-
-  if (count === 0) {
-    return { minX: 0, minY: 0, maxX: 100, maxY: 100, hasData: false };
-  }
-
-  return { minX, minY, maxX, maxY, hasData: true };
 }

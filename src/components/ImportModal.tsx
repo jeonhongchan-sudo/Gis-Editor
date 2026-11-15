@@ -3,26 +3,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { 
   X, 
   Upload, 
-  Download,
-  FileSpreadsheet, 
-  Sparkles, 
   AlertCircle, 
-  ArrowLeftRight,
   Check,
   Loader2,
   Layers,
   Archive,
-  MapPin,
   Maximize2,
-  Database,
-  Globe2,
   Info
 } from 'lucide-react';
-import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, ProjectState, CADText } from '../types/cad';
+import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText } from '../types/cad';
 import { 
   CSVColumnMapping, 
   CSVParseResult, 
@@ -30,17 +23,15 @@ import {
   parseCSVPreview,
   analyzeTableRows 
 } from '../utils/csvParser';
-import { isExcelBuffer, parseExcelWorkbook } from '../utils/excelParser';
+import { parseExcelWorkbook } from '../utils/excelParser';
 import { parseShapefileZip, parseShpBuffer, SHPParseResult } from '../utils/shpParser';
 import { decodeBufferText, SupportedEncoding } from '../utils/encoding';
 import { parseGeoJson } from '../utils/geoJsonParser';
 import { parseDxfBuffer } from '../utils/dxfParser';
-import { COORDINATE_SYSTEMS } from '../utils/projections';
 
 interface ImportModalProps {
   onImportCSVPoints: (points: CADPoint[], append: boolean) => void;
   onImportSHP: (data: SHPParseResult, append: boolean) => void;
-  onLoadProject: (state: ProjectState) => Promise<void>;
   onClose: () => void;
 }
 
@@ -57,7 +48,6 @@ const LAYER_COLORS = ['#38bdf8', '#34d399', '#f43f5e', '#fbbf24', '#a855f7', '#6
 export const ImportModal: React.FC<ImportModalProps> = ({
   onImportCSVPoints,
   onImportSHP,
-  onLoadProject,
   onClose
 }) => {
   const [appendMode, setAppendMode] = useState<boolean>(true);
@@ -74,11 +64,6 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
   // CSV/Excel State
   const [csvPreview, setCsvPreview] = useState<CSVParseResult | null>(null);
-  const [isExcelFile, setIsExcelFile] = useState<boolean>(false);
-  const [excelSheets, setExcelSheets] = useState<string[]>([]);
-  const [selectedSheet, setSelectedSheet] = useState<string>('');
-  const excelWorkbookRef = useRef<any>(null);
-  const [currentRawRows, setCurrentRawRows] = useState<(string | number)[][] | null>(null);
   const [headerRowIdx, setHeaderRowIdx] = useState<number>(0);
   const [csvMapping, setCsvMapping] = useState<CSVColumnMapping>({
     xCol: 0, yCol: 1, nameCol: 2, zCol: -1, includeElevation: false
@@ -108,7 +93,6 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
   const applyRowsToPreview = (rows: (string | number)[][], headerIdx: number = 0) => {
     try {
-      setCurrentRawRows(rows);
       setHeaderRowIdx(headerIdx);
       const res = analyzeTableRows(rows, headerIdx);
       setCsvPreview(res);
@@ -430,13 +414,10 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         const buffer = await excelFile.arrayBuffer();
         rawInputRef.current = { kind: 'excel', filename: excelFile.name, buffer };
         const parsed = parseExcelWorkbook(buffer);
-        excelWorkbookRef.current = parsed;
-        setIsExcelFile(true);
-        setExcelSheets(parsed.sheetNames);
         const initialSheet = parsed.sheetNames[0];
-        setSelectedSheet(initialSheet);
         const rows = parsed.getSheetRows(initialSheet);
         applyRowsToPreview(rows, 0);
+        rawInputRef.current = null;
         return;
       } catch (err: any) {
         console.warn('Excel parse failed:', err);
@@ -454,7 +435,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
       try {
         const buffer = await csvFile.arrayBuffer();
         rawInputRef.current = { kind: 'csv', filename: csvFile.name, buffer };
-        const { text, detectedEncoding } = decodeBufferText(buffer, selectedEncoding);
+        const { text } = decodeBufferText(buffer, selectedEncoding);
         const res = parseCSVPreview(text, 0);
         setCsvPreview(res);
         setCsvMapping(res.detectedMapping);
@@ -491,6 +472,8 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     };
 
     onImportSHP(filteredResult, appendMode);
+    rawInputRef.current = null;
+    setShpResult(null);
     onClose();
   };
 
@@ -502,6 +485,8 @@ export const ImportModal: React.FC<ImportModalProps> = ({
       return;
     }
     onImportCSVPoints(points, appendMode);
+    rawInputRef.current = null;
+    setCsvPreview(null);
     onClose();
   };
 

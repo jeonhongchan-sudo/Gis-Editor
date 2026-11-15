@@ -25,14 +25,14 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
   const { points = [], lines = [], polylines = [], polygons = [], texts = [], layers = [], targetCrs, sourceCrs } = options;
 
   const projectPoint = (p: Point2D): number[] => {
+    const zVal = p.z !== undefined && Number.isFinite(Number(p.z)) ? Number(p.z) : undefined;
     if (targetCrs && sourceCrs && sourceCrs !== 'LOCAL') {
       const transformed = transformCoords(p.x, p.y, sourceCrs, targetCrs);
-      return [
-        Number(transformed.x.toFixed(8)),
-        Number(transformed.y.toFixed(8))
-      ];
+      return zVal !== undefined
+        ? [Number(transformed.x.toFixed(8)), Number(transformed.y.toFixed(8)), zVal]
+        : [Number(transformed.x.toFixed(8)), Number(transformed.y.toFixed(8))];
     }
-    return [p.x, p.y];
+    return zVal !== undefined ? [p.x, p.y, zVal] : [p.x, p.y];
   };
 
   const getLayerName = (id: string): string => {
@@ -48,7 +48,7 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
     'id', 'name', 'title', 'text', 'textstring', 'layer', 'layerid',
     'dxftype', 'issurveynode', 'isclosed', 'z',
     'color', 'marker-color', 'stroke', 'stroke-width',
-    'marker-size', 'marker-symbol', 'textheight', 'height'
+    'marker-size', 'marker-symbol', 'textheight', 'height', 'rotation'
   ]);
 
   const pickCustomAttributes = (attrs?: Record<string, string | number>) => {
@@ -79,6 +79,8 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
     const textString = String(a.TEXTSTRING ?? a.textstring ?? p.name ?? '').trim();
     const rawHeight = Number(a.TEXTHEIGHT ?? a.textheight ?? a.HEIGHT ?? a.height);
     const textHeight = Number.isFinite(rawHeight) && rawHeight > 0 ? rawHeight : 1;
+    const rawRotation = Number(a.ROTATION ?? a.rotation);
+    const rotation = Number.isFinite(rawRotation) ? Number(rawRotation.toFixed(4)) : 0;
 
     features.push({
       type: 'Feature',
@@ -91,6 +93,7 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
         TEXTSTRING: textString,
         layer: getLayerName(p.layerId),
         TEXTHEIGHT: textHeight,
+        ROTATION: rotation,
         'marker-size': normalizeMarkerSize(a['marker-size']),
         'marker-symbol': String(a['marker-symbol'] || 'circle'),
         ...(p.z !== undefined && Number.isFinite(Number(p.z)) ? { z: Number(p.z) } : {}),

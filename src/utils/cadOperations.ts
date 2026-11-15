@@ -264,7 +264,7 @@ export function findClosestLinearTarget(
         cursorWorld.x < Math.min(p1.x, p2.x) - bestDist ||
         cursorWorld.x > Math.max(p1.x, p2.x) + bestDist ||
         cursorWorld.y < Math.min(p1.y, p2.y) - bestDist ||
-        cursorWorld.y > Math.max(p1.y, p2.y) + minRadiusPad(bestDist)
+        cursorWorld.y > Math.max(p1.y, p2.y) + bestDist
       ) continue;
 
       const proj = closestPointOnSegment(cursorWorld, p1, p2);
@@ -288,10 +288,6 @@ export function findClosestLinearTarget(
   }
 
   return best;
-}
-
-function minRadiusPad(r: number): number {
-  return r;
 }
 
 /**

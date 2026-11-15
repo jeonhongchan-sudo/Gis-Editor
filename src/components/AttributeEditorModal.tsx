@@ -3,13 +3,11 @@ import {
   X, 
   Database, 
   Layers, 
-  Check, 
   Plus, 
   Trash2, 
   Search, 
   Download, 
   Crosshair, 
-  Info, 
   Edit3,
   FileSpreadsheet,
   Tag,
@@ -39,16 +37,10 @@ interface AttributeEditorModalProps {
   polygons: CADPolygon[];
   texts: CADText[];
   targetIds?: string[];
-  activeLayerId: string;
   onUpdateAttributes: (updates: { id: string; type: EntityType; name?: string; attributes: Record<string, string | number> }[]) => void;
   onFocusEntity?: (points: Point2D[]) => void;
   onClose: () => void;
 }
-
-const CATEGORY_PRESETS = [
-  '맨홀', '집수정', '상수관', '하수관', '가스관', '통신관', '전력선',
-  '전주', '가로등', '도로경계', '지적경계', '건물', '기타시설'
-];
 
 const MARKER_SYMBOL_OPTIONS = [
   { value: 'circle', label: '원 (기본)' },
@@ -74,6 +66,16 @@ const REDUNDANT_OR_COLOR_KEYS_LOWER = new Set([
 
 const POINT_STYLE_KEYS_LOWER = new Set([
   'marker-symbol', 'marker-sym', 'marker-size', 'marker-siz', 'textheight', 'height'
+]);
+
+const HIDDEN_DXF_META_KEYS_LOWER = new Set([
+  'dxf_type', 'origin', 'handle', 'blockname',
+  'rotation', 'txt_halign', 'txt_valign', 'txt_xscale',
+  'mtext_w', 'mtext_att', 'mtext_dir',
+  'blk_sx', 'blk_sy',
+  'line_type', 'lt_scale', 'lineweight', 'dxf_aci',
+  'pl_width', 'elevation', 'is_closed',
+  'cir_cx', 'cir_cy', 'cir_r', 'arc_sang', 'arc_eang'
 ]);
 
 const normalizeMarkerSizeValue = (val: unknown): 'minimum' | 'medium' | 'max' => {
@@ -148,7 +150,6 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
   polygons,
   texts,
   targetIds,
-  activeLayerId,
   onUpdateAttributes,
   onFocusEntity,
   onClose
@@ -264,7 +265,11 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
   // Sync selection when targetIds prop changes
   React.useEffect(() => {
     if (targetIds) {
-      setSelectedIds(targetIds);
+      setSelectedIds(prev => (
+        prev.length === targetIds.length && prev.every((id, idx) => id === targetIds[idx])
+          ? prev
+          : targetIds
+      ));
       setActiveTab('inspect');
     }
   }, [targetIds]);
@@ -292,6 +297,7 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
       Object.entries(existing).forEach(([k, v]) => {
         const lower = k.trim().toLowerCase();
         if (REDUNDANT_OR_COLOR_KEYS_LOWER.has(lower)) return;
+        if (HIDDEN_DXF_META_KEYS_LOWER.has(lower)) return;
         if (firstEntity.type === 'point' && POINT_STYLE_KEYS_LOWER.has(lower)) return;
         fields.push({ key: k, value: String(v) });
       });
@@ -330,17 +336,25 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
     return allEntitiesList.filter(e => {
       const matchName = e.name.toLowerCase().includes(q);
       const matchLayer = e.layerName.toLowerCase().includes(q);
-      const attrStr = Object.entries(e.attributes).map(([k,v]) => `${k}:${v}`).join(' ').toLowerCase();
+      const attrStr = Object.entries(e.attributes)
+        .filter(([k]) => {
+          const lk = k.trim().toLowerCase();
+          return !REDUNDANT_OR_COLOR_KEYS_LOWER.has(lk) && !HIDDEN_DXF_META_KEYS_LOWER.has(lk);
+        })
+        .map(([k, v]) => `${k}:${v}`)
+        .join(' ')
+        .toLowerCase();
       return matchName || matchLayer || attrStr.includes(q);
     });
   }, [allEntitiesList, tableSearch]);
 
-  // Extract unique attribute keys for table columns (excluding redundant/color keys)
+  // Extract unique attribute keys for table columns (excluding redundant/color/internal DXF keys)
   const tableAttributeKeys = useMemo(() => {
     const keys = new Set<string>();
     filteredEntities.forEach(e => {
       Object.keys(e.attributes).forEach(k => {
-        if (REDUNDANT_OR_COLOR_KEYS_LOWER.has(k.trim().toLowerCase())) return;
+        const lk = k.trim().toLowerCase();
+        if (REDUNDANT_OR_COLOR_KEYS_LOWER.has(lk) || HIDDEN_DXF_META_KEYS_LOWER.has(lk)) return;
         if (e.attributes[k] !== undefined && e.attributes[k] !== '') {
           keys.add(k);
         }
@@ -385,9 +399,16 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
     const hasValidInputHeight = textHeight.trim() !== '' && Number.isFinite(parsedInputHeight) && parsedInputHeight > 0;
 
     const updates = targetEntities.map(ent => {
+      const hiddenDxfMeta: Record<string, string | number> = {};
+      Object.entries(ent.attributes || {}).forEach(([k, v]) => {
+        if (HIDDEN_DXF_META_KEYS_LOWER.has(k.trim().toLowerCase()) && v !== undefined && v !== null) {
+          hiddenDxfMeta[k] = v;
+        }
+      });
+
       let finalAttributes: Record<string, string | number>;
       if (targetEntities.length === 1) {
-        finalAttributes = { ...baseAttributes };
+        finalAttributes = { ...hiddenDxfMeta, ...baseAttributes };
       } else {
         const cleanedExisting: Record<string, string | number> = {};
         Object.entries(ent.attributes || {}).forEach(([k, v]) => {
@@ -491,7 +512,8 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
   const handleExportCSV = () => {
     const allKeys = new Set<string>();
     allEntitiesList.forEach(e => Object.keys(e.attributes).forEach(k => {
-      if (!REDUNDANT_OR_COLOR_KEYS_LOWER.has(k.trim().toLowerCase())) {
+      const lk = k.trim().toLowerCase();
+      if (!REDUNDANT_OR_COLOR_KEYS_LOWER.has(lk) && !HIDDEN_DXF_META_KEYS_LOWER.has(lk)) {
         allKeys.add(k);
       }
     }));

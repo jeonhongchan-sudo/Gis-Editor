@@ -78,7 +78,6 @@ export function analyzeTableRows(
 
   // If forcedHeaderRowIndex is 0 and row 0 has no text headers but row 1 does, auto-detect
   if (forcedHeaderRowIndex === 0 && rows.length > 1) {
-    const r0HasKoreanOrLetters = rows[0].some(c => /[a-zA-Z가-힣]/.test(c));
     const r1HasKoreanOrLetters = rows[1].some(c => /[a-zA-Z가-힣]/.test(c));
     // If row 0 looks like a single-cell title or empty
     if (rows[0].filter(c => c !== '').length <= 2 && r1HasKoreanOrLetters) {
@@ -270,23 +269,3 @@ export function buildCADPointsFromCSV(
 
   return points;
 }
-
-/**
- * Pre-packaged sample survey CSV datasets for instant 1-click loading
- */
-export const SAMPLE_SURVEY_CSV_EPSG5186 = `번호,X_측량(N),Y_측량(E),고도(Z),측점명,비고/항목
-1,544830.250,201210.120,45.20,경계점_01,부지경계
-2,544855.100,201235.400,45.65,경계점_02,부지경계
-3,544890.750,201280.850,46.10,도로시점_03,아스콘도로
-4,544915.600,201320.300,46.50,도로변곡_04,아스콘도로
-5,544940.200,201380.150,47.20,도로종점_05,아스콘도로
-6,544920.800,201415.900,47.80,부지경계_06,경계펜스
-7,544875.400,201440.500,48.10,부지모서리_07,콘크리트벽체
-8,544820.150,201430.700,47.90,법면상단_08,사면상단
-9,544780.600,201390.250,47.10,법면하단_09,사면하단
-10,544760.300,201330.400,46.40,배수로_10,U형측구
-11,544770.900,201260.800,45.80,구조물모서리_11,건물기초
-12,544805.400,201220.600,45.30,시점접속_12,연결로
-13,544860.000,201300.000,46.30,중앙기준점_13,삼각점
-14,544840.500,201350.200,46.80,보조점_14,기준타겟
-15,544885.100,201360.500,47.00,구역표시_15,현장말목`;

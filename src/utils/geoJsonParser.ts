@@ -62,13 +62,17 @@ export function parseGeoJson(
     Object.entries(rawProps).forEach(([k, v]) => {
       const lk = k.trim().toLowerCase();
       if (!k.trim() || STRIPPED_GEOJSON_ATTR_KEYS.has(lk) || v === undefined || v === null) return;
-      if (lk === 'height' || lk === 'textheight') return; // Unified into TEXTHEIGHT below for points
+      if (lk === 'height' || lk === 'textheight' || lk === 'rotation') return; // Unified below for points
       if (lk === 'marker-size') {
         cleaned['marker-size'] = normalizeMarkerSize(v);
         return;
       }
       cleaned[k] = typeof v === 'number' || typeof v === 'string' ? v : String(v);
     });
+    const rawRot = Number(rawProps.ROTATION ?? rawProps.rotation);
+    if (Number.isFinite(rawRot)) {
+      cleaned.ROTATION = Number(rawRot.toFixed(4));
+    }
     if (pointLabel !== undefined) {
       cleaned.TEXTSTRING = String(rawProps.TEXTSTRING || pointLabel);
       if (!cleaned['marker-size']) cleaned['marker-size'] = 'medium';

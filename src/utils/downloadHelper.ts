@@ -32,11 +32,18 @@ export async function downloadBlob(blob: Blob, filename: string) {
  * Common logic to either use File System Access API or fallback to standard download
  */
 async function smartSaveFile(blob: Blob, suggestedName: string) {
-  // Use File System Access API only on Desktop Chrome/Edge
-  // On many mobile browsers, this exists but behaves poorly or triggers double downloads
+  // Use File System Access API only on Desktop Chrome/Edge in top-level browsing context
+  // Cross-origin iframes (e.g. preview frames) block showSaveFilePicker with SecurityError,
+  // and mobile browsers often behave inconsistently with it.
   const isDesktop = !/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-  
-  if (isDesktop && 'showSaveFilePicker' in window) {
+  let isTopFrame = true;
+  try {
+    isTopFrame = window.self === window.top;
+  } catch {
+    isTopFrame = false;
+  }
+
+  if (isDesktop && isTopFrame && 'showSaveFilePicker' in window) {
     try {
       const ext = suggestedName.split('.').pop() || '';
       const handle = await (window as any).showSaveFilePicker({
@@ -51,8 +58,10 @@ async function smartSaveFile(blob: Blob, suggestedName: string) {
       await writable.close();
       return;
     } catch (err: any) {
-      if (err.name === 'AbortError') return;
-      console.warn('File system picker failed, falling back to legacy download', err);
+      if (err?.name === 'AbortError') return;
+      if (err?.name !== 'SecurityError') {
+        console.warn('File system picker failed, falling back to legacy download', err);
+      }
     }
   }
 

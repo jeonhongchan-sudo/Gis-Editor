@@ -60,7 +60,6 @@ interface CADCanvasProps {
   selectedEntityId?: string | null;
   selectedEntityIds?: string[];
   multiSelectMode?: boolean;
-  onSelectEntity?: (id: string | null) => void;
   onSelectEntities?: (ids: string[]) => void;
   onAddPoint: (point: CADPoint) => void;
   onAddLine: (line: CADLine) => void;
@@ -93,7 +92,6 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
   selectedEntityId,
   selectedEntityIds = [],
   multiSelectMode = false,
-  onSelectEntity,
   onSelectEntities,
   onAddPoint,
   onAddLine,
@@ -150,6 +148,12 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
   useEffect(() => {
     setBreakFirstHit(null);
   }, [tool, breakMode]);
+
+  useEffect(() => {
+    return () => {
+      if (hintTimeoutRef.current) clearTimeout(hintTimeoutRef.current);
+    };
+  }, []);
 
   const showNodeHint = (msg: string) => {
     if (hintTimeoutRef.current) clearTimeout(hintTimeoutRef.current);
@@ -293,76 +297,92 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     }
   }, [zoomExtentsTrigger, zoomExtents]);
 
-  // Orthogonal constraint
-  const applyOrtho = useCallback((current: Point2D, reference: Point2D): Point2D => {
-    const dx = Math.abs(current.x - reference.x);
-    const dy = Math.abs(current.y - reference.y);
-    if (dx > dy) {
-      return { x: current.x, y: reference.y };
-    } else {
-      return { x: reference.x, y: current.y };
-    }
-  }, []);
+  // Update live measurements to parent (only emit when values actually change)
+  const onLiveMeasurementChangeRef = useRef(onLiveMeasurementChange);
+  onLiveMeasurementChangeRef.current = onLiveMeasurementChange;
+  const lastLiveMeasurementRef = useRef<{
+    currentSegment: number;
+    totalLength: number;
+    area?: number;
+    pointCount: number;
+  } | null>(null);
 
-  // Update live measurements to parent
   useEffect(() => {
-    if (!onLiveMeasurementChange) return;
+    const emit = onLiveMeasurementChangeRef.current;
+    if (!emit) return;
 
     const targetPoint = cursorWorld ? (activeSnap ? activeSnap.point : cursorWorld) : null;
+
+    let nextMeasurement: {
+      currentSegment: number;
+      totalLength: number;
+      area?: number;
+      pointCount: number;
+    };
 
     if (tool === 'rectangle' && activePoints.length === 1 && targetPoint) {
       const p1 = activePoints[0];
       const w = Math.abs(targetPoint.x - p1.x);
       const h = Math.abs(targetPoint.y - p1.y);
-      onLiveMeasurementChange({
+      nextMeasurement = {
         currentSegment: distance2D(p1, targetPoint),
         totalLength: 2 * (w + h),
         area: w * h,
         pointCount: 1
-      });
-      return;
-    }
-
-    if (tool === 'circle' && activePoints.length === 1 && targetPoint) {
+      };
+    } else if (tool === 'circle' && activePoints.length === 1 && targetPoint) {
       const r = distance2D(activePoints[0], targetPoint);
-      onLiveMeasurementChange({
+      nextMeasurement = {
         currentSegment: r,
         totalLength: 2 * Math.PI * r,
         area: Math.PI * r * r,
         pointCount: 1
-      });
+      };
+    } else {
+      let totalLength = 0;
+      for (let i = 0; i < activePoints.length - 1; i++) {
+        totalLength += distance2D(activePoints[i], activePoints[i + 1]);
+      }
+
+      let currentSegment = 0;
+      if (activePoints.length > 0 && targetPoint) {
+        const activeLast = activePoints[activePoints.length - 1];
+        currentSegment = distance2D(activeLast, targetPoint);
+      }
+
+      let area = 0;
+      if (tool === 'polygon' && activePoints.length >= 2 && targetPoint) {
+        const pts = [...activePoints, targetPoint];
+        for (let i = 0; i < pts.length; i++) {
+          const j = (i + 1) % pts.length;
+          area += pts[i].x * pts[j].y;
+          area -= pts[j].x * pts[i].y;
+        }
+        area = Math.abs(area) / 2.0;
+      }
+
+      nextMeasurement = {
+        currentSegment,
+        totalLength: totalLength + (tool !== 'polygon' ? currentSegment : 0),
+        area: tool === 'polygon' ? area : undefined,
+        pointCount: activePoints.length
+      };
+    }
+
+    const prev = lastLiveMeasurementRef.current;
+    if (
+      prev &&
+      prev.currentSegment === nextMeasurement.currentSegment &&
+      prev.totalLength === nextMeasurement.totalLength &&
+      prev.area === nextMeasurement.area &&
+      prev.pointCount === nextMeasurement.pointCount
+    ) {
       return;
     }
 
-    let totalLength = 0;
-    for (let i = 0; i < activePoints.length - 1; i++) {
-      totalLength += distance2D(activePoints[i], activePoints[i + 1]);
-    }
-
-    let currentSegment = 0;
-    if (activePoints.length > 0 && targetPoint) {
-      const activeLast = activePoints[activePoints.length - 1];
-      currentSegment = distance2D(activeLast, targetPoint);
-    }
-
-    let area = 0;
-    if (tool === 'polygon' && activePoints.length >= 2 && targetPoint) {
-      const pts = [...activePoints, targetPoint];
-      for (let i = 0; i < pts.length; i++) {
-        const j = (i + 1) % pts.length;
-        area += pts[i].x * pts[j].y;
-        area -= pts[j].x * pts[i].y;
-      }
-      area = Math.abs(area) / 2.0;
-    }
-
-    onLiveMeasurementChange({
-      currentSegment,
-      totalLength: totalLength + (tool !== 'polygon' ? currentSegment : 0),
-      area: tool === 'polygon' ? area : undefined,
-      pointCount: activePoints.length
-    });
-  }, [activePoints, cursorWorld, activeSnap, tool, onLiveMeasurementChange]);
+    lastLiveMeasurementRef.current = nextMeasurement;
+    emit(nextMeasurement);
+  }, [activePoints, cursorWorld, activeSnap, tool]);
 
   // Live hover previews for Break and Trim CAD tools
   const resolveBreakHit = useCallback((worldPt: Point2D, snapPt?: Point2D | null, onlyId?: string): LinearTargetHit | null => {
@@ -1160,6 +1180,9 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     }
   };
 
+  const viewRef = useRef(view);
+  viewRef.current = view;
+
   // Mobile Pinch-to-zoom & two-finger pan
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1175,13 +1198,14 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
         const midX = (t1.clientX + t2.clientX) / 2;
         const midY = (t1.clientY + t2.clientY) / 2;
+        const curView = viewRef.current;
         touchStartRef.current = {
           dist,
           midX,
           midY,
-          panX: view.panX,
-          panY: view.panY,
-          zoom: view.zoom
+          panX: curView.panX,
+          panY: curView.panY,
+          zoom: curView.zoom
         };
       }
     };
@@ -1223,7 +1247,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       canvas.removeEventListener('touchmove', onTouchMove);
       canvas.removeEventListener('touchend', onTouchEnd);
     };
-  }, [view]);
+  }, []);
 
   // Screen Resize Observer
   const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
@@ -1232,7 +1256,9 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     const handleResize = () => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      setViewportSize({ width: canvas.clientWidth, height: canvas.clientHeight });
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      setViewportSize(prev => (prev.width === w && prev.height === h ? prev : { width: w, height: h }));
     };
 
     window.addEventListener('resize', handleResize);
@@ -1580,10 +1606,12 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       };
 
       // Prioritize selected points first so their labels are never dropped
-      const prioritizedPoints = [
-        ...visiblePoints.filter(p => selectedSet.has(p.id)),
-        ...visiblePoints.filter(p => !selectedSet.has(p.id))
-      ];
+      const prioritizedPoints = selectedSet.size === 0
+        ? visiblePoints
+        : [
+            ...visiblePoints.filter(p => selectedSet.has(p.id)),
+            ...visiblePoints.filter(p => !selectedSet.has(p.id))
+          ];
 
       // Deduplication Map: prevents drawing identical labels at the same spot (common in DXF/SHP with overlapping point/text entities)
       const drawnLabels = new Set<string>();
@@ -2213,7 +2241,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     }
 
     // 11. Scale Bar
-    drawScaleBar(ctx, width, height, view.zoom, theme);
+    drawScaleBar(ctx, height, view.zoom, theme);
 
     ctx.restore();
   }, [
@@ -2410,7 +2438,6 @@ function drawSnapMarker(
 // Helper: Draw Real-world Scale Bar
 function drawScaleBar(
   ctx: CanvasRenderingContext2D,
-  width: number,
   height: number,
   zoom: number,
   theme: 'light' | 'dark' = 'dark'

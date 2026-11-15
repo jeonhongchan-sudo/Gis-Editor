@@ -112,13 +112,3 @@ export function transformCoords(
     return { x, y };
   }
 }
-
-/**
- * Format meters for CAD engineering display
- */
-export function formatCADCoord(val: number): string {
-  return val.toLocaleString('ko-KR', {
-    minimumFractionDigits: 3,
-    maximumFractionDigits: 3
-  });
-}

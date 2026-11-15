@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Focus, Trash2, Ruler, X, Check, Layers, CheckSquare, Database, Unlink, Scissors, ArrowUpRight, Link2, Square, Circle, Lock } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { Trash2, Ruler, X, Check, Layers, CheckSquare, Database, Unlink, Scissors, ArrowUpRight, Link2, Square, Circle, Lock } from 'lucide-react';
 import { distance2D } from './utils/geometry';
 import { CADGeometryMutation, createCirclePolyline, createRectangleByDimensions, joinLinearEntities } from './utils/cadOperations';
 import { forceRefreshAppFromServer } from './utils/pwaRefresh';
@@ -17,7 +17,6 @@ import {
   CADText, 
   HistoryStep, 
   Point2D, 
-  ProjectState, 
   SnapPoint, 
   ToolMode,
   UnifiedCADData 
@@ -36,7 +35,6 @@ import { OfflineIndicator } from './components/OfflineIndicator';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { db } from './db/localDb.ts';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { SHPParseResult } from './utils/shpParser';
 
 const DEFAULT_LAYERS: CADLayer[] = [
   {
@@ -145,11 +143,11 @@ export default function App() {
   useEffect(() => {
     if (dbLayers) {
       setLayers(dbLayers.length > 0 ? dbLayers : DEFAULT_LAYERS);
-      if (dbLayers.length > 0 && !dbLayers.some(l => l.id === activeLayerId)) {
-        setActiveLayerId(dbLayers[0].id);
+      if (dbLayers.length > 0) {
+        setActiveLayerId(prev => (dbLayers.some(l => l.id === prev) ? prev : dbLayers[0].id));
       }
     }
-  }, [dbLayers, activeLayerId]);
+  }, [dbLayers]);
 
   useEffect(() => { if (dbPoints) setPoints(dbPoints); }, [dbPoints]);
   useEffect(() => { if (dbLines) setLines(dbLines); }, [dbLines]);
@@ -203,6 +201,12 @@ export default function App() {
     cadToastTimerRef.current = setTimeout(() => setCadToast(null), 2600);
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (cadToastTimerRef.current) clearTimeout(cadToastTimerRef.current);
+    };
+  }, []);
+
   // Active Drawing State
   const [activePoints, setActivePoints] = useState<Point2D[]>([]);
   const [cursorWorld, setCursorWorld] = useState<Point2D | null>(null);
@@ -227,6 +231,7 @@ export default function App() {
   const [showManualPointModal, setShowManualPointModal] = useState(false);
 
   // History for Undo / Redo
+  const MAX_HISTORY = 15;
   const [history, setHistory] = useState<HistoryStep[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
   const isUndoingOrRedoing = useRef(false);
@@ -242,11 +247,10 @@ export default function App() {
       texts: [...texts],
       description: desc
     };
-    setHistory(prev => {
-      const slice = prev.slice(Math.max(0, historyIndex - 15 + 2), historyIndex + 1);
-      return [...slice, step];
-    });
-    setHistoryIndex(prev => Math.min(prev + 1, 15));
+    const startIdx = Math.max(0, historyIndex + 1 - (MAX_HISTORY - 1));
+    const nextIndex = historyIndex + 1 - startIdx;
+    setHistory(prev => [...prev.slice(startIdx, historyIndex + 1), step]);
+    setHistoryIndex(nextIndex);
   }, [layers, points, lines, polylines, polygons, texts, historyIndex]);
 
   const handleUndo = useCallback(() => {
@@ -792,10 +796,12 @@ export default function App() {
       // 1. Purge the entire IndexedDB to prevent "junk projects" accumulation
       await clearEntireDatabase();
       
-      // 2. Clear current UI transient state
+      // 2. Clear current UI transient state & previous undo history
       setSelectedEntityIds([]); 
       setMultiSelectMode(false);
       setActivePoints([]); 
+      setHistory([]);
+      setHistoryIndex(-1);
       
       // 3. Create fresh project record
       pid = await db.projects.add({ 
@@ -884,7 +890,21 @@ export default function App() {
     setTimeout(() => {
       handleZoomExtents(zoomTargets);
     }, 200);
-    pushHistory(`${data.layerName || '데이터'} 불러오기`);
+    if (append) {
+      pushHistory(`${data.layerName || '데이터'} 불러오기`);
+    } else {
+      const incomingLayers = data.layers && data.layers.length > 0 ? data.layers : DEFAULT_LAYERS;
+      setHistory([{
+        layers: incomingLayers,
+        points: data.points,
+        lines: data.lines,
+        polylines: data.polylines,
+        polygons: data.polygons,
+        texts: data.texts || [],
+        description: `${data.layerName || '데이터'} 불러오기`
+      }]);
+      setHistoryIndex(0);
+    }
   };
 
   const handleImportCSVPoints = async (newPoints: CADPoint[], append: boolean) => {
@@ -903,10 +923,14 @@ export default function App() {
     await handleImportUnifiedData(data, append);
   };
 
-  const selPointsCount = points.filter(p => selectedEntityIds.includes(p.id)).length;
-  const selLinesCount = lines.filter(l => selectedEntityIds.includes(l.id)).length + polylines.filter(pl => selectedEntityIds.includes(pl.id)).length;
-  const selPolygonsCount = polygons.filter(pg => selectedEntityIds.includes(pg.id)).length;
-  const selTextsCount = texts.filter(t => selectedEntityIds.includes(t.id)).length;
+  const selLinesCount = useMemo(() => {
+    if (selectedEntityIds.length === 0) return 0;
+    const selSet = new Set(selectedEntityIds);
+    let count = 0;
+    for (let i = 0; i < lines.length; i++) if (selSet.has(lines[i].id)) count++;
+    for (let i = 0; i < polylines.length; i++) if (selSet.has(polylines[i].id)) count++;
+    return count;
+  }, [selectedEntityIds, lines, polylines]);
 
   const measureSegments = useMemo(() => {
     if (tool !== 'measure' || activePoints.length < 2) return [];
@@ -930,6 +954,11 @@ export default function App() {
       showCadToast('오프라인 상태입니다. 저장된 도면과 현재 버전을 유지합니다.');
     }
   }, [showCadToast]);
+
+  const handleCursorMove = useCallback((world: Point2D | null, snap: SnapPoint | null) => {
+    setCursorWorld(world);
+    setActiveSnap(snap);
+  }, []);
 
   return (
     <div className="relative w-screen h-screen overflow-hidden flex flex-col bg-slate-950 font-sans">
@@ -968,12 +997,11 @@ export default function App() {
           selectedEntityId={selectedEntityId}
           selectedEntityIds={selectedEntityIds}
           multiSelectMode={multiSelectMode}
-          onSelectEntity={setSelectedEntityId}
           onSelectEntities={setSelectedEntityIds}
           onAddPoint={handleAddPoint}
           onAddLine={handleAddLine} onAddPolyline={handleAddPolyline} onAddPolygon={handleAddPolygon}
           onApplyGeometryMutation={applyGeometryMutation}
-          onCursorMove={(world, snap) => { setCursorWorld(world); setActiveSnap(snap); }}
+          onCursorMove={handleCursorMove}
           onLiveMeasurementChange={setLiveMeasurement}
           activePoints={activePoints} setActivePoints={setActivePoints}
           zoomExtentsTrigger={zoomExtentsTrigger}
@@ -1539,7 +1567,7 @@ export default function App() {
         {showLayerPanel && (
           <LayerPanel
             layers={layers} activeLayerId={activeLayerId}
-            points={points} lines={lines} polylines={polylines}
+            lines={lines} polylines={polylines}
             onSetActiveLayerId={setActiveLayerId}
             onToggleVisible={handleToggleLayerVisible}
             onToggleLock={handleToggleLayerLock}
@@ -1556,7 +1584,6 @@ export default function App() {
         <ImportModal
           onImportCSVPoints={handleImportCSVPoints}
           onImportSHP={handleImportSHP}
-          onLoadProject={handleLoadProject}
           onClose={() => setShowImportModal(false)}
         />
       )}
@@ -1602,7 +1629,6 @@ export default function App() {
           polygons={polygons}
           texts={texts}
           targetIds={attributeTargetIds}
-          activeLayerId={activeLayerId}
           onUpdateAttributes={handleUpdateEntityAttributes}
           onFocusEntity={(pts) => handleZoomExtents(pts)}
           onClose={() => setShowAttributeModal(false)}
@@ -1610,83 +1636,6 @@ export default function App() {
       )}
     </div>
   );
-
-  async function handleLoadProject(state: ProjectState) {
-    // 1. User is opening a specific project file (usually a backup)
-    // Clear entire DB to keep workspace clean
-    await clearEntireDatabase();
-
-    const pid = await db.projects.add({ 
-      name: state.name || '가져온 프로젝트', 
-      createdAt: Date.now(), 
-      updatedAt: Date.now() 
-    });
-    
-    // 2. Perform all bulk DB writes BEFORE updating state/project ID
-    // This ensures that when currentProjectId changes and the useEffect triggers,
-    // the data is already physically present in IndexedDB.
-    const layers = state.layers || DEFAULT_LAYERS;
-    const points = state.points || [];
-    const lines = state.lines || [];
-    const convertedPolyLines: CADPolyline[] = (state.polygons || []).map((pg, idx) => {
-      const pts = [...(pg.points || [])];
-      if (pts.length >= 2) {
-        const first = pts[0];
-        const last = pts[pts.length - 1];
-        if (first.x !== last.x || first.y !== last.y) {
-          pts.push({ ...first });
-        }
-      }
-      return {
-        id: pg.id || `proj-pgline-${Date.now()}-${idx}`,
-        name: pg.name || `외곽선_${idx + 1}`,
-        points: pts,
-        isClosed: true,
-        layerId: pg.layerId,
-        color: pg.color,
-        attributes: pg.attributes
-      };
-    });
-    const polylines = [...(state.polylines || []), ...convertedPolyLines];
-    const polygons: CADPolygon[] = [];
-    const texts = state.texts || [];
-
-    await Promise.all([
-      db.layers.bulkPut(layers.map(l => ({ ...l, projectId: pid }))),
-      db.points.bulkPut(points.map(p => ({ ...p, projectId: pid }))),
-      db.lines.bulkPut(lines.map(l => ({ ...l, projectId: pid }))),
-      db.polylines.bulkPut(polylines.map(p => ({ ...p, projectId: pid }))),
-      db.texts.bulkPut(texts.map(t => ({ ...t, projectId: pid })))
-    ]);
-
-    // 3. Perform atomic UI state cleanup
-    setSelectedEntityIds([]);
-    setMultiSelectMode(false);
-    setActivePoints([]);
-    
-    // Explicitly set to empty first to force React re-render of clean state
-    setPoints([]);
-    setLines([]);
-    setPolylines([]);
-    setPolygons([]);
-    setTexts([]);
-    setLayers(DEFAULT_LAYERS);
-
-    // 4. Update current project ID and state with a tiny delay
-    setTimeout(() => {
-      setCurrentProjectId(pid);
-      setLayers(layers);
-      setPoints(points);
-      setLines(lines);
-      setPolylines(polylines);
-      setPolygons(polygons);
-      setTexts(texts);
-      
-      setTimeout(() => handleZoomExtents(points), 100);
-    }, 0);
-
-    pushHistory('프로젝트 가져오기');
-  }
 
   async function handleToggleLayerVisible(id: string) {
     const layer = layers.find(l => l.id === id);

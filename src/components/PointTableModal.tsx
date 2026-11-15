@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import { X, Search, Trash2, Crosshair, Download, Edit2, Check } from 'lucide-react';
+import { X, Search, Trash2, Crosshair, Download, Edit2 } from 'lucide-react';
 import { CADPoint } from '../types/cad';
 import { downloadTextFile } from '../utils/downloadHelper';
 
