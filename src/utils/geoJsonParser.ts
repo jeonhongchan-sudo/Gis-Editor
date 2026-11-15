@@ -46,8 +46,8 @@ export function parseGeoJson(
   }
 
   const STRIPPED_GEOJSON_ATTR_KEYS = new Set([
-    'id', 'name', 'title', 'text', 'layer', 'layerid', 'dxftype',
-    'issurveynode', 'isclosed', 'z', 'color', 'marker-color', 'stroke', 'stroke-width'
+    'id', 'name', 'title', 'label', 'text', 'layer', 'layerid', 'dxftype',
+    'issurveynode', 'isclosed', 'z', 'length_m', 'color', 'marker-color', 'stroke', 'stroke-width', 'stroke-opacity'
   ]);
 
   const normalizeMarkerSize = (val: unknown): 'minimum' | 'medium' | 'max' => {
