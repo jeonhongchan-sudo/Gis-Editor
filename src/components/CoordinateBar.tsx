@@ -26,7 +26,6 @@ interface CoordinateBarProps {
   cursorWorld: Point2D | null;
   activeSnap: SnapPoint | null;
   pointsCount: number;
-  linesCount: number;
   liveMeasurement?: {
     currentSegment: number;
     totalLength: number;
@@ -49,7 +48,6 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
   cursorWorld,
   activeSnap,
   pointsCount,
-  linesCount,
   liveMeasurement,
   onOpenImport,
   onOpenExport,
@@ -360,28 +358,22 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
       {/* Coordinate & Measurement Bar */}
       <div className="flex flex-wrap items-center justify-between gap-y-1 gap-x-2 px-2.5 py-1 bg-slate-50/90 dark:bg-slate-950/90 border-t border-slate-200 dark:border-slate-800 text-[10px] sm:text-[11px] font-mono">
         {/* Live Drawing Measurement summary if active */}
-        {liveMeasurement && liveMeasurement.pointCount > 0 ? (
-          <div className="flex items-center gap-2 sm:gap-3 text-sky-400 font-sans">
+        {liveMeasurement && liveMeasurement.pointCount > 0 && (
+          <div className="flex items-center gap-2 sm:gap-3 text-sky-600 dark:text-sky-400 font-sans">
             <div>
               구간: <strong className="font-mono text-slate-900 dark:text-slate-200">{liveMeasurement.currentSegment.toFixed(3)}m</strong>
             </div>
             <div>
-              총 연장: <strong className="font-mono text-white">{liveMeasurement.totalLength.toFixed(3)}m</strong>
+              총 연장: <strong className="font-mono text-slate-900 dark:text-white">{liveMeasurement.totalLength.toFixed(3)}m</strong>
             </div>
             {liveMeasurement.area !== undefined && liveMeasurement.area > 0 && (
               <div>
-                면적: <strong className="font-mono text-emerald-400">{liveMeasurement.area.toFixed(3)}㎡</strong>
-                <span className="text-slate-400 ml-0.5">
+                면적: <strong className="font-mono text-emerald-600 dark:text-emerald-400">{liveMeasurement.area.toFixed(3)}㎡</strong>
+                <span className="text-slate-500 dark:text-slate-400 ml-0.5">
                   ({(liveMeasurement.area / 3.305785).toFixed(3)}평)
                 </span>
               </div>
             )}
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 text-slate-600 dark:text-slate-400 font-sans">
-            <span className="hidden sm:inline">도면 성과:</span>
-            <span>측점 <strong className="text-slate-900 dark:text-white">{pointsCount}</strong></span>
-            <span>선 <strong className="text-slate-900 dark:text-white">{linesCount}</strong></span>
           </div>
         )}
 

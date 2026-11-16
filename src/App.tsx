@@ -1033,7 +1033,6 @@ export default function App() {
         cursorWorld={cursorWorld}
         activeSnap={activeSnap}
         pointsCount={points.length}
-        linesCount={lines.length + polylines.length}
         liveMeasurement={liveMeasurement}
         onOpenImport={() => setShowImportModal(true)}
         onOpenExport={() => setShowExportModal(true)}
@@ -1706,7 +1705,6 @@ export default function App() {
         {showLayerPanel && (
           <LayerPanel
             layers={layers} activeLayerId={activeLayerId}
-            lines={lines} polylines={polylines}
             onSetActiveLayerId={setActiveLayerId}
             onToggleVisible={handleToggleLayerVisible}
             onToggleLock={handleToggleLayerLock}
