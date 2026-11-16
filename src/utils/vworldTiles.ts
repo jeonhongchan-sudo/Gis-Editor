@@ -230,19 +230,107 @@ export interface VWorldRenderStats {
   errorCount: number;
 }
 
+export interface VWorldMapSnapshot {
+  panX: number;
+  panY: number;
+  zoom: number;
+  width: number;
+  height: number;
+  dpr: number;
+  layer: VWorldMapLayer;
+  sourceCrs: string;
+  tileRenderTick: number;
+  quality: 'low' | 'high';
+  stats: VWorldRenderStats;
+}
+
 export function drawVWorldOverlay(params: {
   ctx: CanvasRenderingContext2D;
   offscreenCanvas: HTMLCanvasElement;
+  snapshotRef: { current: VWorldMapSnapshot | null };
   width: number;
   height: number;
   dpr: number;
   view: { panX: number; panY: number; zoom: number };
   config: VWorldOverlayConfig;
+  tileRenderTick: number;
+  isInteracting: boolean;
   onTileLoaded: () => void;
   onTileError: () => void;
 }): VWorldRenderStats | null {
-  const { ctx, offscreenCanvas, width, height, dpr, view, config, onTileLoaded, onTileError } = params;
-  if (config.layer === 'off' || width <= 0 || height <= 0 || view.zoom <= 0) return null;
+  const {
+    ctx,
+    offscreenCanvas,
+    snapshotRef,
+    width,
+    height,
+    dpr,
+    view,
+    config,
+    tileRenderTick,
+    isInteracting,
+    onTileLoaded,
+    onTileError
+  } = params;
+
+  if (config.layer === 'off' || width <= 0 || height <= 0 || view.zoom <= 0) {
+    snapshotRef.current = null;
+    return null;
+  }
+
+  const clampedOpacity = Math.max(0.1, Math.min(1, config.opacity));
+  const snap = snapshotRef.current;
+  const sameSurface =
+    snap !== null &&
+    snap.layer === config.layer &&
+    snap.sourceCrs === config.sourceCrs &&
+    snap.width === width &&
+    snap.height === height &&
+    snap.dpr === dpr;
+
+  // 1. Exact Cache Hit: skip tile reprojection & re-compositing on cursor moves, snaps, CAD edits, opacity changes
+  if (
+    sameSurface &&
+    snap.panX === view.panX &&
+    snap.panY === view.panY &&
+    snap.zoom === view.zoom &&
+    snap.tileRenderTick === tileRenderTick &&
+    (isInteracting || snap.quality === 'high')
+  ) {
+    ctx.save();
+    ctx.globalAlpha = clampedOpacity;
+    ctx.drawImage(offscreenCanvas, 0, 0, width, height);
+    ctx.restore();
+    return snap.stats;
+  }
+
+  // 2. Active Gesture Fast Path: transform cached snapshot quad while panning/zooming, restore full high quality on settle
+  if (isInteracting && sameSurface) {
+    const scale = view.zoom / snap.zoom;
+    const destX = width / 2 + (snap.panX - view.panX) * view.zoom - (snap.width / 2) * scale;
+    const destY = height / 2 - (snap.panY - view.panY) * view.zoom - (snap.height / 2) * scale;
+    const destW = snap.width * scale;
+    const destH = snap.height * scale;
+
+    const maxEdgeGap = Math.max(24, Math.min(width, height) * 0.08);
+    const fitsWithMargin =
+      scale >= 0.68 &&
+      scale <= 1.65 &&
+      destX <= maxEdgeGap &&
+      destY <= maxEdgeGap &&
+      destX + destW >= width - maxEdgeGap &&
+      destY + destH >= height - maxEdgeGap;
+
+    if (fitsWithMargin) {
+      ctx.save();
+      ctx.globalAlpha = clampedOpacity;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'low';
+      ctx.drawImage(offscreenCanvas, destX, destY, destW, destH);
+      ctx.restore();
+      return snap.stats;
+    }
+  }
 
   const centerLL = worldToLonLat(view.panX, view.panY, config.sourceCrs);
   if (!centerLL) return null;
@@ -326,11 +414,12 @@ export function drawVWorldOverlay(params: {
   const offCtx = offscreenCanvas.getContext('2d');
   if (!offCtx) return null;
 
+  const quality: 'low' | 'high' = isInteracting ? 'low' : 'high';
   offCtx.setTransform(1, 0, 0, 1, 0, 0);
   offCtx.clearRect(0, 0, targetW, targetH);
   offCtx.scale(dpr, dpr);
   offCtx.imageSmoothingEnabled = true;
-  offCtx.imageSmoothingQuality = 'high';
+  offCtx.imageSmoothingQuality = quality;
 
   const cx = width / 2;
   const cy = height / 2;
@@ -444,17 +533,32 @@ export function drawVWorldOverlay(params: {
   }
 
   // Composite offscreen map onto main CAD canvas at desired opacity
-  const clampedOpacity = Math.max(0.1, Math.min(1, config.opacity));
   ctx.save();
   ctx.globalAlpha = clampedOpacity;
   ctx.drawImage(offscreenCanvas, 0, 0, width, height);
   ctx.restore();
 
-  return {
+  const stats: VWorldRenderStats = {
     zoomLevel: z,
     tileCount: totalSlots * subLayers.length,
     loadedCount,
     loadingCount,
     errorCount
   };
+
+  snapshotRef.current = {
+    panX: view.panX,
+    panY: view.panY,
+    zoom: view.zoom,
+    width,
+    height,
+    dpr,
+    layer: config.layer,
+    sourceCrs: config.sourceCrs,
+    tileRenderTick,
+    quality,
+    stats
+  };
+
+  return stats;
 }

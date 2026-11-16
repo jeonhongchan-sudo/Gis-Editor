@@ -8,6 +8,7 @@ import { Focus, MapPin, Map as MapIcon, X, EyeOff, LocateFixed } from 'lucide-re
 import { COORDINATE_SYSTEMS } from '../utils/projections';
 import {
   VWorldMapLayer,
+  VWorldMapSnapshot,
   VWorldOverlayConfig,
   VWORLD_LAYERS,
   drawVWorldOverlay,
@@ -132,6 +133,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const offscreenMapCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const mapSnapshotRef = useRef<VWorldMapSnapshot | null>(null);
   const [tileRenderTick, setTileRenderTick] = useState(0);
   const tileRafRef = useRef<number | null>(null);
   const [mapMenuOpen, setMapMenuOpen] = useState(false);
@@ -161,6 +163,10 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
   const [cursorWorld, setCursorWorld] = useState<Point2D | null>(null);
   const [activeSnap, setActiveSnap] = useState<SnapPoint | null>(null);
   const [isPanning, setIsPanning] = useState(false);
+  const [isPinching, setIsPinching] = useState(false);
+  const [isWheelZooming, setIsWheelZooming] = useState(false);
+  const wheelSettleTimerRef = useRef<number | null>(null);
+  const isMapInteracting = isPanning || isPinching || isWheelZooming;
   const panStartRef = useRef<{ clientX: number; clientY: number; panX: number; panY: number } | null>(null);
   const touchStartRef = useRef<{ dist: number; midX: number; midY: number; panX: number; panY: number; zoom: number } | null>(null);
 
@@ -198,6 +204,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     return () => {
       if (hintTimeoutRef.current) clearTimeout(hintTimeoutRef.current);
       if (tileRafRef.current !== null) cancelAnimationFrame(tileRafRef.current);
+      if (wheelSettleTimerRef.current !== null) window.clearTimeout(wheelSettleTimerRef.current);
       if (gpsWatchIdRef.current !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
         navigator.geolocation.clearWatch(gpsWatchIdRef.current);
         gpsWatchIdRef.current = null;
@@ -1405,6 +1412,15 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     const newPanX = worldBefore.x - (mouseX - cx) / newZoom;
     const newPanY = worldBefore.y + (mouseY - cy) / newZoom;
 
+    if (!isWheelZooming) setIsWheelZooming(true);
+    if (wheelSettleTimerRef.current !== null) {
+      window.clearTimeout(wheelSettleTimerRef.current);
+    }
+    wheelSettleTimerRef.current = window.setTimeout(() => {
+      wheelSettleTimerRef.current = null;
+      setIsWheelZooming(false);
+    }, 100);
+
     setView({
       panX: newPanX,
       panY: newPanY,
@@ -1447,6 +1463,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         e.preventDefault();
         pointerDownPosRef.current = null; // Cancel single tap drawing
         setSelectionBox(null);
+        setIsPinching(true);
         const t1 = e.touches[0];
         const t2 = e.touches[1];
         const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
@@ -1491,18 +1508,23 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       }
     };
 
-    const onTouchEnd = () => {
-      touchStartRef.current = null;
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) {
+        touchStartRef.current = null;
+        setIsPinching(false);
+      }
     };
 
     canvas.addEventListener('touchstart', onTouchStart, { passive: false });
     canvas.addEventListener('touchmove', onTouchMove, { passive: false });
     canvas.addEventListener('touchend', onTouchEnd);
+    canvas.addEventListener('touchcancel', onTouchEnd);
 
     return () => {
       canvas.removeEventListener('touchstart', onTouchStart);
       canvas.removeEventListener('touchmove', onTouchMove);
       canvas.removeEventListener('touchend', onTouchEnd);
+      canvas.removeEventListener('touchcancel', onTouchEnd);
     };
   }, []);
 
@@ -1570,14 +1592,19 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       drawVWorldOverlay({
         ctx,
         offscreenCanvas: offscreenMapCanvasRef.current,
+        snapshotRef: mapSnapshotRef,
         width,
         height,
         dpr,
         view,
         config: mapConfig,
+        tileRenderTick,
+        isInteracting: isMapInteracting,
         onTileLoaded: scheduleTileRedraw,
         onTileError: handleTileError
       });
+    } else {
+      mapSnapshotRef.current = null;
     }
 
     // 2. Metric CAD Grid
@@ -2835,6 +2862,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     theme,
     mapConfig,
     tileRenderTick,
+    isMapInteracting,
     scheduleTileRedraw,
     handleTileError,
     gpsWorldPos
