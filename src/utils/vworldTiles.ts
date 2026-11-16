@@ -9,7 +9,7 @@ import './projections';
 
 export const VWORLD_API_KEY = 'F5BF837F-5852-437A-9913-E50588F45AD5';
 
-export type VWorldMapLayer = 'off' | 'Base' | 'Satellite' | 'Hybrid' | 'gray' | 'midnight';
+export type VWorldMapLayer = 'off' | 'Base' | 'Satellite';
 
 export interface VWorldOverlayConfig {
   layer: VWorldMapLayer;
@@ -28,10 +28,7 @@ interface TileLayerSpec {
 
 export const VWORLD_LAYERS: TileLayerSpec[] = [
   { id: 'Base', label: '일반지도', shortLabel: '일반', ext: 'png', minZoom: 6, maxZoom: 19 },
-  { id: 'Satellite', label: '위성영상', shortLabel: '위성', ext: 'jpeg', minZoom: 6, maxZoom: 19 },
-  { id: 'Hybrid', label: '하이브리드 (위성+도로)', shortLabel: '하이브리드', ext: 'png', minZoom: 6, maxZoom: 19 },
-  { id: 'gray', label: '백지도 (회색조)', shortLabel: '백지도', ext: 'png', minZoom: 6, maxZoom: 18 },
-  { id: 'midnight', label: '야간지도 (다크)', shortLabel: '야간', ext: 'png', minZoom: 6, maxZoom: 18 }
+  { id: 'Satellite', label: '위성영상', shortLabel: '위성', ext: 'jpeg', minZoom: 6, maxZoom: 19 }
 ];
 
 const ORIGIN_SHIFT = 20037508.342789244; // Math.PI * 6378137
@@ -144,7 +141,7 @@ class VWorldTileCache {
   }
 
   getOrFetch(
-    layer: 'Base' | 'Satellite' | 'Hybrid' | 'gray' | 'midnight',
+    layer: 'Base' | 'Satellite',
     ext: 'png' | 'jpeg',
     z: number,
     x: number,
@@ -340,23 +337,13 @@ export function drawVWorldOverlay(params: {
     return null;
   }
 
-  // Sub-layers to composite in order ('Hybrid' renders Satellite + transparent Hybrid PNG on top)
-  const subLayers: { id: 'Base' | 'Satellite' | 'Hybrid' | 'gray' | 'midnight'; ext: 'png' | 'jpeg'; minZoom: number; maxZoom: number }[] =
-    config.layer === 'Hybrid'
-      ? [
-          { id: 'Satellite', ext: 'jpeg', minZoom: 6, maxZoom: 19 },
-          { id: 'Hybrid', ext: 'png', minZoom: 6, maxZoom: 19 }
-        ]
-      : config.layer === 'Satellite'
-        ? [{ id: 'Satellite', ext: 'jpeg', minZoom: 6, maxZoom: 19 }]
-        : config.layer === 'gray'
-          ? [{ id: 'gray', ext: 'png', minZoom: 6, maxZoom: 18 }]
-          : config.layer === 'midnight'
-            ? [{ id: 'midnight', ext: 'png', minZoom: 6, maxZoom: 18 }]
-            : [{ id: 'Base', ext: 'png', minZoom: 6, maxZoom: 19 }];
+  const layerSpec: { id: 'Base' | 'Satellite'; ext: 'png' | 'jpeg'; minZoom: number; maxZoom: number } =
+    config.layer === 'Satellite'
+      ? { id: 'Satellite', ext: 'jpeg', minZoom: 6, maxZoom: 19 }
+      : { id: 'Base', ext: 'png', minZoom: 6, maxZoom: 19 };
 
-  const minZoom = subLayers[0].minZoom;
-  const maxZoom = subLayers[subLayers.length - 1].maxZoom;
+  const minZoom = layerSpec.minZoom;
+  const maxZoom = layerSpec.maxZoom;
 
   const cosLat = Math.max(0.15, Math.cos((centerLL.lat * Math.PI) / 180));
   const rawZ = Math.round(Math.log2((EARTH_CIRCUMFERENCE / TILE_SIZE) * view.zoom * cosLat));
@@ -451,82 +438,74 @@ export function drawVWorldOverlay(params: {
   let errorCount = 0;
   const padCss = Math.max(0.85, 1.25 / dpr);
 
-  for (let lIdx = 0; lIdx < subLayers.length; lIdx++) {
-    const sl = subLayers[lIdx];
-    const isPrimaryBase = lIdx === 0;
+  for (let r = 0; r < rows; r++) {
+    const ty = bounds.minTy + r;
+    for (let c = 0; c < cols; c++) {
+      const tx = bounds.minTx + c;
+      const sTL = screenGrid[r][c];
+      const sTR = screenGrid[r][c + 1];
+      const sBL = screenGrid[r + 1][c];
+      if (!sTL || !sTR || !sBL) continue;
 
-    for (let r = 0; r < rows; r++) {
-      const ty = bounds.minTy + r;
-      for (let c = 0; c < cols; c++) {
-        const tx = bounds.minTx + c;
-        const sTL = screenGrid[r][c];
-        const sTR = screenGrid[r][c + 1];
-        const sBL = screenGrid[r + 1][c];
-        if (!sTL || !sTR || !sBL) continue;
+      // Affine matrix mapping tile (0..256, 0..256) to screen coordinates
+      const dRx = sTR.x - sTL.x;
+      const dRy = sTR.y - sTL.y;
+      const dBx = sBL.x - sTL.x;
+      const dBy = sBL.y - sTL.y;
 
-        // Affine matrix mapping tile (0..256, 0..256) to screen coordinates
-        const dRx = sTR.x - sTL.x;
-        const dRy = sTR.y - sTL.y;
-        const dBx = sBL.x - sTL.x;
-        const dBy = sBL.y - sTL.y;
+      const a = dRx / TILE_SIZE;
+      const b = dRy / TILE_SIZE;
+      const cc = dBx / TILE_SIZE;
+      const d = dBy / TILE_SIZE;
+      const e = sTL.x;
+      const f = sTL.y;
 
-        const a = dRx / TILE_SIZE;
-        const b = dRy / TILE_SIZE;
-        const cc = dBx / TILE_SIZE;
-        const d = dBy / TILE_SIZE;
-        const e = sTL.x;
-        const f = sTL.y;
+      // Expand opaque base tiles by ~0.85 CSS px on all 4 sides in screen space
+      // so fractional affine anti-aliasing never leaks background hairline grids.
+      const screenW = Math.hypot(dRx, dRy);
+      const screenH = Math.hypot(dBx, dBy);
+      const padX = Math.min(3, (padCss * TILE_SIZE) / Math.max(1, screenW));
+      const padY = Math.min(3, (padCss * TILE_SIZE) / Math.max(1, screenH));
 
-        // Expand opaque base tiles by ~0.85 CSS px on all 4 sides in screen space
-        // so fractional affine anti-aliasing never leaks background hairline grids.
-        // Keep transparent overlay layers (Hybrid) exact (0 bleed) to avoid double-darkening.
-        const screenW = Math.hypot(dRx, dRy);
-        const screenH = Math.hypot(dBx, dBy);
-        const padX = isPrimaryBase ? Math.min(3, (padCss * TILE_SIZE) / Math.max(1, screenW)) : 0;
-        const padY = isPrimaryBase ? Math.min(3, (padCss * TILE_SIZE) / Math.max(1, screenH)) : 0;
+      const entry = vworldTileCache.getOrFetch(layerSpec.id, layerSpec.ext, z, tx, ty, onTileLoaded, onTileError);
 
-        const entry = vworldTileCache.getOrFetch(sl.id, sl.ext, z, tx, ty, onTileLoaded, onTileError);
+      if (entry.status === 'loaded' && entry.img) {
+        loadedCount++;
+        offCtx.save();
+        offCtx.transform(a, b, cc, d, e, f);
+        offCtx.drawImage(
+          entry.img,
+          0,
+          0,
+          TILE_SIZE,
+          TILE_SIZE,
+          -padX,
+          -padY,
+          TILE_SIZE + padX * 2,
+          TILE_SIZE + padY * 2
+        );
+        offCtx.restore();
+      } else {
+        if (entry.status === 'loading') loadingCount++;
+        else errorCount++;
 
-        if (entry.status === 'loaded' && entry.img) {
-          loadedCount++;
+        // Draw lower-zoom cached parent tile inside exact child bounds for flicker-free zoom
+        const parent = vworldTileCache.findParentLoadedTile(layerSpec.id, z, tx, ty, layerSpec.minZoom);
+        if (parent) {
           offCtx.save();
           offCtx.transform(a, b, cc, d, e, f);
           offCtx.drawImage(
-            entry.img,
-            0,
-            0,
-            TILE_SIZE,
-            TILE_SIZE,
+            parent.img,
+            parent.sx,
+            parent.sy,
+            parent.size,
+            parent.size,
             -padX,
             -padY,
             TILE_SIZE + padX * 2,
             TILE_SIZE + padY * 2
           );
           offCtx.restore();
-        } else {
-          if (entry.status === 'loading') loadingCount++;
-          else errorCount++;
-
-          // Draw lower-zoom cached parent tile inside exact child bounds for flicker-free zoom
-          if (isPrimaryBase) {
-            const parent = vworldTileCache.findParentLoadedTile(sl.id, z, tx, ty, sl.minZoom);
-            if (parent) {
-              offCtx.save();
-              offCtx.transform(a, b, cc, d, e, f);
-              offCtx.drawImage(
-                parent.img,
-                parent.sx,
-                parent.sy,
-                parent.size,
-                parent.size,
-                -padX,
-                -padY,
-                TILE_SIZE + padX * 2,
-                TILE_SIZE + padY * 2
-              );
-              offCtx.restore();
-            }
-          }
         }
       }
     }
@@ -540,7 +519,7 @@ export function drawVWorldOverlay(params: {
 
   const stats: VWorldRenderStats = {
     zoomLevel: z,
-    tileCount: totalSlots * subLayers.length,
+    tileCount: totalSlots,
     loadedCount,
     loadingCount,
     errorCount

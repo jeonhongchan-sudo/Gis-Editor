@@ -62,7 +62,7 @@ export default function App() {
     const savedLayer = localStorage.getItem('vworld_map_layer') as VWorldMapLayer | null;
     const savedOpacity = Number(localStorage.getItem('vworld_map_opacity'));
     const savedCrs = localStorage.getItem('vworld_source_crs');
-    const validLayers: VWorldMapLayer[] = ['off', 'Base', 'Satellite', 'Hybrid', 'gray', 'midnight'];
+    const validLayers: VWorldMapLayer[] = ['off', 'Base', 'Satellite'];
     return {
       layer: savedLayer && validLayers.includes(savedLayer) ? savedLayer : 'off',
       opacity: Number.isFinite(savedOpacity) && savedOpacity >= 0.2 && savedOpacity <= 1 ? savedOpacity : 0.75,
