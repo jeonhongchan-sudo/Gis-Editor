@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { CADLayer, CADLine, CADPolygon, CADPolyline, Point2D } from '../types/cad';
+import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText, Point2D } from '../types/cad';
 import { closestPointOnSegment, distance2D } from './geometry';
 
 export interface LinearTargetHit {
@@ -24,6 +24,9 @@ export interface CADGeometryMutation {
   upsertLines: CADLine[];
   deletePolylineIds: string[];
   upsertPolylines: CADPolyline[];
+  upsertPoints?: CADPoint[];
+  upsertPolygons?: CADPolygon[];
+  upsertTexts?: CADText[];
   message?: string;
 }
 
@@ -1303,6 +1306,526 @@ export function computeExtendToBoundaryOperation(
         bestPt,
         `경계선까지 ${bestT.toFixed(3)}m 연장했습니다 (Extend).`
       )
+    }
+  };
+}
+
+/**
+ * Translate all selected CAD entities (points, lines, polylines, polygons, texts) by (dx, dy).
+ * Respects locked layers and preserves all attributes & IDs.
+ */
+export function moveEntitiesByDelta(
+  selectedIds: string[],
+  dx: number,
+  dy: number,
+  entities: {
+    points: CADPoint[];
+    lines: CADLine[];
+    polylines: CADPolyline[];
+    polygons: CADPolygon[];
+    texts: CADText[];
+    layers: CADLayer[];
+  }
+): { mutation: CADGeometryMutation | null; movedCount: number; skippedLockedCount: number; error?: string } {
+  if (!isFinite(dx) || !isFinite(dy)) {
+    return { mutation: null, movedCount: 0, skippedLockedCount: 0, error: '유효한 이동 거리(ΔX, ΔY)를 입력해 주세요.' };
+  }
+  if (Math.hypot(dx, dy) <= 1e-6) {
+    return { mutation: null, movedCount: 0, skippedLockedCount: 0, error: '이동 거리가 0입니다.' };
+  }
+  if (selectedIds.length === 0) {
+    return { mutation: null, movedCount: 0, skippedLockedCount: 0, error: '먼저 이동할 객체를 선택해 주세요.' };
+  }
+
+  const idSet = new Set(selectedIds);
+  const layerMap = new Map(entities.layers.map(l => [l.id, l]));
+  let skippedLockedCount = 0;
+
+  const upsertPoints: CADPoint[] = [];
+  const upsertLines: CADLine[] = [];
+  const upsertPolylines: CADPolyline[] = [];
+  const upsertPolygons: CADPolygon[] = [];
+  const upsertTexts: CADText[] = [];
+
+  for (const pt of entities.points) {
+    if (!idSet.has(pt.id)) continue;
+    if (layerMap.get(pt.layerId)?.locked) {
+      skippedLockedCount++;
+      continue;
+    }
+    upsertPoints.push({ ...pt, x: pt.x + dx, y: pt.y + dy });
+  }
+
+  for (const ln of entities.lines) {
+    if (!idSet.has(ln.id)) continue;
+    if (layerMap.get(ln.layerId)?.locked) {
+      skippedLockedCount++;
+      continue;
+    }
+    upsertLines.push({
+      ...ln,
+      start: { ...ln.start, x: ln.start.x + dx, y: ln.start.y + dy },
+      end: { ...ln.end, x: ln.end.x + dx, y: ln.end.y + dy }
+    });
+  }
+
+  for (const pl of entities.polylines) {
+    if (!idSet.has(pl.id)) continue;
+    if (layerMap.get(pl.layerId)?.locked) {
+      skippedLockedCount++;
+      continue;
+    }
+    upsertPolylines.push({
+      ...pl,
+      points: pl.points.map(p => ({ ...p, x: p.x + dx, y: p.y + dy }))
+    });
+  }
+
+  for (const pg of entities.polygons) {
+    if (!idSet.has(pg.id)) continue;
+    if (layerMap.get(pg.layerId)?.locked) {
+      skippedLockedCount++;
+      continue;
+    }
+    upsertPolygons.push({
+      ...pg,
+      points: pg.points.map(p => ({ ...p, x: p.x + dx, y: p.y + dy }))
+    });
+  }
+
+  for (const t of entities.texts) {
+    if (!idSet.has(t.id)) continue;
+    if (layerMap.get(t.layerId)?.locked) {
+      skippedLockedCount++;
+      continue;
+    }
+    upsertTexts.push({ ...t, x: t.x + dx, y: t.y + dy });
+  }
+
+  const movedCount =
+    upsertPoints.length +
+    upsertLines.length +
+    upsertPolylines.length +
+    upsertPolygons.length +
+    upsertTexts.length;
+
+  if (movedCount === 0) {
+    return {
+      mutation: null,
+      movedCount: 0,
+      skippedLockedCount,
+      error: skippedLockedCount > 0
+        ? '잠긴 레이어의 객체는 이동할 수 없습니다.'
+        : '이동할 수 있는 선택 객체가 없습니다.'
+    };
+  }
+
+  const lockedNote = skippedLockedCount > 0 ? ` (잠긴 레이어 ${skippedLockedCount}개 제외)` : '';
+  return {
+    movedCount,
+    skippedLockedCount,
+    mutation: {
+      deleteLineIds: [],
+      upsertLines,
+      deletePolylineIds: [],
+      upsertPolylines,
+      upsertPoints,
+      upsertPolygons,
+      upsertTexts,
+      message: `${movedCount}개 객체를 (ΔX ${dx >= 0 ? '+' : ''}${dx.toFixed(3)}m, ΔY ${dy >= 0 ? '+' : ''}${dy.toFixed(3)}m) 이동했습니다.${lockedNote}`
+    }
+  };
+}
+
+export interface OffsetTargetHit {
+  kind: 'line' | 'polyline' | 'polygon';
+  id: string;
+  layerId: string;
+  segIndex: number;
+  point: Point2D;
+  distance: number;
+  isClosed: boolean;
+}
+
+export interface OffsetPreviewResult {
+  target: OffsetTargetHit;
+  previewPoints: Point2D[];
+  isClosed: boolean;
+  signedDistance: number;
+  guideFrom: Point2D;
+  guideTo: Point2D;
+  mutation: CADGeometryMutation;
+}
+
+/**
+ * Find closest line, polyline, or polygon edge within maxRadius for Offset tool.
+ */
+export function findClosestOffsetTarget(
+  cursorWorld: Point2D,
+  maxRadius: number,
+  lines: CADLine[],
+  polylines: CADPolyline[],
+  polygons: CADPolygon[],
+  layers: CADLayer[]
+): OffsetTargetHit | null {
+  const layerMap = new Map(layers.map(l => [l.id, l]));
+  let best: OffsetTargetHit | null = null;
+  let bestDist = maxRadius;
+
+  for (const ln of lines) {
+    const lay = layerMap.get(ln.layerId);
+    if (lay && !lay.visible) continue;
+    const minX = Math.min(ln.start.x, ln.end.x) - bestDist;
+    const maxX = Math.max(ln.start.x, ln.end.x) + bestDist;
+    const minY = Math.min(ln.start.y, ln.end.y) - bestDist;
+    const maxY = Math.max(ln.start.y, ln.end.y) + bestDist;
+    if (cursorWorld.x < minX || cursorWorld.x > maxX || cursorWorld.y < minY || cursorWorld.y > maxY) continue;
+
+    const proj = closestPointOnSegment(cursorWorld, ln.start, ln.end);
+    if (proj.distance < bestDist) {
+      bestDist = proj.distance;
+      best = {
+        kind: 'line',
+        id: ln.id,
+        layerId: ln.layerId,
+        segIndex: 0,
+        point: proj.point,
+        distance: proj.distance,
+        isClosed: false
+      };
+    }
+  }
+
+  for (const pl of polylines) {
+    const lay = layerMap.get(pl.layerId);
+    if (lay && !lay.visible) continue;
+    if (pl.points.length < 2) continue;
+
+    const { pts, isClosed } = getChainWithArcLengths({ kind: 'polyline', data: pl });
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      if (
+        cursorWorld.x < Math.min(p1.x, p2.x) - bestDist ||
+        cursorWorld.x > Math.max(p1.x, p2.x) + bestDist ||
+        cursorWorld.y < Math.min(p1.y, p2.y) - bestDist ||
+        cursorWorld.y > Math.max(p1.y, p2.y) + bestDist
+      ) continue;
+
+      const proj = closestPointOnSegment(cursorWorld, p1, p2);
+      if (proj.distance < bestDist) {
+        bestDist = proj.distance;
+        best = {
+          kind: 'polyline',
+          id: pl.id,
+          layerId: pl.layerId,
+          segIndex: i,
+          point: proj.point,
+          distance: proj.distance,
+          isClosed
+        };
+      }
+    }
+  }
+
+  for (const pg of polygons) {
+    const lay = layerMap.get(pg.layerId);
+    if (lay && !lay.visible) continue;
+    if (pg.points.length < 3) continue;
+
+    for (let i = 0; i < pg.points.length; i++) {
+      const p1 = pg.points[i];
+      const p2 = pg.points[(i + 1) % pg.points.length];
+      if (
+        cursorWorld.x < Math.min(p1.x, p2.x) - bestDist ||
+        cursorWorld.x > Math.max(p1.x, p2.x) + bestDist ||
+        cursorWorld.y < Math.min(p1.y, p2.y) - bestDist ||
+        cursorWorld.y > Math.max(p1.y, p2.y) + bestDist
+      ) continue;
+
+      const proj = closestPointOnSegment(cursorWorld, p1, p2);
+      if (proj.distance < bestDist) {
+        bestDist = proj.distance;
+        best = {
+          kind: 'polygon',
+          id: pg.id,
+          layerId: pg.layerId,
+          segIndex: i,
+          point: proj.point,
+          distance: proj.distance,
+          isClosed: true
+        };
+      }
+    }
+  }
+
+  return best;
+}
+
+function signedPolygonArea(pts: Point2D[]): number {
+  let area = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length;
+    area += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+  }
+  return area * 0.5;
+}
+
+function offsetCornerJoin(
+  vertex: Point2D,
+  u1: Point2D,
+  n1: Point2D,
+  u2: Point2D,
+  n2: Point2D,
+  signedDist: number
+): Point2D[] {
+  const p1: Point2D = { x: vertex.x + n1.x * signedDist, y: vertex.y + n1.y * signedDist };
+  const p2: Point2D = { x: vertex.x + n2.x * signedDist, y: vertex.y + n2.y * signedDist };
+
+  const cross = u1.x * u2.y - u1.y * u2.x;
+  const dot = u1.x * u2.x + u1.y * u2.y;
+
+  if (Math.abs(cross) < 1e-4) {
+    if (dot > 0) {
+      return [{ x: (p1.x + p2.x) * 0.5, y: (p1.y + p2.y) * 0.5 }];
+    }
+    return [p1, p2];
+  }
+
+  const t = ((p2.x - p1.x) * u2.y - (p2.y - p1.y) * u2.x) / cross;
+  const miter: Point2D = {
+    x: p1.x + u1.x * t,
+    y: p1.y + u1.y * t
+  };
+
+  if (distance2D(miter, vertex) > Math.abs(signedDist) * 4) {
+    return [p1, p2];
+  }
+
+  return [miter];
+}
+
+/**
+ * Create a parallel offset copy of a CADLine, CADPolyline (open/closed), or CADPolygon
+ * toward the side of sidePoint by distanceMeters.
+ */
+export function computeOffsetOperation(
+  target: OffsetTargetHit,
+  sidePoint: Point2D,
+  distanceMeters: number,
+  lines: CADLine[],
+  polylines: CADPolyline[],
+  polygons: CADPolygon[],
+  layers: CADLayer[],
+  fallbackLayerId: string
+): { preview: OffsetPreviewResult | null; error?: string } {
+  if (!isFinite(distanceMeters) || distanceMeters <= 0) {
+    return { preview: null, error: '띄울 간격(m)을 0보다 크게 입력해 주세요.' };
+  }
+
+  const layerMap = new Map(layers.map(l => [l.id, l]));
+  const destLayerId = (targetLayerId: string) =>
+    layerMap.get(targetLayerId)?.locked ? fallbackLayerId : targetLayerId;
+
+  if (target.kind === 'line') {
+    const ln = lines.find(l => l.id === target.id);
+    if (!ln) return { preview: null };
+    const dx = ln.end.x - ln.start.x;
+    const dy = ln.end.y - ln.start.y;
+    const len = Math.hypot(dx, dy);
+    if (len <= EPS) return { preview: null, error: '길이가 너무 짧은 선은 간격띄우기할 수 없습니다.' };
+
+    const nx = -dy / len;
+    const ny = dx / len;
+    const cross = dx * (sidePoint.y - ln.start.y) - dy * (sidePoint.x - ln.start.x);
+    const signedDist = cross >= 0 ? distanceMeters : -distanceMeters;
+
+    const newStart: Point2D = { x: ln.start.x + nx * signedDist, y: ln.start.y + ny * signedDist };
+    const newEnd: Point2D = { x: ln.end.x + nx * signedDist, y: ln.end.y + ny * signedDist };
+    const guideTo: Point2D = { x: target.point.x + nx * signedDist, y: target.point.y + ny * signedDist };
+
+    const newLine: CADLine = {
+      id: makeId('ln-off'),
+      start: newStart,
+      end: newEnd,
+      layerId: destLayerId(ln.layerId),
+      color: ln.color,
+      name: ln.name ? `${ln.name}_offset` : '간격띄우기선'
+    };
+
+    return {
+      preview: {
+        target,
+        previewPoints: [newStart, newEnd],
+        isClosed: false,
+        signedDistance: signedDist,
+        guideFrom: target.point,
+        guideTo,
+        mutation: {
+          deleteLineIds: [],
+          upsertLines: [newLine],
+          deletePolylineIds: [],
+          upsertPolylines: [],
+          message: `${distanceMeters.toFixed(3)}m 간격으로 평행선을 생성했습니다 (Offset).`
+        }
+      }
+    };
+  }
+
+  const rawPoints = target.kind === 'polyline'
+    ? polylines.find(p => p.id === target.id)?.points
+    : polygons.find(p => p.id === target.id)?.points;
+  const srcEntity = target.kind === 'polyline'
+    ? polylines.find(p => p.id === target.id)
+    : polygons.find(p => p.id === target.id);
+
+  if (!rawPoints || !srcEntity) return { preview: null };
+
+  const isClosed = target.kind === 'polygon' || !!(srcEntity as CADPolyline).isClosed;
+  let cleanPts = dedupeConsecutivePoints(rawPoints);
+  if (isClosed && cleanPts.length >= 3 && distance2D(cleanPts[0], cleanPts[cleanPts.length - 1]) <= 1e-4) {
+    cleanPts = cleanPts.slice(0, -1);
+  }
+
+  if ((!isClosed && cleanPts.length < 2) || (isClosed && cleanPts.length < 3)) {
+    return { preview: null, error: '간격띄우기를 수행할 꼭짓점이 부족합니다.' };
+  }
+
+  const segCount = isClosed ? cleanPts.length : cleanPts.length - 1;
+  const segDirs: { u: Point2D; n: Point2D; a: Point2D; b: Point2D }[] = [];
+  for (let i = 0; i < segCount; i++) {
+    const a = cleanPts[i];
+    const b = cleanPts[(i + 1) % cleanPts.length];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len <= EPS) continue;
+    const u = { x: dx / len, y: dy / len };
+    const n = { x: -u.y, y: u.x };
+    segDirs.push({ u, n, a, b });
+  }
+
+  if (segDirs.length === 0) {
+    return { preview: null, error: '유효한 세그먼트가 없어 간격띄우기할 수 없습니다.' };
+  }
+
+  const refIdx = Math.max(0, Math.min(segDirs.length - 1, target.segIndex));
+  const refSeg = segDirs[refIdx];
+  const refCross = (refSeg.b.x - refSeg.a.x) * (sidePoint.y - refSeg.a.y) - (refSeg.b.y - refSeg.a.y) * (sidePoint.x - refSeg.a.x);
+  const signedDist = refCross >= 0 ? distanceMeters : -distanceMeters;
+  const guideTo: Point2D = {
+    x: target.point.x + refSeg.n.x * signedDist,
+    y: target.point.y + refSeg.n.y * signedDist
+  };
+
+  let offsetPts: Point2D[] = [];
+  if (!isClosed) {
+    offsetPts.push({
+      x: segDirs[0].a.x + segDirs[0].n.x * signedDist,
+      y: segDirs[0].a.y + segDirs[0].n.y * signedDist
+    });
+    for (let i = 1; i < segDirs.length; i++) {
+      const joined = offsetCornerJoin(
+        segDirs[i].a,
+        segDirs[i - 1].u,
+        segDirs[i - 1].n,
+        segDirs[i].u,
+        segDirs[i].n,
+        signedDist
+      );
+      offsetPts.push(...joined);
+    }
+    const lastSeg = segDirs[segDirs.length - 1];
+    offsetPts.push({
+      x: lastSeg.b.x + lastSeg.n.x * signedDist,
+      y: lastSeg.b.y + lastSeg.n.y * signedDist
+    });
+    offsetPts = dedupeConsecutivePoints(offsetPts);
+    if (offsetPts.length < 2) {
+      return { preview: null, error: '간격띄우기 결과를 생성할 수 없습니다.' };
+    }
+  } else {
+    for (let i = 0; i < segDirs.length; i++) {
+      const prevSeg = segDirs[(i - 1 + segDirs.length) % segDirs.length];
+      const currSeg = segDirs[i];
+      const joined = offsetCornerJoin(
+        currSeg.a,
+        prevSeg.u,
+        prevSeg.n,
+        currSeg.u,
+        currSeg.n,
+        signedDist
+      );
+      offsetPts.push(...joined);
+    }
+    offsetPts = dedupeConsecutivePoints(offsetPts);
+    if (offsetPts.length >= 3 && distance2D(offsetPts[0], offsetPts[offsetPts.length - 1]) <= 1e-4) {
+      offsetPts = offsetPts.slice(0, -1);
+    }
+    if (offsetPts.length < 3) {
+      return { preview: null, error: `간격(${distanceMeters}m)이 도형 크기보다 커서 안쪽으로 생성할 수 없습니다.` };
+    }
+    const origArea = signedPolygonArea(cleanPts);
+    const newArea = signedPolygonArea(offsetPts);
+    if (Math.abs(newArea) < 1e-4 || origArea * newArea <= 0) {
+      return { preview: null, error: `간격(${distanceMeters}m)이 도형 크기보다 커서 안쪽으로 생성할 수 없습니다.` };
+    }
+  }
+
+  if (target.kind === 'polygon') {
+    const pg = srcEntity as CADPolygon;
+    const newPoly: CADPolygon = {
+      id: makeId('poly-off'),
+      points: offsetPts,
+      layerId: destLayerId(pg.layerId),
+      color: pg.color,
+      name: pg.name ? `${pg.name}_offset` : '간격띄우기구역',
+      fillOpacity: pg.fillOpacity
+    };
+    return {
+      preview: {
+        target,
+        previewPoints: offsetPts,
+        isClosed: true,
+        signedDistance: signedDist,
+        guideFrom: target.point,
+        guideTo,
+        mutation: {
+          deleteLineIds: [],
+          upsertLines: [],
+          deletePolylineIds: [],
+          upsertPolylines: [],
+          upsertPolygons: [newPoly],
+          message: `${distanceMeters.toFixed(3)}m 간격으로 폴리곤을 복제했습니다 (Offset).`
+        }
+      }
+    };
+  }
+
+  const pl = srcEntity as CADPolyline;
+  const newPl: CADPolyline = {
+    id: makeId('pl-off'),
+    points: offsetPts,
+    isClosed,
+    layerId: destLayerId(pl.layerId),
+    color: pl.color,
+    name: pl.name ? `${pl.name}_offset` : '간격띄우기선'
+  };
+  return {
+    preview: {
+      target,
+      previewPoints: offsetPts,
+      isClosed,
+      signedDistance: signedDist,
+      guideFrom: target.point,
+      guideTo,
+      mutation: {
+        deleteLineIds: [],
+        upsertLines: [],
+        deletePolylineIds: [],
+        upsertPolylines: [newPl],
+        message: `${distanceMeters.toFixed(3)}m 간격으로 연속선을 생성했습니다 (Offset).`
+      }
     }
   };
 }

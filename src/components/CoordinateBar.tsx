@@ -296,14 +296,9 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
 
       {/* Mobile Drawer Dropdown Menu (on < 640px) */}
       {mobileMenuOpen && (
-        <div className="sm:hidden border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2.5 flex flex-col gap-2 animate-in slide-in-from-top-2 duration-150">
-          {/* Mobile Info */}
-          <div className="p-3 bg-white dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 text-center">
-            <span className="text-[11px] text-slate-500 font-medium">현장 측량 및 도면 편집 도구</span>
-          </div>
-
+        <div className="sm:hidden border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 flex flex-col gap-1.5 animate-in slide-in-from-top-2 duration-150">
           {/* Mobile Buttons Grid */}
-          <div className="grid grid-cols-3 gap-1.5 pt-1">
+          <div className="grid grid-cols-3 gap-1.5">
             <button
               onClick={() => {
                 setMobileMenuOpen(false);

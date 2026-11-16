@@ -14,6 +14,8 @@ export type ToolMode =
   | 'point' 
   | 'measure' 
   | 'text' 
+  | 'move'
+  | 'offset'
   | 'break'
   | 'trim'
   | 'extend'

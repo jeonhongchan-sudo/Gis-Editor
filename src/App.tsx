@@ -4,9 +4,9 @@
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Trash2, Ruler, X, Check, Layers, CheckSquare, Database, Unlink, Scissors, ArrowUpRight, Link2, Square, Circle, Lock } from 'lucide-react';
+import { Trash2, Ruler, X, Check, Layers, CheckSquare, Database, Unlink, Scissors, ArrowUpRight, Link2, Square, Circle, Lock, Move } from 'lucide-react';
 import { distance2D } from './utils/geometry';
-import { CADGeometryMutation, createCirclePolyline, createRectangleByDimensions, joinLinearEntities } from './utils/cadOperations';
+import { CADGeometryMutation, OffsetTargetHit, createCirclePolyline, createRectangleByDimensions, joinLinearEntities, moveEntitiesByDelta } from './utils/cadOperations';
 import { forceRefreshAppFromServer } from './utils/pwaRefresh';
 import { VWorldMapLayer, VWorldOverlayConfig } from './utils/vworldTiles';
 import { 
@@ -198,6 +198,10 @@ export default function App() {
   const [breakMode, setBreakMode] = useState<'split' | 'gap'>('split');
   const [extendMode, setExtendMode] = useState<'distance' | 'boundary'>('distance');
   const [extendDistanceInput, setExtendDistanceInput] = useState<string>('1');
+  const [moveDxInput, setMoveDxInput] = useState<string>('0');
+  const [moveDyInput, setMoveDyInput] = useState<string>('0');
+  const [offsetDistanceInput, setOffsetDistanceInput] = useState<string>('1');
+  const [offsetTarget, setOffsetTarget] = useState<OffsetTargetHit | null>(null);
   const [rectWidthInput, setRectWidthInput] = useState<string>('');
   const [rectHeightInput, setRectHeightInput] = useState<string>('');
   const [rectAnchor, setRectAnchor] = useState<'corner' | 'center'>('corner');
@@ -308,6 +312,11 @@ export default function App() {
     return isFinite(v) && v > 0 ? v : null;
   }, [extendDistanceInput]);
 
+  const parsedOffsetDistance = useMemo(() => {
+    const v = parseFloat(offsetDistanceInput);
+    return isFinite(v) && v > 0 ? v : null;
+  }, [offsetDistanceInput]);
+
   const rectDimSpec = useMemo(() => {
     const w = parseFloat(rectWidthInput);
     const h = parseFloat(rectHeightInput);
@@ -333,10 +342,13 @@ export default function App() {
         handleRedo();
       } else if (e.key === 'Escape') {
         setActivePoints([]);
+        setOffsetTarget(null);
         setSelectedEntityIds([]);
       } else if (e.key === 'Enter') {
         if (tool === 'join') {
           handleExecuteJoin();
+        } else if (tool === 'move') {
+          handleExecuteNumericMove();
         } else if (tool === 'rectangle' && activePoints.length === 1 && rectDimSpec) {
           handleCreateRectangleByDimension();
         } else if (tool === 'circle' && activePoints.length === 1 && circleDimSpec) {
@@ -455,6 +467,7 @@ export default function App() {
 
   const handleSelectTool = useCallback((nextTool: ToolMode) => {
     setActivePoints([]);
+    setOffsetTarget(null);
     if (nextTool === 'join') {
       const validLineIds = new Set([...lines.map(l => l.id), ...polylines.filter(pl => !pl.isClosed).map(pl => pl.id)]);
       setSelectedEntityIds(prev => prev.filter(id => validLineIds.has(id)));
@@ -514,7 +527,16 @@ export default function App() {
     const delPlSet = new Set(mutation.deletePolylineIds);
     const upsertLineSet = new Set(mutation.upsertLines.map(l => l.id));
     const upsertPlSet = new Set(mutation.upsertPolylines.map(pl => pl.id));
+    const upsertPtList = mutation.upsertPoints || [];
+    const upsertPgList = mutation.upsertPolygons || [];
+    const upsertTxtList = mutation.upsertTexts || [];
+    const upsertPtSet = new Set(upsertPtList.map(p => p.id));
+    const upsertPgSet = new Set(upsertPgList.map(pg => pg.id));
+    const upsertTxtSet = new Set(upsertTxtList.map(t => t.id));
 
+    if (upsertPtList.length > 0) {
+      setPoints(prev => [...prev.filter(p => !upsertPtSet.has(p.id)), ...upsertPtList]);
+    }
     setLines(prev => [
       ...prev.filter(l => !delLineSet.has(l.id) && !upsertLineSet.has(l.id)),
       ...mutation.upsertLines
@@ -523,6 +545,12 @@ export default function App() {
       ...prev.filter(pl => !delPlSet.has(pl.id) && !upsertPlSet.has(pl.id)),
       ...mutation.upsertPolylines
     ]);
+    if (upsertPgList.length > 0) {
+      setPolygons(prev => [...prev.filter(pg => !upsertPgSet.has(pg.id)), ...upsertPgList]);
+    }
+    if (upsertTxtList.length > 0) {
+      setTexts(prev => [...prev.filter(t => !upsertTxtSet.has(t.id)), ...upsertTxtList]);
+    }
     setSelectedEntityIds(prev => prev.filter(id => !delLineSet.has(id) && !delPlSet.has(id)));
 
     if (currentProjectId !== null) {
@@ -532,6 +560,9 @@ export default function App() {
         mutation.deletePolylineIds.length > 0 ? db.polylines.where('id').anyOf(mutation.deletePolylineIds as any).delete() : Promise.resolve(),
         mutation.upsertLines.length > 0 ? db.lines.bulkPut(mutation.upsertLines.map(l => ({ ...l, projectId: pid }))) : Promise.resolve(),
         mutation.upsertPolylines.length > 0 ? db.polylines.bulkPut(mutation.upsertPolylines.map(pl => ({ ...pl, projectId: pid }))) : Promise.resolve(),
+        upsertPtList.length > 0 ? db.points.bulkPut(upsertPtList.map(p => ({ ...p, projectId: pid }))) : Promise.resolve(),
+        upsertPgList.length > 0 ? db.polygons.bulkPut(upsertPgList.map(pg => ({ ...pg, projectId: pid }))) : Promise.resolve(),
+        upsertTxtList.length > 0 ? db.texts.bulkPut(upsertTxtList.map(t => ({ ...t, projectId: pid }))) : Promise.resolve(),
       ]);
     }
 
@@ -549,6 +580,25 @@ export default function App() {
     }
     await applyGeometryMutation('선 결합 (Join)', mutation);
     setSelectedEntityIds(mutation.upsertPolylines.map(pl => pl.id));
+  };
+
+  const handleExecuteNumericMove = async () => {
+    const dx = moveDxInput.trim() === '' ? 0 : parseFloat(moveDxInput);
+    const dy = moveDyInput.trim() === '' ? 0 : parseFloat(moveDyInput);
+    const { mutation, error } = moveEntitiesByDelta(selectedEntityIds, dx, dy, {
+      points,
+      lines,
+      polylines,
+      polygons,
+      texts,
+      layers
+    });
+    if (error || !mutation) {
+      showCadToast(error || '이동할 수 없습니다.');
+      return;
+    }
+    await applyGeometryMutation('객체 이동 (Move)', mutation);
+    setActivePoints([]);
   };
 
   const handleDeleteSelected = async () => {
@@ -952,21 +1002,14 @@ export default function App() {
     return count;
   }, [selectedEntityIds, lines, polylines]);
 
-  const measureSegments = useMemo(() => {
-    if (tool !== 'measure' || activePoints.length < 2) return [];
-    const segs: { index: number; dist: number }[] = [];
-    for (let i = 0; i < activePoints.length - 1; i++) {
-      segs.push({
-        index: i + 1,
-        dist: distance2D(activePoints[i], activePoints[i + 1])
-      });
-    }
-    return segs;
-  }, [tool, activePoints]);
-
   const measureCumulative = useMemo(() => {
-    return measureSegments.reduce((sum: number, s: { index: number; dist: number }) => sum + s.dist, 0);
-  }, [measureSegments]);
+    if (tool !== 'measure' || activePoints.length < 2) return 0;
+    let sum = 0;
+    for (let i = 0; i < activePoints.length - 1; i++) {
+      sum += distance2D(activePoints[i], activePoints[i + 1]);
+    }
+    return sum;
+  }, [tool, activePoints]);
 
   const handleRefreshApp = useCallback(async () => {
     const result = await forceRefreshAppFromServer();
@@ -1009,6 +1052,9 @@ export default function App() {
           breakMode={breakMode}
           extendMode={extendMode}
           extendDistance={parsedExtendDistance}
+          offsetDistance={parsedOffsetDistance}
+          offsetTarget={offsetTarget}
+          onChangeOffsetTarget={setOffsetTarget}
           rectDimSpec={rectDimSpec}
           circleDimSpec={circleDimSpec}
           snapEnabled={snapEnabled}
@@ -1031,20 +1077,17 @@ export default function App() {
 
         {/* CAD Toast Feedback */}
         {cadToast && (
-          <div className="fixed top-28 sm:top-32 left-1/2 -translate-x-1/2 z-40 px-4 py-2 rounded-xl bg-slate-900/95 text-white border border-sky-400/70 shadow-2xl text-xs font-semibold animate-in fade-in slide-in-from-top-2 duration-150 pointer-events-none">
+          <div className="fixed top-28 sm:top-32 left-1/2 -translate-x-1/2 z-40 px-3 py-1.5 rounded-lg bg-slate-900/95 text-white border border-sky-400/70 shadow-xl text-[11px] font-semibold animate-in fade-in slide-in-from-top-2 duration-150 pointer-events-none max-w-[92vw] text-center">
             {cadToast}
           </div>
         )}
 
         {/* CAD Rectangle Dimension Floating Bar */}
         {tool === 'rectangle' && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 sm:gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-sky-400 dark:border-sky-500/80 px-3 py-2 rounded-2xl shadow-2xl max-w-[95vw]">
-            <div className="flex items-center gap-1 text-xs font-bold text-sky-600 dark:text-sky-400 px-1">
-              <Square className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">사각형 치수</span>
-            </div>
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-sky-400 dark:border-sky-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
+            <Square className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
             <div className="flex items-center gap-1">
-              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">가로</span>
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">W</span>
               <input
                 type="number"
                 step="any"
@@ -1059,10 +1102,10 @@ export default function App() {
                     setActivePoints([]);
                   }
                 }}
-                placeholder="W(m)"
-                className="w-20 px-2 py-1 rounded-lg text-xs font-mono bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
+                placeholder="가로(m)"
+                className="w-18 px-1.5 py-1 rounded-lg text-[11px] font-mono bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
               />
-              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 ml-0.5">세로</span>
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 ml-0.5">H</span>
               <input
                 type="number"
                 step="any"
@@ -1077,15 +1120,15 @@ export default function App() {
                     setActivePoints([]);
                   }
                 }}
-                placeholder="H(m)"
-                className="w-20 px-2 py-1 rounded-lg text-xs font-mono bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
+                placeholder="세로(m)"
+                className="w-18 px-1.5 py-1 rounded-lg text-[11px] font-mono bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
               />
             </div>
-            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl">
+            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg">
               <button
                 onClick={() => setRectAnchor('corner')}
                 title="클릭 지점을 시작 모서리로 사용"
-                className={`px-2 py-1 rounded-lg text-[11px] font-bold transition ${
+                className={`px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap transition ${
                   rectAnchor === 'corner' ? 'bg-sky-500 text-white shadow-sm' : 'text-slate-600 dark:text-slate-300'
                 }`}
               >
@@ -1094,7 +1137,7 @@ export default function App() {
               <button
                 onClick={() => setRectAnchor('center')}
                 title="클릭 지점을 사각형 중심으로 사용"
-                className={`px-2 py-1 rounded-lg text-[11px] font-bold transition ${
+                className={`px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap transition ${
                   rectAnchor === 'center' ? 'bg-sky-500 text-white shadow-sm' : 'text-slate-600 dark:text-slate-300'
                 }`}
               >
@@ -1104,49 +1147,46 @@ export default function App() {
             <button
               onClick={() => setRectDimLocked(prev => !prev)}
               title="켜면 입력한 가로×세로 치수로 도면 클릭 한 번에 바로 배치합니다"
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-bold transition ${
+              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap transition ${
                 rectDimLocked
                   ? 'bg-emerald-600 text-white shadow-sm'
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
               }`}
             >
               <Lock className="w-3 h-3" />
-              <span>치수고정</span>
+              <span>고정</span>
             </button>
             <button
               onClick={handleCreateRectangleByDimension}
               disabled={activePoints.length === 0 || !rectDimSpec}
               title="시작점 클릭 후 입력한 치수로 사각형 생성 (Enter)"
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-bold transition ${
+              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap transition ${
                 activePoints.length > 0 && rectDimSpec
                   ? 'bg-sky-500 hover:bg-sky-400 text-white shadow-sm'
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
               }`}
             >
-              <Check className="w-3.5 h-3.5" />
+              <Check className="w-3 h-3" />
               <span>생성</span>
             </button>
             <button
               onClick={() => handleSelectTool('pan')}
               title="종료"
-              className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
+              className="p-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
             >
-              <X className="w-4 h-4" />
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
 
         {/* CAD Circle Dimension Floating Bar */}
         {tool === 'circle' && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 sm:gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-sky-400 dark:border-sky-500/80 px-3 py-2 rounded-2xl shadow-2xl max-w-[95vw]">
-            <div className="flex items-center gap-1 text-xs font-bold text-sky-600 dark:text-sky-400 px-1">
-              <Circle className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">원 치수</span>
-            </div>
-            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl">
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-sky-400 dark:border-sky-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
+            <Circle className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
+            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg">
               <button
                 onClick={() => setCircleDimMode('radius')}
-                className={`px-2 py-1 rounded-lg text-[11px] font-bold transition ${
+                className={`px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap transition ${
                   circleDimMode === 'radius' ? 'bg-sky-500 text-white shadow-sm' : 'text-slate-600 dark:text-slate-300'
                 }`}
               >
@@ -1154,7 +1194,7 @@ export default function App() {
               </button>
               <button
                 onClick={() => setCircleDimMode('diameter')}
-                className={`px-2 py-1 rounded-lg text-[11px] font-bold transition ${
+                className={`px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap transition ${
                   circleDimMode === 'diameter' ? 'bg-sky-500 text-white shadow-sm' : 'text-slate-600 dark:text-slate-300'
                 }`}
               >
@@ -1177,133 +1217,126 @@ export default function App() {
                     setActivePoints([]);
                   }
                 }}
-                placeholder={circleDimMode === 'radius' ? '반지름(m)' : '지름(m)'}
-                className="w-24 px-2 py-1 rounded-lg text-xs font-mono bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
+                placeholder={circleDimMode === 'radius' ? 'R(m)' : 'D(m)'}
+                className="w-20 px-1.5 py-1 rounded-lg text-[11px] font-mono bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
               />
               <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">m</span>
             </div>
             <button
               onClick={() => setCircleDimLocked(prev => !prev)}
               title="켜면 입력한 치수의 원을 중심점 클릭 한 번으로 바로 배치합니다"
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-bold transition ${
+              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap transition ${
                 circleDimLocked
                   ? 'bg-emerald-600 text-white shadow-sm'
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
               }`}
             >
               <Lock className="w-3 h-3" />
-              <span>치수고정</span>
+              <span>고정</span>
             </button>
             <button
               onClick={handleCreateCircleByDimension}
               disabled={activePoints.length === 0 || !circleDimSpec}
               title="중심점 클릭 후 입력한 치수로 원 생성 (Enter)"
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-bold transition ${
+              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap transition ${
                 activePoints.length > 0 && circleDimSpec
                   ? 'bg-sky-500 hover:bg-sky-400 text-white shadow-sm'
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
               }`}
             >
-              <Check className="w-3.5 h-3.5" />
+              <Check className="w-3 h-3" />
               <span>생성</span>
             </button>
             <button
               onClick={() => handleSelectTool('pan')}
               title="종료"
-              className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
+              className="p-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
             >
-              <X className="w-4 h-4" />
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
 
         {/* CAD Break Mode Floating Bar */}
         {tool === 'break' && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-rose-400 dark:border-rose-500/80 px-3 py-2 rounded-2xl shadow-2xl max-w-[95vw]">
-            <div className="flex items-center gap-1.5 text-xs font-bold text-rose-600 dark:text-rose-400 px-1">
-              <Unlink className="w-3.5 h-3.5" />
-              <span>선 끊기 (Break)</span>
-            </div>
-            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl">
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-rose-400 dark:border-rose-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
+            <Unlink className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
+            <span className="text-[11px] font-bold text-rose-600 dark:text-rose-400 whitespace-nowrap">끊기</span>
+            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg">
               <button
                 onClick={() => setBreakMode('split')}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
+                className={`px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap transition ${
                   breakMode === 'split'
                     ? 'bg-rose-500 text-white shadow-sm'
                     : 'text-slate-600 dark:text-slate-300'
                 }`}
               >
-                1점 끊기
+                1점
               </button>
               <button
                 onClick={() => setBreakMode('gap')}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
+                className={`px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap transition ${
                   breakMode === 'gap'
                     ? 'bg-rose-500 text-white shadow-sm'
                     : 'text-slate-600 dark:text-slate-300'
                 }`}
               >
-                2점 구간 끊기
+                2점 구간
               </button>
             </div>
             <button
               onClick={() => handleSelectTool('pan')}
               title="종료"
-              className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
+              className="p-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
             >
-              <X className="w-4 h-4" />
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
 
         {/* CAD Trim Floating Bar */}
         {tool === 'trim' && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-rose-400 dark:border-rose-500/80 px-3 py-2 rounded-2xl shadow-2xl max-w-[95vw]">
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-rose-400 dark:border-rose-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
             <Scissors className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-            <span className="text-xs font-bold text-slate-800 dark:text-slate-100">자르기 (Trim)</span>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400 hidden sm:inline">교차 선 사이의 제거할 구간을 클릭하세요</span>
+            <span className="text-[11px] font-bold text-slate-800 dark:text-slate-100 whitespace-nowrap">자르기</span>
             <button
               onClick={() => handleSelectTool('pan')}
               title="종료"
-              className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
+              className="p-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
             >
-              <X className="w-4 h-4" />
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
 
         {/* CAD Extend Floating Bar */}
         {tool === 'extend' && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-emerald-400 dark:border-emerald-500/80 px-3 py-2 rounded-2xl shadow-2xl max-w-[95vw]">
-            <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-600 dark:text-emerald-400 px-1">
-              <ArrowUpRight className="w-3.5 h-3.5" />
-              <span>선 연장 (Extend)</span>
-            </div>
-            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl">
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-emerald-400 dark:border-emerald-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
+            <ArrowUpRight className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg">
               <button
                 onClick={() => setExtendMode('distance')}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
+                className={`px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap transition ${
                   extendMode === 'distance'
                     ? 'bg-emerald-600 text-white shadow-sm'
                     : 'text-slate-600 dark:text-slate-300'
                 }`}
               >
-                치수 입력
+                치수
               </button>
               <button
                 onClick={() => setExtendMode('boundary')}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
+                className={`px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap transition ${
                   extendMode === 'boundary'
                     ? 'bg-emerald-600 text-white shadow-sm'
                     : 'text-slate-600 dark:text-slate-300'
                 }`}
               >
-                경계선까지
+                경계선
               </button>
             </div>
             {extendMode === 'distance' && (
               <div className="flex items-center gap-1">
-                <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">연장 길이</span>
                 <input
                   type="number"
                   step="any"
@@ -1316,84 +1349,205 @@ export default function App() {
                     }
                   }}
                   placeholder="길이(m)"
-                  className="w-20 px-2 py-1 rounded-lg text-xs font-mono bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500"
+                  className="w-18 px-1.5 py-1 rounded-lg text-[11px] font-mono bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500"
                 />
                 <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">m</span>
               </div>
             )}
-            <span className="text-[11px] text-slate-500 dark:text-slate-400 hidden md:inline">
-              {extendMode === 'distance'
-                ? '연장할 선의 끝쪽을 클릭하세요'
-                : '연장할 선의 끝쪽을 클릭하면 가장 가까운 선까지 이어집니다'}
-            </span>
             <button
               onClick={() => handleSelectTool('pan')}
               title="종료"
-              className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
+              className="p-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
             >
-              <X className="w-4 h-4" />
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
 
         {/* CAD Join Floating Bar */}
         {tool === 'join' && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-amber-400 dark:border-amber-500/80 px-3 py-2 rounded-2xl shadow-2xl max-w-[95vw]">
-            <div className="flex items-center gap-1.5 text-xs font-bold text-amber-600 dark:text-amber-400 px-1">
-              <Link2 className="w-3.5 h-3.5" />
-              <span>선 결합 (Join) · {selLinesCount}개 선택</span>
-            </div>
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-amber-400 dark:border-amber-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
+            <Link2 className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400 whitespace-nowrap">
+              {selLinesCount}개
+            </span>
             <button
               onClick={handleExecuteJoin}
               disabled={selLinesCount < 2}
-              className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-[11px] font-bold transition ${
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap transition ${
                 selLinesCount >= 2
-                  ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/30'
+                  ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm'
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
               }`}
             >
-              <Check className="w-3.5 h-3.5" />
-              <span>결합 실행</span>
+              <Check className="w-3 h-3" />
+              <span>결합</span>
             </button>
             {selectedEntityIds.length > 0 && (
               <button
                 onClick={() => setSelectedEntityIds([])}
-                className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-[11px] font-medium transition"
+                className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-[11px] font-medium whitespace-nowrap transition"
               >
-                선택해제
+                해제
               </button>
             )}
             <button
               onClick={() => handleSelectTool('pan')}
               title="종료"
-              className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
+              className="p-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
             >
-              <X className="w-4 h-4" />
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* CAD Move Floating Bar */}
+        {tool === 'move' && (
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-amber-400 dark:border-amber-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
+            <Move className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400 whitespace-nowrap">
+              {selectedEntityIds.length}개
+            </span>
+            <div className="flex items-center gap-1">
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">ΔX</span>
+              <input
+                type="number"
+                step="any"
+                value={moveDxInput}
+                onChange={e => setMoveDxInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleExecuteNumericMove();
+                  } else if (e.key === 'Escape') {
+                    (e.target as HTMLInputElement).blur();
+                  }
+                }}
+                className="w-16 px-1.5 py-1 rounded-lg text-[11px] font-mono bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-amber-500"
+              />
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 ml-0.5">ΔY</span>
+              <input
+                type="number"
+                step="any"
+                value={moveDyInput}
+                onChange={e => setMoveDyInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleExecuteNumericMove();
+                  } else if (e.key === 'Escape') {
+                    (e.target as HTMLInputElement).blur();
+                  }
+                }}
+                className="w-16 px-1.5 py-1 rounded-lg text-[11px] font-mono bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-amber-500"
+              />
+              <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">m</span>
+            </div>
+            <button
+              onClick={handleExecuteNumericMove}
+              disabled={selectedEntityIds.length === 0}
+              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap transition ${
+                selectedEntityIds.length > 0
+                  ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-sm'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
+              }`}
+            >
+              <Check className="w-3 h-3" />
+              <span>이동</span>
+            </button>
+            {activePoints.length > 0 && (
+              <button
+                onClick={() => setActivePoints([])}
+                className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-[11px] font-medium whitespace-nowrap transition"
+              >
+                기준점 취소
+              </button>
+            )}
+            <button
+              onClick={() => handleSelectTool('pan')}
+              title="종료"
+              className="p-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* CAD Offset Floating Bar */}
+        {tool === 'offset' && (
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-emerald-400 dark:border-emerald-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
+            <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 whitespace-nowrap">간격</span>
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                step="any"
+                min="0"
+                value={offsetDistanceInput}
+                onChange={e => setOffsetDistanceInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Escape') {
+                    (e.target as HTMLInputElement).blur();
+                    setOffsetTarget(null);
+                  }
+                }}
+                placeholder="거리(m)"
+                className="w-16 px-1.5 py-1 rounded-lg text-[11px] font-mono bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500"
+              />
+              <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">m</span>
+            </div>
+            <div className="flex items-center gap-1">
+              {['0.5', '1', '2', '3'].map(preset => (
+                <button
+                  key={preset}
+                  onClick={() => setOffsetDistanceInput(preset)}
+                  className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono font-semibold whitespace-nowrap transition ${
+                    offsetDistanceInput === preset
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  {preset}m
+                </button>
+              ))}
+            </div>
+            {offsetTarget && (
+              <button
+                onClick={() => setOffsetTarget(null)}
+                className="px-2 py-1 rounded-lg bg-amber-100 dark:bg-amber-950/60 hover:bg-amber-200 dark:hover:bg-amber-900/60 text-amber-700 dark:text-amber-300 text-[11px] font-semibold whitespace-nowrap transition"
+              >
+                재선택
+              </button>
+            )}
+            <button
+              onClick={() => handleSelectTool('pan')}
+              title="종료"
+              className="p-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
+            >
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
 
         {/* Floating Multi-Select Action Bar (레이어 일괄 변경 & 일괄 삭제) */}
-        {selectedEntityIds.length > 0 && tool !== 'join' && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-amber-400 dark:border-amber-500/80 px-3 py-2 rounded-2xl shadow-2xl animate-in fade-in slide-in-from-top-3 duration-150 max-w-[95vw]">
-            <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 font-bold shrink-0 px-1">
-              <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
-              <span>선택 {selectedEntityIds.length}개</span>
+        {selectedEntityIds.length > 0 && tool !== 'join' && tool !== 'move' && (
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-amber-400 dark:border-amber-500/80 px-2.5 py-1.5 rounded-xl shadow-xl animate-in fade-in slide-in-from-top-3 duration-150 max-w-[96vw]">
+            <div className="flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400 font-bold shrink-0 px-0.5 whitespace-nowrap">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" />
+              <span>{selectedEntityIds.length}개</span>
             </div>
 
             {/* Mobile / Desktop Multi-Select Append Mode Toggle */}
             <button
               onClick={() => setMultiSelectMode(prev => !prev)}
               title="누적 선택 모드"
-              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[11px] font-medium transition ${
+              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium whitespace-nowrap transition ${
                 multiSelectMode
-                  ? 'bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/30'
+                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
               }`}
             >
               <CheckSquare className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">{multiSelectMode ? '누적추가 ON' : '+ 추가선택'}</span>
-              <span className="sm:hidden">{multiSelectMode ? '누적ON' : '+추가'}</span>
+              <span>{multiSelectMode ? '누적ON' : '+추가'}</span>
             </button>
 
             {/* Generic Attribute Editor button */}
@@ -1403,37 +1557,31 @@ export default function App() {
                 setShowAttributeModal(true);
               }}
               title="객체 속성(OD) 편집"
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-sky-50 dark:bg-sky-950/80 hover:bg-sky-100 dark:hover:bg-sky-900 text-sky-600 dark:text-sky-300 border border-sky-200 dark:border-sky-800 text-[11px] font-semibold transition"
+              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-sky-50 dark:bg-sky-950/80 hover:bg-sky-100 dark:hover:bg-sky-900 text-sky-600 dark:text-sky-300 border border-sky-200 dark:border-sky-800 text-[11px] font-semibold whitespace-nowrap transition"
             >
               <Database className="w-3.5 h-3.5 text-sky-500" />
-              <span>속성(OD)</span>
+              <span>속성</span>
             </button>
 
             {/* Layer batch change selector (Custom Mobile-friendly UI) */}
             <div className="relative">
               <button
                 onClick={() => setShowBatchLayerMenu(!showBatchLayerMenu)}
-                className={`flex items-center gap-1.5 border rounded-xl px-2.5 py-1.5 transition shadow-sm ${
+                className={`flex items-center gap-1 border rounded-lg px-2 py-1 transition shadow-sm ${
                   showBatchLayerMenu 
                     ? 'bg-purple-100 dark:bg-purple-900/40 border-purple-300 dark:border-purple-600' 
                     : 'bg-slate-50 dark:bg-slate-950/80 border-slate-200 dark:border-slate-700/80 hover:bg-slate-100 dark:hover:bg-slate-900'
                 }`}
               >
                 <Layers className={`w-3.5 h-3.5 shrink-0 ${showBatchLayerMenu ? 'text-purple-600 dark:text-purple-300' : 'text-purple-400'}`} />
-                <span className={`text-[11px] font-bold whitespace-nowrap ${showBatchLayerMenu ? 'text-purple-700 dark:text-purple-200' : 'text-sky-600 dark:text-sky-400'}`}>레이어 변경</span>
+                <span className={`text-[11px] font-semibold whitespace-nowrap ${showBatchLayerMenu ? 'text-purple-700 dark:text-purple-200' : 'text-sky-600 dark:text-sky-400'}`}>레이어</span>
               </button>
               
               {showBatchLayerMenu && (
                 <>
-                  {/* Backdrop for easy closing */}
                   <div className="fixed inset-0 z-40" onClick={() => setShowBatchLayerMenu(false)} />
-                  
-                  {/* Dropdown Menu (Opened downwards on mobile) */}
-                  <div className="absolute top-full left-0 mt-2 w-48 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl overflow-hidden z-50 animate-in slide-in-from-top-2">
-                    <div className="p-2 max-h-60 overflow-y-auto custom-scrollbar">
-                      <div className="px-2 py-1.5 mb-1 border-b border-slate-100 dark:border-slate-800">
-                        <span className="text-[10px] font-black text-slate-400 uppercase">대상 레이어 선택</span>
-                      </div>
+                  <div className="absolute top-full left-0 mt-1.5 w-44 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl overflow-hidden z-50 animate-in slide-in-from-top-2">
+                    <div className="p-1.5 max-h-60 overflow-y-auto custom-scrollbar">
                       {layers.map(l => (
                         <button
                           key={l.id}
@@ -1441,7 +1589,7 @@ export default function App() {
                             handleBatchChangeLayer(l.id);
                             setShowBatchLayerMenu(false);
                           }}
-                          className="w-full text-left px-3 py-2 rounded-xl text-[11px] font-semibold text-slate-700 dark:text-slate-300 hover:bg-sky-50 dark:hover:bg-sky-900/40 hover:text-sky-600 dark:hover:text-sky-400 transition flex items-center gap-2"
+                          className="w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-slate-700 dark:text-slate-300 hover:bg-sky-50 dark:hover:bg-sky-900/40 hover:text-sky-600 dark:hover:text-sky-400 transition flex items-center gap-2"
                         >
                           <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: l.color }} />
                           <span className="truncate">{l.name}</span>
@@ -1458,7 +1606,7 @@ export default function App() {
               <button
                 onClick={handleExecuteJoin}
                 title="선택된 선 결합 (Join)"
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/80 hover:bg-emerald-100 dark:hover:bg-emerald-900 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-[11px] font-semibold transition"
+                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/80 hover:bg-emerald-100 dark:hover:bg-emerald-900 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-[11px] font-semibold whitespace-nowrap transition"
               >
                 <Link2 className="w-3.5 h-3.5" />
                 <span>결합</span>
@@ -1469,7 +1617,7 @@ export default function App() {
             <button
               onClick={handleDeleteSelected}
               title="일괄 삭제"
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-red-50 dark:bg-red-950/80 hover:bg-red-100 dark:hover:bg-red-900 text-red-600 dark:text-red-300 border border-red-200 dark:border-red-800 text-[11px] font-medium transition"
+              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-red-50 dark:bg-red-950/80 hover:bg-red-100 dark:hover:bg-red-900 text-red-600 dark:text-red-300 border border-red-200 dark:border-red-800 text-[11px] font-medium whitespace-nowrap transition"
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span>삭제</span>
@@ -1488,79 +1636,48 @@ export default function App() {
                 setSelectedEntityIds(allIds);
               }}
               title="전체 선택 (Ctrl+A)"
-              className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-[11px] font-medium transition"
+              className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-[11px] font-medium whitespace-nowrap transition"
             >
-              전체선택
+              전체
             </button>
 
             {/* Deselect button */}
             <button
               onClick={() => setSelectedEntityIds([])}
               title="선택 해제 (Esc)"
-              className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-900 dark:hover:text-white transition"
+              className="p-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-900 dark:hover:text-white transition"
             >
-              <X className="w-4 h-4" />
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
 
-
-
-
-        {/* Floating Multi-Point Distance Measurement Panel (여러 점간 누적 거리 합산) */}
+        {/* Compact Cumulative Distance Measurement Bar */}
         {tool === 'measure' && activePoints.length >= 1 && (
-          <div className="fixed top-16 right-2 sm:top-20 sm:right-4 z-30 w-72 sm:w-80 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-cyan-400 dark:border-cyan-500/80 rounded-2xl shadow-2xl p-3 sm:p-3.5 flex flex-col gap-2 animate-in fade-in slide-in-from-right-3 duration-200">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
-              <div className="flex items-center gap-1.5">
-                <Ruler className="w-4 h-4 text-cyan-600 dark:text-cyan-400" />
-                <h3 className="text-xs font-semibold text-slate-900 dark:text-slate-100">거리 및 점간 누적 측정</h3>
-              </div>
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-cyan-50 dark:bg-cyan-950 text-cyan-700 dark:text-cyan-300 border border-cyan-200 dark:border-cyan-800 font-mono">
-                {activePoints.length}개 지점
+          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-cyan-400 dark:border-cyan-500/80 rounded-xl shadow-xl px-2.5 py-1.5 max-w-[96vw] animate-in fade-in slide-in-from-top-2 duration-150">
+            <Ruler className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400 shrink-0" />
+            <div className="flex items-baseline gap-1 whitespace-nowrap">
+              <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">누계</span>
+              <span className="text-sm font-bold font-mono text-cyan-600 dark:text-cyan-400 tabular-nums">
+                {measureCumulative.toFixed(3)}m
               </span>
-            </div>
-
-            {/* Total Cumulative Sum Card */}
-            <div className="bg-slate-50 dark:bg-slate-950/90 rounded-xl p-2.5 border border-slate-200 dark:border-slate-800/90 flex flex-col">
-              <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">총 누적 거리 합계 (Total)</span>
-              <div className="flex items-baseline gap-1 mt-0.5">
-                <span className="text-2xl font-bold font-mono text-cyan-600 dark:text-cyan-400">
-                  {measureCumulative.toFixed(3)}
+              {liveMeasurement.currentSegment > 0 && (
+                <span className="text-[11px] font-mono text-cyan-600/80 dark:text-cyan-300/80 tabular-nums">
+                  (+{liveMeasurement.currentSegment.toFixed(3)})
                 </span>
-                <span className="text-xs text-slate-500 dark:text-slate-400 font-sans">m</span>
-                {liveMeasurement.currentSegment > 0 && (
-                  <span className="ml-auto text-[11px] font-mono text-cyan-600/80 dark:text-cyan-300/80">
-                    (+{liveMeasurement.currentSegment.toFixed(3)}m)
-                  </span>
-                )}
-              </div>
+              )}
             </div>
-
-            {/* Segments List */}
-            {measureSegments.length > 0 && (
-              <div className="flex flex-col gap-1 max-h-32 overflow-y-auto pr-1">
-                <span className="text-[10px] text-slate-500 font-medium">구간별 거리 상세</span>
-                {measureSegments.map((seg: { index: number; dist: number }) => (
-                  <div key={seg.index} className="flex items-center justify-between py-1 px-2 rounded-lg bg-white dark:bg-slate-800/50 border border-slate-100 dark:border-transparent text-[11px]">
-                    <span className="text-slate-500 dark:text-slate-400">P{seg.index} → P{seg.index + 1}</span>
-                    <span className="font-mono text-slate-900 dark:text-slate-200 font-semibold">{seg.dist.toFixed(3)} m</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Actions */}
-            <div className="flex items-center gap-1.5 pt-1.5 border-t border-slate-100 dark:border-slate-800">
+            <div className="flex items-center gap-1 pl-1 border-l border-slate-200 dark:border-slate-700">
               <button
                 onClick={() => setActivePoints(prev => prev.slice(0, -1))}
                 disabled={activePoints.length === 0}
-                className="flex-1 py-1.5 px-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium transition text-center border border-slate-200 dark:border-transparent"
+                className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-[11px] font-medium whitespace-nowrap transition"
               >
-                마지막 점 취소
+                뒤로
               </button>
               <button
                 onClick={() => setActivePoints([])}
-                className="py-1.5 px-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-300 text-xs font-medium transition border border-slate-200 dark:border-transparent"
+                className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-300 text-[11px] font-medium whitespace-nowrap transition"
               >
                 초기화
               </button>
