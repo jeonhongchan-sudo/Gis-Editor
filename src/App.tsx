@@ -1086,14 +1086,14 @@ export default function App() {
 
         {/* CAD Toast Feedback */}
         {cadToast && (
-          <div className="fixed top-28 sm:top-32 left-1/2 -translate-x-1/2 z-40 px-3 py-1.5 rounded-lg bg-slate-900/95 text-white border border-sky-400/70 shadow-xl text-[11px] font-semibold animate-in fade-in slide-in-from-top-2 duration-150 pointer-events-none max-w-[92vw] text-center">
+          <div className="absolute top-14 left-1/2 -translate-x-1/2 z-40 px-3 py-1.5 rounded-lg bg-slate-900/95 text-white border border-sky-400/70 shadow-xl text-[11px] font-semibold animate-in fade-in slide-in-from-top-2 duration-150 pointer-events-none max-w-[92vw] text-center">
             {cadToast}
           </div>
         )}
 
         {/* CAD Rectangle Dimension Floating Bar */}
         {tool === 'rectangle' && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-sky-400 dark:border-sky-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
+          <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-sky-400 dark:border-sky-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
             <Square className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
             <div className="flex items-center gap-1">
               <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">W</span>
@@ -1190,7 +1190,7 @@ export default function App() {
 
         {/* CAD Circle Dimension Floating Bar */}
         {tool === 'circle' && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-sky-400 dark:border-sky-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
+          <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-sky-400 dark:border-sky-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
             <Circle className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
             <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg">
               <button
@@ -1268,7 +1268,7 @@ export default function App() {
 
         {/* CAD Break Mode Floating Bar */}
         {tool === 'break' && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-rose-400 dark:border-rose-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
+          <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-rose-400 dark:border-rose-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
             <Unlink className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
             <span className="text-[11px] font-bold text-rose-600 dark:text-rose-400 whitespace-nowrap">끊기</span>
             <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg">
@@ -1305,7 +1305,7 @@ export default function App() {
 
         {/* CAD Trim Floating Bar */}
         {tool === 'trim' && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-rose-400 dark:border-rose-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
+          <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-rose-400 dark:border-rose-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
             <Scissors className="w-3.5 h-3.5 text-rose-500 shrink-0" />
             <span className="text-[11px] font-bold text-slate-800 dark:text-slate-100 whitespace-nowrap">자르기</span>
             <button
@@ -1320,7 +1320,7 @@ export default function App() {
 
         {/* CAD Extend Floating Bar */}
         {tool === 'extend' && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-emerald-400 dark:border-emerald-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
+          <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-emerald-400 dark:border-emerald-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
             <ArrowUpRight className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
             <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg">
               <button
@@ -1375,7 +1375,7 @@ export default function App() {
 
         {/* CAD Join Floating Bar */}
         {tool === 'join' && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-amber-400 dark:border-amber-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
+          <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-amber-400 dark:border-amber-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
             <Link2 className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
             <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400 whitespace-nowrap">
               {selLinesCount}개
@@ -1412,7 +1412,7 @@ export default function App() {
 
         {/* CAD Move Floating Bar */}
         {tool === 'move' && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-amber-400 dark:border-amber-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
+          <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-amber-400 dark:border-amber-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
             <Move className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
             <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400 whitespace-nowrap">
               {selectedEntityIds.length}개
@@ -1484,7 +1484,7 @@ export default function App() {
 
         {/* CAD Offset Floating Bar */}
         {tool === 'offset' && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-emerald-400 dark:border-emerald-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
+          <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-emerald-400 dark:border-emerald-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
             <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 whitespace-nowrap">간격</span>
             <div className="flex items-center gap-1">
               <input
@@ -1539,7 +1539,7 @@ export default function App() {
 
         {/* Floating Multi-Select Action Bar (레이어 일괄 변경 & 일괄 삭제) */}
         {selectedEntityIds.length > 0 && tool !== 'join' && tool !== 'move' && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-amber-400 dark:border-amber-500/80 px-2.5 py-1.5 rounded-xl shadow-xl animate-in fade-in slide-in-from-top-3 duration-150 max-w-[96vw]">
+          <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-amber-400 dark:border-amber-500/80 px-2.5 py-1.5 rounded-xl shadow-xl animate-in fade-in slide-in-from-top-3 duration-150 max-w-[96vw]">
             <div className="flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400 font-bold shrink-0 px-0.5 whitespace-nowrap">
               <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" />
               <span>{selectedEntityIds.length}개</span>
@@ -1663,7 +1663,7 @@ export default function App() {
 
         {/* Compact Cumulative Distance Measurement Bar */}
         {tool === 'measure' && activePoints.length >= 1 && (
-          <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-cyan-400 dark:border-cyan-500/80 rounded-xl shadow-xl px-2.5 py-1.5 max-w-[96vw] animate-in fade-in slide-in-from-top-2 duration-150">
+          <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-cyan-400 dark:border-cyan-500/80 rounded-xl shadow-xl px-2.5 py-1.5 max-w-[96vw] animate-in fade-in slide-in-from-top-2 duration-150">
             <Ruler className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400 shrink-0" />
             <div className="flex items-baseline gap-1 whitespace-nowrap">
               <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">누계</span>

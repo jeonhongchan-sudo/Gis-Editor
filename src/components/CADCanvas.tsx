@@ -362,6 +362,8 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       if ((e.target as HTMLElement)?.tagName === 'INPUT' || (e.target as HTMLElement)?.tagName === 'SELECT') return;
       if (e.code === 'Space' && !e.repeat) {
         setIsSpacePressed(true);
+      } else if (e.key === 'Escape') {
+        setBreakFirstHit(null);
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -579,23 +581,51 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 
   // Live hover previews for Break and Trim CAD tools
   const resolveBreakHit = useCallback((worldPt: Point2D, snapPt?: Point2D | null, onlyId?: string): LinearTargetHit | null => {
-    const hitRadius = 18 / view.zoom;
+    const hitRadius = 24 / view.zoom;
     const baseHit = findClosestLinearTarget(worldPt, hitRadius, lines, polylines, layers, onlyId);
-    if (!baseHit) return null;
     if (snapPt) {
-      const snapHit = findClosestLinearTarget(snapPt, Math.max(0.05, hitRadius * 0.6), lines, polylines, layers, baseHit.id);
-      if (snapHit && snapHit.distance <= Math.max(0.02, 4 / view.zoom)) {
-        return snapHit;
+      const snapTolerance = Math.max(0.05, 10 / view.zoom);
+      if (baseHit) {
+        const snapOnBase = findClosestLinearTarget(snapPt, snapTolerance, lines, polylines, layers, baseHit.id);
+        if (snapOnBase) return snapOnBase;
+      } else {
+        const snapHit = findClosestLinearTarget(snapPt, snapTolerance, lines, polylines, layers, onlyId);
+        if (snapHit) return snapHit;
       }
     }
     return baseHit;
   }, [view.zoom, lines, polylines, layers]);
 
-  const hoveredBreakHit = useMemo(() => {
+  const resolveBreakPair = useCallback((
+    firstHit: LinearTargetHit,
+    worldPt: Point2D,
+    snapPt?: Point2D | null
+  ): { first: LinearTargetHit; second: LinearTargetHit } | null => {
+    const sameEntityHit = resolveBreakHit(worldPt, snapPt, firstHit.id);
+    if (sameEntityHit) {
+      return { first: firstHit, second: sameEntityHit };
+    }
+    const anyHit = resolveBreakHit(worldPt, snapPt);
+    if (anyHit && anyHit.id !== firstHit.id) {
+      const junctionTol = Math.max(0.05, 14 / view.zoom);
+      const firstOnSame = findClosestLinearTarget(firstHit.point, junctionTol, lines, polylines, layers, anyHit.id);
+      if (firstOnSame) {
+        return { first: firstOnSame, second: anyHit };
+      }
+    }
+    return null;
+  }, [resolveBreakHit, view.zoom, lines, polylines, layers]);
+
+  const hoveredBreakPair = useMemo(() => {
     if (tool !== 'break' || !cursorWorld) return null;
-    const onlyId = breakMode === 'gap' && breakFirstHit ? breakFirstHit.id : undefined;
-    return resolveBreakHit(cursorWorld, activeSnap?.point, onlyId);
-  }, [tool, cursorWorld, activeSnap, breakMode, breakFirstHit, resolveBreakHit]);
+    if (breakMode === 'gap' && breakFirstHit) {
+      return resolveBreakPair(breakFirstHit, cursorWorld, activeSnap?.point);
+    }
+    const hit = resolveBreakHit(cursorWorld, activeSnap?.point);
+    return hit ? { first: hit, second: null as LinearTargetHit | null } : null;
+  }, [tool, cursorWorld, activeSnap, breakMode, breakFirstHit, resolveBreakHit, resolveBreakPair]);
+
+  const hoveredBreakHit = hoveredBreakPair?.second || hoveredBreakPair?.first || null;
 
   const hoveredTrimPreview = useMemo(() => {
     if (tool !== 'trim' || !cursorWorld) return null;
@@ -1072,8 +1102,8 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       return;
     }
 
-    // If moved > 6px, it was a pan or drag gesture, cancel drawing click!
-    if (movedDist > 6) {
+    // If moved > 10px (matches pan threshold), it was a pan or drag gesture, cancel drawing click!
+    if (movedDist > 10) {
       return;
     }
 
@@ -1211,18 +1241,18 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 
     // 9. BREAK TOOL (1-point split or 2-point gap)
     if (tool === 'break') {
-      const onlyId = breakMode === 'gap' && breakFirstHit ? breakFirstHit.id : undefined;
-      const hit = resolveBreakHit(targetWorld, snapRes.snap?.point, onlyId);
-      if (!hit) {
-        showNodeHint(breakFirstHit ? '첫 번째 점과 같은 선 위를 클릭하세요.' : '끊을 선(단일선/연속선) 위를 클릭하세요.');
-        return;
-      }
-      if (layerMap.current.get(hit.layerId)?.locked) {
-        showNodeHint('잠긴 레이어의 객체는 수정할 수 없습니다.');
-        return;
-      }
-
       if (breakMode === 'split') {
+        const hit =
+          resolveBreakHit(snapRes.effectiveWorld, snapRes.snap?.point) ??
+          resolveBreakHit(targetWorld, snapRes.snap?.point);
+        if (!hit) {
+          showNodeHint('끊을 선(단일선/연속선) 위를 클릭하세요.');
+          return;
+        }
+        if (layerMap.current.get(hit.layerId)?.locked) {
+          showNodeHint('잠긴 레이어의 객체는 수정할 수 없습니다.');
+          return;
+        }
         const { mutation, error } = breakEntityAtPoint(hit, lines, polylines);
         if (error || !mutation) {
           showNodeHint(error || '이 위치에서는 선을 끊을 수 없습니다.');
@@ -1232,10 +1262,32 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         if (mutation.message) showNodeHint(mutation.message);
       } else {
         if (!breakFirstHit) {
+          const hit =
+            resolveBreakHit(snapRes.effectiveWorld, snapRes.snap?.point) ??
+            resolveBreakHit(targetWorld, snapRes.snap?.point);
+          if (!hit) {
+            showNodeHint('끊을 선(단일선/연속선) 위를 클릭하세요.');
+            return;
+          }
+          if (layerMap.current.get(hit.layerId)?.locked) {
+            showNodeHint('잠긴 레이어의 객체는 수정할 수 없습니다.');
+            return;
+          }
           setBreakFirstHit(hit);
           showNodeHint('같은 선 위에서 두 번째 지점을 클릭하세요.');
         } else {
-          const { mutation, error } = breakEntityBetweenPoints(breakFirstHit, hit, lines, polylines);
+          const pair =
+            resolveBreakPair(breakFirstHit, snapRes.effectiveWorld, snapRes.snap?.point) ??
+            resolveBreakPair(breakFirstHit, targetWorld, snapRes.snap?.point);
+          if (!pair) {
+            showNodeHint('첫 번째 점과 같은 선 위를 클릭하세요. (취소: ESC)');
+            return;
+          }
+          if (layerMap.current.get(pair.second.layerId)?.locked) {
+            showNodeHint('잠긴 레이어의 객체는 수정할 수 없습니다.');
+            return;
+          }
+          const { mutation, error } = breakEntityBetweenPoints(pair.first, pair.second, lines, polylines);
           if (error || !mutation) {
             showNodeHint(error || '구간 끊기에 실패했습니다.');
             return;
@@ -1391,6 +1443,23 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       if (preview.mutation.message) showNodeHint(preview.mutation.message);
       return;
     }
+  };
+
+  // Pointer Cancel / Leave Handler - cleanly resets pan/selection drag without committing a click
+  const handlePointerCancelOrLeave = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (isPanning) {
+      setIsPanning(false);
+      panStartRef.current = null;
+      try {
+        if (e.currentTarget && 'hasPointerCapture' in e.currentTarget && e.currentTarget.hasPointerCapture(e.pointerId)) {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }
+      } catch {
+        // ignore
+      }
+    }
+    pointerDownPosRef.current = null;
+    setSelectionBox(null);
   };
 
   // Mouse wheel zoom
@@ -2554,8 +2623,8 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         ctx.stroke();
       }
 
-      if (breakMode === 'gap' && breakFirstHit && hoveredBreakHit && hoveredBreakHit.id === breakFirstHit.id) {
-        const gapPreview = computeBreakGapPreview(breakFirstHit, hoveredBreakHit, lines, polylines);
+      if (breakMode === 'gap' && hoveredBreakPair?.second) {
+        const gapPreview = computeBreakGapPreview(hoveredBreakPair.first, hoveredBreakPair.second, lines, polylines);
         if (gapPreview && gapPreview.points.length >= 2) {
           ctx.strokeStyle = '#ef4444';
           ctx.lineWidth = 5;
@@ -2852,6 +2921,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     hoveredOffsetPreview,
     offsetTarget,
     hoveredBreakHit,
+    hoveredBreakPair,
     breakFirstHit,
     breakMode,
     extendMode,
@@ -2880,8 +2950,8 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-        onPointerLeave={handlePointerUp}
+        onPointerCancel={handlePointerCancelOrLeave}
+        onPointerLeave={handlePointerCancelOrLeave}
         onWheel={handleWheel}
         onDoubleClick={handleDoubleClick}
       />
