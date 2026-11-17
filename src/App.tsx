@@ -897,25 +897,27 @@ export default function App() {
     } else {
       // Append Mode
       const wasNullProject = pid === null;
+      const baseExistingLayers = layers.length > 0 ? layers : DEFAULT_LAYERS;
       if (pid === null) {
         pid = await db.projects.add({ 
           name: data.layerName || '현장 프로젝트', 
           createdAt: Date.now(), 
           updatedAt: Date.now() 
         });
-        await db.layers.bulkPut(DEFAULT_LAYERS.map(l => ({ ...l, projectId: pid! })));
+        await db.layers.bulkPut(baseExistingLayers.map(l => ({ ...l, projectId: pid! })));
       }
 
       const incomingLayers = data.layers && data.layers.length > 0 ? data.layers : DEFAULT_LAYERS;
 
       // Robust Append/Merge Logic
       const idMap = new Map<string, string>();
-      const existingLayersByName = new Map(layers.map(l => [l.name.trim(), l]));
+      const existingLayersById = new Map(baseExistingLayers.map(l => [l.id, l]));
+      const existingLayersByName = new Map(baseExistingLayers.map(l => [l.name.trim(), l]));
       const layersToAppend: CADLayer[] = [];
 
       incomingLayers.forEach((newLayer: CADLayer) => {
         const nameKey = newLayer.name.trim();
-        const existing = existingLayersByName.get(nameKey);
+        const existing = existingLayersById.get(newLayer.id) || existingLayersByName.get(nameKey);
         if (existing) {
           idMap.set(newLayer.id, existing.id);
         } else {
@@ -977,16 +979,24 @@ export default function App() {
     }
   };
 
-  const handleImportCSVPoints = async (newPoints: CADPoint[], append: boolean) => {
+  const handleImportCSVPoints = async (newPoints: CADPoint[], append: boolean, targetLayer?: CADLayer) => {
+    const csvLayers = targetLayer
+      ? !append && targetLayer.id !== 'layer-0'
+        ? [DEFAULT_LAYERS[0], targetLayer]
+        : [targetLayer]
+      : [];
     await handleImportUnifiedData({
       points: newPoints,
       lines: [],
       polylines: [],
       polygons: [],
       texts: [],
-      layers: [],
-      layerName: 'CSV 데이터'
+      layers: csvLayers,
+      layerName: 'CSV/Excel 데이터'
     }, append);
+    if (targetLayer) {
+      setActiveLayerId(targetLayer.id);
+    }
   };
 
   const handleImportSHP = async (data: UnifiedCADData, append: boolean) => {
@@ -1719,6 +1729,8 @@ export default function App() {
 
       {showImportModal && (
         <ImportModal
+          existingLayers={layers}
+          activeLayerId={activeLayerId}
           onImportCSVPoints={handleImportCSVPoints}
           onImportSHP={handleImportSHP}
           onClose={() => setShowImportModal(false)}

@@ -27,6 +27,18 @@ export interface CSVParseResult {
  * Split line with comma, semicolon, tab, or whitespace delimiter with quote handling
  */
 function splitLine(line: string): string[] {
+  const tabCount = (line.match(/\t/g) || []).length;
+  // Prefer tab delimiter when tabs clearly separate columns (e.g. TSV or Excel copy-paste with commas inside remarks)
+  if (tabCount >= 2 || (tabCount >= 1 && !line.includes(','))) {
+    return line.split('\t').map(s => {
+      let clean = s.trim();
+      if (clean.startsWith('"') && clean.endsWith('"')) {
+        clean = clean.slice(1, -1).replace(/""/g, '"');
+      }
+      return clean.trim();
+    });
+  }
+
   // If line contains commas
   if (line.includes(',')) {
     // Regex for CSV with quoted strings
@@ -43,11 +55,6 @@ function splitLine(line: string): string[] {
     return line.split(',').map(s => s.trim().replace(/^["']|["']$/g, ''));
   }
 
-  // Check tab
-  if (line.includes('\t')) {
-    return line.split('\t').map(s => s.trim().replace(/^["']|["']$/g, ''));
-  }
-
   // Check semicolon
   if (line.includes(';')) {
     return line.split(';').map(s => s.trim().replace(/^["']|["']$/g, ''));
@@ -62,7 +69,8 @@ function splitLine(line: string): string[] {
  */
 export function analyzeTableRows(
   rawRows: (string | number)[][],
-  forcedHeaderRowIndex: number = 0
+  forcedHeaderRowIndex: number = 0,
+  autoDetectHeader: boolean = true
 ): CSVParseResult {
   // Clean string conversion
   const rows: string[][] = rawRows
@@ -76,10 +84,10 @@ export function analyzeTableRows(
   // Determine header row index
   let headerRowIndex = Math.min(Math.max(0, forcedHeaderRowIndex), rows.length - 1);
 
-  // If forcedHeaderRowIndex is 0 and row 0 has no text headers but row 1 does, auto-detect
-  if (forcedHeaderRowIndex === 0 && rows.length > 1) {
+  // If autoDetectHeader is enabled and row 0 looks like a title row, auto-advance to row 1
+  if (autoDetectHeader && forcedHeaderRowIndex === 0 && rows.length > 1) {
     const r1HasKoreanOrLetters = rows[1].some(c => /[a-zA-Z가-힣]/.test(c));
-    // If row 0 looks like a single-cell title or empty
+    // If row 0 looks like a single-cell title or sparse header
     if (rows[0].filter(c => c !== '').length <= 2 && r1HasKoreanOrLetters) {
       headerRowIndex = 1;
     }
@@ -194,17 +202,24 @@ export function analyzeTableRows(
   };
 }
 
-/**
- * Parse CSV text into preview result
- */
-export function parseCSVPreview(rawText: string, forcedHeaderRowIndex: number = 0): CSVParseResult {
+export function parseCSVToRows(rawText: string): string[][] {
   const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
   if (lines.length === 0) {
     throw new Error('CSV 파일에 유효한 데이터가 없습니다.');
   }
+  return lines.map(splitLine).filter(cols => cols.length >= 1);
+}
 
-  const parsedRows = lines.map(splitLine).filter(cols => cols.length >= 1);
-  return analyzeTableRows(parsedRows, forcedHeaderRowIndex);
+/**
+ * Parse CSV text into preview result
+ */
+export function parseCSVPreview(
+  rawText: string,
+  forcedHeaderRowIndex: number = 0,
+  autoDetectHeader: boolean = true
+): CSVParseResult {
+  const parsedRows = parseCSVToRows(rawText);
+  return analyzeTableRows(parsedRows, forcedHeaderRowIndex, autoDetectHeader);
 }
 
 /**

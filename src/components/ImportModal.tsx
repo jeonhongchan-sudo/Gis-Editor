@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import { 
   X, 
   Upload, 
@@ -13,7 +13,10 @@ import {
   Layers,
   Archive,
   Maximize2,
-  Info
+  Info,
+  Filter,
+  Search,
+  Plus
 } from 'lucide-react';
 import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText } from '../types/cad';
 import { 
@@ -21,6 +24,7 @@ import {
   CSVParseResult, 
   buildCADPointsFromCSV, 
   parseCSVPreview,
+  parseCSVToRows,
   analyzeTableRows 
 } from '../utils/csvParser';
 import { parseExcelWorkbook } from '../utils/excelParser';
@@ -30,7 +34,9 @@ import { parseGeoJson } from '../utils/geoJsonParser';
 import { parseDxfBuffer } from '../utils/dxfParser';
 
 interface ImportModalProps {
-  onImportCSVPoints: (points: CADPoint[], append: boolean) => void;
+  existingLayers?: CADLayer[];
+  activeLayerId?: string;
+  onImportCSVPoints: (points: CADPoint[], append: boolean, targetLayer?: CADLayer) => void;
   onImportSHP: (data: SHPParseResult, append: boolean) => void;
   onClose: () => void;
 }
@@ -45,7 +51,18 @@ interface StoredRawInput {
 
 const LAYER_COLORS = ['#38bdf8', '#34d399', '#f43f5e', '#fbbf24', '#a855f7', '#60a5fa', '#f97316'];
 
+const DEFAULT_ZERO_LAYER: CADLayer = {
+  id: 'layer-0',
+  name: '0',
+  color: '#38bdf8',
+  visible: true,
+  locked: false,
+  lineWidth: 1.5
+};
+
 export const ImportModal: React.FC<ImportModalProps> = ({
+  existingLayers = [],
+  activeLayerId,
   onImportCSVPoints,
   onImportSHP,
   onClose
@@ -61,13 +78,37 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   const [parsingStatusMsg, setParsingStatusMsg] = useState<string>('');
 
   const rawInputRef = useRef<StoredRawInput | null>(null);
+  const rawTableRowsRef = useRef<(string | number)[][] | null>(null);
+  const excelWorkbookRef = useRef<{
+    sheetNames: string[];
+    getSheetRows: (sheetName: string) => (string | number)[][];
+  } | null>(null);
 
   // CSV/Excel State
   const [csvPreview, setCsvPreview] = useState<CSVParseResult | null>(null);
+  const [csvFileName, setCsvFileName] = useState<string | null>(null);
   const [headerRowIdx, setHeaderRowIdx] = useState<number>(0);
+  const [excelSheets, setExcelSheets] = useState<string[]>([]);
+  const [selectedExcelSheet, setSelectedExcelSheet] = useState<string>('');
   const [csvMapping, setCsvMapping] = useState<CSVColumnMapping>({
     xCol: 0, yCol: 1, nameCol: 2, zCol: -1, includeElevation: false
   });
+
+  // CSV/Excel Item Filter State (null = include all items)
+  const [selectedItemKeys, setSelectedItemKeys] = useState<Set<string> | null>(null);
+  const [itemFilterSearch, setItemFilterSearch] = useState<string>('');
+
+  // Target Layer Selection for CSV/Excel Import
+  const availableLayers = existingLayers.length > 0 ? existingLayers : [DEFAULT_ZERO_LAYER];
+  const [targetCsvLayerId, setTargetCsvLayerId] = useState<string>(() => {
+    if (activeLayerId && availableLayers.some(l => l.id === activeLayerId)) return activeLayerId;
+    return availableLayers[0]?.id || 'layer-0';
+  });
+  const [createNewLayerMode, setCreateNewLayerMode] = useState<boolean>(false);
+  const [newLayerName, setNewLayerName] = useState<string>('');
+  const [newLayerColor, setNewLayerColor] = useState<string>(
+    () => LAYER_COLORS[availableLayers.length % LAYER_COLORS.length]
+  );
 
   // SHP / GeoJSON Result State
   const [shpResult, setShpResult] = useState<SHPParseResult | null>(null);
@@ -76,6 +117,54 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
   const [loadedFormat, setLoadedFormat] = useState<'csv' | 'shp' | 'project' | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Valid numeric rows from CSV/Excel
+  const validCsvRows = useMemo(() => {
+    if (!csvPreview) return [];
+    return csvPreview.allRows.filter(row => {
+      const rawX = row[csvMapping.xCol];
+      const rawY = row[csvMapping.yCol];
+      if (rawX === undefined || rawX === '' || rawY === undefined || rawY === '') return false;
+      const x = Number(rawX);
+      const y = Number(rawY);
+      return Number.isFinite(x) && Number.isFinite(y);
+    });
+  }, [csvPreview, csvMapping.xCol, csvMapping.yCol]);
+
+  // Unique item values & counts for filtering
+  const uniqueItemEntries = useMemo(() => {
+    if (!csvPreview || csvMapping.nameCol === undefined || csvMapping.nameCol < 0) return [];
+    const col = csvMapping.nameCol;
+    const counts = new Map<string, number>();
+    for (const row of validCsvRows) {
+      const key = (row[col] ?? '').trim();
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .map(([key, count]) => ({
+        key,
+        label: key === '' ? '(빈 값)' : key,
+        count
+      }))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'ko'));
+  }, [csvPreview, validCsvRows, csvMapping.nameCol]);
+
+  const searchedItemEntries = useMemo(() => {
+    const q = itemFilterSearch.trim().toLowerCase();
+    if (!q) return uniqueItemEntries;
+    return uniqueItemEntries.filter(entry => entry.label.toLowerCase().includes(q));
+  }, [uniqueItemEntries, itemFilterSearch]);
+
+  const filteredCsvRows = useMemo(() => {
+    if (csvMapping.nameCol === undefined || csvMapping.nameCol < 0 || selectedItemKeys === null) {
+      return validCsvRows;
+    }
+    const col = csvMapping.nameCol;
+    return validCsvRows.filter(row => selectedItemKeys.has((row[col] ?? '').trim()));
+  }, [validCsvRows, csvMapping.nameCol, selectedItemKeys]);
+
+  const isAllItemsSelected = selectedItemKeys === null;
+  const selectedItemCount = selectedItemKeys === null ? uniqueItemEntries.length : selectedItemKeys.size;
 
   // Pre-calculate layer counts to prevent O(N*M) lag in render loop
   const layerStats = React.useMemo(() => {
@@ -91,15 +180,23 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     return stats;
   }, [shpResult]);
 
-  const applyRowsToPreview = (rows: (string | number)[][], headerIdx: number = 0) => {
+  const applyRowsToPreview = (
+    rows: (string | number)[][],
+    headerIdx: number = 0,
+    autoDetectHeader: boolean = true
+  ) => {
     try {
-      setHeaderRowIdx(headerIdx);
-      const res = analyzeTableRows(rows, headerIdx);
+      rawTableRowsRef.current = rows;
+      const res = analyzeTableRows(rows, headerIdx, autoDetectHeader);
+      setHeaderRowIdx(res.headerRowIndex);
       setCsvPreview(res);
       setCsvMapping(res.detectedMapping);
+      setSelectedItemKeys(null);
+      setItemFilterSearch('');
       setLoadedFormat('csv');
     } catch (err: any) {
       console.warn('Failed to parse table rows:', err);
+      alert('표 데이터를 분석할 수 없습니다: ' + (err?.message || err));
     }
   };
 
@@ -145,9 +242,13 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     } else if (raw.kind === 'csv' && raw.buffer) {
       const { text } = decodeBufferText(raw.buffer, enc);
       try {
-        const res = parseCSVPreview(text, headerRowIdx);
+        const rows = parseCSVToRows(text);
+        rawTableRowsRef.current = rows;
+        const res = parseCSVPreview(text, headerRowIdx, false);
         setCsvPreview(res);
         setCsvMapping(res.detectedMapping);
+        setSelectedItemKeys(null);
+        setItemFilterSearch('');
       } catch {}
     } else if (raw.kind === 'dxf' && raw.buffer) {
       try {
@@ -402,10 +503,10 @@ export const ImportModal: React.FC<ImportModalProps> = ({
       }
     }
 
-    // Case 4: Excel (.xlsx, .xls)
+    // Case 4: Excel (.xlsx, .xls, .xlsm, .xlsb, .ods)
     const excelFile = fileArray.find(f => {
       const ext = f.name.split('.').pop()?.toLowerCase();
-      return ext === 'xlsx' || ext === 'xls';
+      return ext === 'xlsx' || ext === 'xls' || ext === 'xlsm' || ext === 'xlsb' || ext === 'ods';
     });
     if (excelFile) {
       try {
@@ -414,41 +515,78 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         const buffer = await excelFile.arrayBuffer();
         rawInputRef.current = { kind: 'excel', filename: excelFile.name, buffer };
         const parsed = parseExcelWorkbook(buffer);
+        excelWorkbookRef.current = parsed;
+        setExcelSheets(parsed.sheetNames);
         const initialSheet = parsed.sheetNames[0];
+        setSelectedExcelSheet(initialSheet);
+        setCsvFileName(excelFile.name);
         const rows = parsed.getSheetRows(initialSheet);
-        applyRowsToPreview(rows, 0);
-        rawInputRef.current = null;
+        applyRowsToPreview(rows, 0, true);
         return;
       } catch (err: any) {
         console.warn('Excel parse failed:', err);
+        alert('엑셀 파일 분석에 실패했습니다: ' + (err?.message || err));
       } finally {
         setIsParsing(false);
       }
     }
 
-    // Case 5: CSV / Text (.csv, .txt)
+    // Case 5: CSV / Text / TSV (.csv, .txt, .tsv)
     const csvFile = fileArray.find(f => {
       const ext = f.name.split('.').pop()?.toLowerCase();
-      return ext === 'csv' || ext === 'txt';
+      return ext === 'csv' || ext === 'txt' || ext === 'tsv';
     });
     if (csvFile) {
       try {
         const buffer = await csvFile.arrayBuffer();
         rawInputRef.current = { kind: 'csv', filename: csvFile.name, buffer };
+        excelWorkbookRef.current = null;
+        setExcelSheets([]);
+        setSelectedExcelSheet('');
+        setCsvFileName(csvFile.name);
         const { text } = decodeBufferText(buffer, selectedEncoding);
-        const res = parseCSVPreview(text, 0);
-        setCsvPreview(res);
-        setCsvMapping(res.detectedMapping);
-        setLoadedFormat('csv');
+        const rows = parseCSVToRows(text);
+        applyRowsToPreview(rows, 0, true);
       } catch (err: any) {
-        alert('지원하지 않는 파일 형식이거나 읽을 수 없는 텍스트입니다. CSV, GeoJSON, SHP 파일을 선택해 주세요.');
+        alert('지원하지 않는 파일 형식이거나 읽을 수 없는 텍스트입니다. CSV, Excel, GeoJSON, SHP 파일을 선택해 주세요.');
       }
       return;
     }
 
     // If we reached here and nothing was loaded, show a hint
     if (!loadedFormat) {
-      alert('선택하신 파일 형식이 지원되지 않거나 분석에 실패했습니다. (지원: .dxf, .shp, .zip, .csv, .xlsx, .json, .geojson)');
+      alert('선택하신 파일 형식이 지원되지 않거나 분석에 실패했습니다. (지원: .dxf, .shp, .zip, .csv, .txt, .tsv, .xlsx, .xls, .xlsm, .xlsb, .ods, .json, .geojson)');
+    }
+  };
+
+  const handleExcelSheetChange = (sheetName: string) => {
+    if (!excelWorkbookRef.current) return;
+    setSelectedExcelSheet(sheetName);
+    const rows = excelWorkbookRef.current.getSheetRows(sheetName);
+    applyRowsToPreview(rows, 0, true);
+  };
+
+  const handleHeaderRowChange = (newIdx: number) => {
+    if (!rawTableRowsRef.current) return;
+    applyRowsToPreview(rawTableRowsRef.current, newIdx, false);
+  };
+
+  const handleToggleItemFilter = (key: string) => {
+    setSelectedItemKeys(prev => {
+      const next = prev === null ? new Set(uniqueItemEntries.map(e => e.key)) : new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      if (next.size === uniqueItemEntries.length) return null;
+      return next;
+    });
+  };
+
+  const handleSelectSearchedItemsOnly = () => {
+    const matched = new Set(searchedItemEntries.map(e => e.key));
+    if (matched.size === uniqueItemEntries.length) {
+      setSelectedItemKeys(null);
+    } else {
+      setSelectedItemKeys(matched);
     }
   };
 
@@ -479,13 +617,42 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
   const handleApplyCSV = () => {
     if (!csvPreview) return;
-    const points = buildCADPointsFromCSV(csvPreview.allRows, csvMapping);
+    if (filteredCsvRows.length === 0) {
+      alert('가져올 측점이 없습니다. 열 매핑 또는 항목 필터를 확인해 주세요.');
+      return;
+    }
+
+    let chosenLayer: CADLayer = DEFAULT_ZERO_LAYER;
+    if (createNewLayerMode) {
+      const trimmedName = newLayerName.trim();
+      if (!trimmedName) {
+        alert('새 레이어 이름을 입력해 주세요.');
+        return;
+      }
+      const existingMatch = appendMode
+        ? availableLayers.find(l => l.name.trim() === trimmedName)
+        : undefined;
+      chosenLayer = existingMatch || {
+        id: `layer-${Date.now()}`,
+        name: trimmedName,
+        color: newLayerColor,
+        visible: true,
+        locked: false,
+        lineWidth: 2
+      };
+    } else if (appendMode) {
+      chosenLayer = availableLayers.find(l => l.id === targetCsvLayerId) || availableLayers[0] || DEFAULT_ZERO_LAYER;
+    }
+
+    const points = buildCADPointsFromCSV(filteredCsvRows, csvMapping, chosenLayer.id);
     if (points.length === 0) {
       alert('유효한 좌표가 없습니다. 열 매핑을 확인해 주세요.');
       return;
     }
-    onImportCSVPoints(points, appendMode);
+    onImportCSVPoints(points, appendMode, chosenLayer);
     rawInputRef.current = null;
+    rawTableRowsRef.current = null;
+    excelWorkbookRef.current = null;
     setCsvPreview(null);
     onClose();
   };
@@ -538,7 +705,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 type="file" 
                 className="hidden"
                 multiple
-                accept=".xlsx,.xls,.csv,.txt,.shp,.dbf,.shx,.cpg,.zip,.geojson,.json,.dxf"
+                accept=".xlsx,.xls,.xlsm,.xlsb,.ods,.csv,.txt,.tsv,.shp,.dbf,.shx,.cpg,.zip,.geojson,.json,.dxf"
                 onChange={async e => {
                   const files = e.target.files;
                   if (files && files.length > 0) {
@@ -813,20 +980,82 @@ export const ImportModal: React.FC<ImportModalProps> = ({
             </div>
           )}
 
-          {/* CSV Mapping */}
+          {/* CSV / Excel Mapping, Filter & Target Layer */}
           {loadedFormat === 'csv' && csvPreview && (
             <div className="space-y-4 animate-in fade-in">
               <div className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-4 rounded-2xl space-y-4 shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800/80 pb-3">
-                  <div className="flex items-center gap-2 px-3 py-1 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-100 dark:border-emerald-700/60 rounded-lg text-emerald-700 dark:text-emerald-400 text-[11px] font-bold">
-                    <Check className="w-3.5 h-3.5" /> 측점 {csvPreview.totalRows.toLocaleString()}개 감지됨
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-100 dark:border-emerald-700/60 rounded-lg text-emerald-700 dark:text-emerald-400 text-[11px] font-bold">
+                      <Check className="w-3.5 h-3.5" />
+                      <span>
+                        {filteredCsvRows.length !== validCsvRows.length
+                          ? `필터 적용: ${filteredCsvRows.length.toLocaleString()} / ${validCsvRows.length.toLocaleString()}개`
+                          : `유효 측점 ${validCsvRows.length.toLocaleString()}개 감지됨`}
+                      </span>
+                    </div>
+                    {csvFileName && (
+                      <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium truncate max-w-[200px]">
+                        {csvFileName}
+                      </span>
+                    )}
                   </div>
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-sky-500 dark:bg-sky-400 inline-block"></span>
-                    <span>캐드 좌표계 기준 (X: 수평, Y: 수직) · 항목 텍스트 표시</span>
+
+                  {/* Sheet selector (Excel multi-sheet), Header row selector, and CSV encoding */}
+                  <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                    {excelSheets.length > 1 && (
+                      <label className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1">
+                        <span className="text-slate-500 dark:text-slate-400 font-medium">시트:</span>
+                        <select
+                          value={selectedExcelSheet}
+                          onChange={e => handleExcelSheetChange(e.target.value)}
+                          className="bg-transparent text-slate-900 dark:text-white font-semibold outline-none"
+                        >
+                          {excelSheets.map(sheet => (
+                            <option key={sheet} value={sheet}>{sheet}</option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+
+                    {rawTableRowsRef.current && rawTableRowsRef.current.length > 1 && (
+                      <label className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1">
+                        <span className="text-slate-500 dark:text-slate-400 font-medium">제목 행:</span>
+                        <select
+                          value={headerRowIdx}
+                          onChange={e => handleHeaderRowChange(parseInt(e.target.value, 10))}
+                          className="bg-transparent text-slate-900 dark:text-white font-semibold outline-none"
+                        >
+                          {Array.from({ length: Math.min(8, rawTableRowsRef.current.length) }, (_, idx) => (
+                            <option key={idx} value={idx}>{idx + 1}행</option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+
+                    {rawInputRef.current?.kind === 'csv' && (
+                      <div className="flex items-center gap-1 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-0.5">
+                        <button
+                          type="button"
+                          onClick={() => handleReParse('auto')}
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition ${selectedEncoding === 'auto' ? 'bg-sky-600 text-white' : 'text-slate-500 dark:text-slate-400'}`}
+                        >자동</button>
+                        <button
+                          type="button"
+                          onClick={() => handleReParse('euc-kr')}
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition ${selectedEncoding === 'euc-kr' ? 'bg-sky-600 text-white' : 'text-slate-500 dark:text-slate-400'}`}
+                        >CP949</button>
+                        <button
+                          type="button"
+                          onClick={() => handleReParse('utf-8')}
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition ${selectedEncoding === 'utf-8' ? 'bg-sky-600 text-white' : 'text-slate-500 dark:text-slate-400'}`}
+                        >UTF-8</button>
+                      </div>
+                    )}
                   </div>
                 </div>
 
+                {/* Column Mapping */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="space-y-1.5">
                     <label className="text-[11px] text-sky-600 dark:text-sky-400 font-bold ml-1 flex items-center gap-1">
@@ -835,7 +1064,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                     </label>
                     <select
                       value={csvMapping.xCol}
-                      onChange={e => setCsvMapping(m => ({ ...m, xCol: parseInt(e.target.value) }))}
+                      onChange={e => setCsvMapping(m => ({ ...m, xCol: parseInt(e.target.value, 10) }))}
                       className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 focus:outline-none focus:ring-1 focus:ring-sky-500 font-medium shadow-sm"
                     >
                       {csvPreview.headers.map((h, i) => (
@@ -851,7 +1080,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                     </label>
                     <select
                       value={csvPreview.headers.length > 1 ? csvMapping.yCol : 0}
-                      onChange={e => setCsvMapping(m => ({ ...m, yCol: parseInt(e.target.value) }))}
+                      onChange={e => setCsvMapping(m => ({ ...m, yCol: parseInt(e.target.value, 10) }))}
                       className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 focus:outline-none focus:ring-1 focus:ring-sky-500 font-medium shadow-sm"
                     >
                       {csvPreview.headers.map((h, i) => (
@@ -867,7 +1096,12 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                     </label>
                     <select
                       value={csvMapping.nameCol ?? -1}
-                      onChange={e => setCsvMapping(m => ({ ...m, nameCol: parseInt(e.target.value) }))}
+                      onChange={e => {
+                        const val = parseInt(e.target.value, 10);
+                        setCsvMapping(m => ({ ...m, nameCol: val }));
+                        setSelectedItemKeys(null);
+                        setItemFilterSearch('');
+                      }}
                       className="w-full bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-500/40 text-amber-900 dark:text-amber-200 text-xs rounded-xl p-2.5 focus:outline-none focus:ring-1 focus:ring-amber-500 font-medium shadow-sm"
                     >
                       <option value={-1}>사용 안함 (기본 번호)</option>
@@ -886,7 +1120,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                       <select
                         value={csvMapping.zCol ?? -1}
                         onChange={e => {
-                          const val = parseInt(e.target.value);
+                          const val = parseInt(e.target.value, 10);
                           setCsvMapping(m => ({
                             ...m,
                             zCol: val,
@@ -904,11 +1138,180 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                   </div>
                 )}
 
+                {/* Item Filter (항목 필터) */}
+                {csvMapping.nameCol !== undefined && csvMapping.nameCol >= 0 && uniqueItemEntries.length > 0 && (
+                  <div className="pt-3 border-t border-slate-100 dark:border-slate-800/80 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800 dark:text-slate-200">
+                        <Filter className="w-3.5 h-3.5 text-amber-500" />
+                        <span>가져올 항목 필터</span>
+                        <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                          ({selectedItemCount}/{uniqueItemEntries.length}종 · {filteredCsvRows.length.toLocaleString()}개)
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[11px]">
+                        {itemFilterSearch.trim() !== '' && searchedItemEntries.length > 0 && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={handleSelectSearchedItemsOnly}
+                              className="text-amber-600 dark:text-amber-400 hover:underline font-semibold"
+                            >
+                              검색 결과만 선택 ({searchedItemEntries.length})
+                            </button>
+                            <span className="text-slate-300 dark:text-slate-700">|</span>
+                          </>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setSelectedItemKeys(null)}
+                          className="text-sky-600 dark:text-sky-400 hover:underline font-semibold"
+                        >
+                          전체 선택
+                        </button>
+                        <span className="text-slate-300 dark:text-slate-700">|</span>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedItemKeys(new Set())}
+                          className="text-slate-500 dark:text-slate-400 hover:underline"
+                        >
+                          모두 해제
+                        </button>
+                      </div>
+                    </div>
+
+                    {uniqueItemEntries.length > 6 && (
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={itemFilterSearch}
+                          onChange={e => setItemFilterSearch(e.target.value)}
+                          placeholder="항목명 검색 (예: 맨홀, 전주, 경계)..."
+                          className="w-full pl-8 pr-7 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-xs text-slate-900 dark:text-white outline-none focus:ring-1 focus:ring-amber-500"
+                        />
+                        {itemFilterSearch && (
+                          <button
+                            type="button"
+                            onClick={() => setItemFilterSearch('')}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5 max-h-40 overflow-y-auto pr-1 custom-scrollbar">
+                      {searchedItemEntries.slice(0, 150).map(entry => {
+                        const checked = isAllItemsSelected || selectedItemKeys?.has(entry.key) || false;
+                        return (
+                          <label
+                            key={entry.key || '__empty__'}
+                            className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-[11px] cursor-pointer transition ${
+                              checked
+                                ? 'bg-amber-50/80 dark:bg-amber-950/40 border-amber-300 dark:border-amber-600/50 text-slate-900 dark:text-amber-100'
+                                : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => handleToggleItemFilter(entry.key)}
+                              className="w-3.5 h-3.5 rounded border-slate-300 text-amber-500 focus:ring-amber-500 shrink-0"
+                            />
+                            <span className="truncate flex-1 font-medium" title={entry.label}>
+                              {entry.label}
+                            </span>
+                            <span className="text-[10px] font-mono text-slate-400 dark:text-slate-500 shrink-0">
+                              {entry.count}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+
+                    {searchedItemEntries.length > 150 && (
+                      <p className="text-[10px] text-slate-400 dark:text-slate-500">
+                        항목 종류가 많아 상위 150개만 표시됩니다. 위 검색창으로 항목을 좁혀 선택할 수 있습니다.
+                      </p>
+                    )}
+
+                    {filteredCsvRows.length === 0 && (
+                      <div className="flex items-center gap-1.5 p-2 bg-amber-50 dark:bg-amber-950/40 rounded-lg border border-amber-200 dark:border-amber-900/50 text-amber-700 dark:text-amber-400 text-[11px]">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        <span>선택된 항목이 없습니다. 가져올 항목을 하나 이상 선택해 주세요.</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Target Layer Selection (배치할 레이어 선택) */}
+                <div className="pt-3 border-t border-slate-100 dark:border-slate-800/80 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800 dark:text-slate-200">
+                      <Layers className="w-3.5 h-3.5 text-sky-500" />
+                      <span>배치할 레이어 일괄 지정</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setCreateNewLayerMode(v => !v)}
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-sky-600 dark:text-sky-400 hover:underline"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>{createNewLayerMode ? '기존 레이어에서 선택' : '새 레이어 직접 만들기'}</span>
+                    </button>
+                  </div>
+
+                  {createNewLayerMode ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        type="color"
+                        value={newLayerColor}
+                        onChange={e => setNewLayerColor(e.target.value)}
+                        title="새 레이어 색상"
+                        className="w-9 h-9 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-0.5 cursor-pointer shrink-0"
+                      />
+                      <input
+                        type="text"
+                        value={newLayerName}
+                        onChange={e => setNewLayerName(e.target.value)}
+                        placeholder="새 레이어 이름 입력 (예: 측량_맨홀, 경계측점)"
+                        className="flex-1 min-w-[180px] bg-white dark:bg-slate-900 border border-sky-300 dark:border-sky-600 text-slate-900 dark:text-white text-xs rounded-xl px-3 py-2 outline-none focus:ring-1 focus:ring-sky-500 font-medium"
+                      />
+                    </div>
+                  ) : appendMode ? (
+                    <div className="space-y-1">
+                      <select
+                        value={availableLayers.some(l => l.id === targetCsvLayerId) ? targetCsvLayerId : (availableLayers[0]?.id || 'layer-0')}
+                        onChange={e => setTargetCsvLayerId(e.target.value)}
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 focus:outline-none focus:ring-1 focus:ring-sky-500 font-medium shadow-sm"
+                      >
+                        {availableLayers.map(layer => (
+                          <option key={layer.id} value={layer.id}>
+                            {layer.name}
+                          </option>
+                        ))}
+                      </select>
+                      {availableLayers.length <= 1 && (
+                        <p className="text-[10px] text-slate-400 dark:text-slate-500 ml-1">
+                          현재 도면에 기본(0) 레이어만 있습니다. 오른쪽 위 &apos;새 레이어 직접 만들기&apos; 또는 레이어 패널에서 미리 추가해 분류할 수 있습니다.
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-2 px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-600 dark:text-slate-300">
+                      <span>새로 시작 모드에서는 기본 <strong className="text-slate-900 dark:text-white">0</strong> 레이어에 배치됩니다.</span>
+                      <span className="text-[10px] text-slate-400">(또는 새 레이어 만들기 선택)</span>
+                    </div>
+                  )}
+                </div>
+
                 {/* Data Preview Table */}
-                {csvPreview.sampleRows.length > 0 && (
+                {filteredCsvRows.length > 0 && (
                   <div className="pt-2 border-t border-slate-100 dark:border-slate-800/80 space-y-1.5">
                     <div className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold flex items-center justify-between">
-                      <span>데이터 미리보기 (상위 {Math.min(3, csvPreview.sampleRows.length)}행)</span>
+                      <span>가져올 데이터 미리보기 (상위 {Math.min(5, filteredCsvRows.length)}행)</span>
                     </div>
                     <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 text-[11px] shadow-inner">
                       <table className="w-full text-left font-mono">
@@ -921,7 +1324,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 text-slate-700 dark:text-slate-300">
-                          {csvPreview.sampleRows.slice(0, 3).map((row, rIdx) => (
+                          {filteredCsvRows.slice(0, 5).map((row, rIdx) => (
                             <tr key={rIdx} className="hover:bg-white dark:hover:bg-slate-800/30">
                               <td className="py-1.5 px-3 text-sky-600 dark:text-sky-400">{row[csvMapping.xCol] || '-'}</td>
                               <td className="py-1.5 px-3 text-sky-600 dark:text-sky-400">{row[csvMapping.yCol] || '-'}</td>
@@ -943,10 +1346,11 @@ export const ImportModal: React.FC<ImportModalProps> = ({
               </div>
               <button 
                 onClick={handleApplyCSV} 
-                className="w-full py-3.5 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white font-bold rounded-xl shadow-lg shadow-sky-600/30 transition active:scale-95 flex items-center justify-center gap-2"
+                disabled={filteredCsvRows.length === 0}
+                className="w-full py-3.5 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 disabled:opacity-50 text-white font-bold rounded-xl shadow-lg shadow-sky-600/30 transition active:scale-95 flex items-center justify-center gap-2"
               >
                 <Check className="w-4 h-4" />
-                <span>측점 데이터 도면에 배치하기 (화면 자동맞춤)</span>
+                <span>선택한 측점 {filteredCsvRows.length.toLocaleString()}개 도면에 배치하기</span>
               </button>
             </div>
           )}
@@ -954,7 +1358,19 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
         <div className="p-4 border-t border-slate-100 dark:border-slate-800 flex justify-between bg-slate-50/50 dark:bg-slate-950/50">
           <button 
-            onClick={() => { setLoadedFormat(null); setShpResult(null); rawInputRef.current = null; }} 
+            onClick={() => {
+              setLoadedFormat(null);
+              setShpResult(null);
+              setCsvPreview(null);
+              setCsvFileName(null);
+              setExcelSheets([]);
+              setSelectedExcelSheet('');
+              setSelectedItemKeys(null);
+              setItemFilterSearch('');
+              rawInputRef.current = null;
+              rawTableRowsRef.current = null;
+              excelWorkbookRef.current = null;
+            }} 
             className="px-4 py-2 text-xs text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition"
           >
             다른 파일 선택
