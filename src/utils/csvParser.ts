@@ -183,7 +183,6 @@ export function analyzeTableRows(
     }
   }
 
-  // Default CAD mapping without coordinate swapping as requested
   const mapping: CSVColumnMapping = {
     xCol: rawXCol >= 0 ? rawXCol : 0,
     yCol: rawYCol >= 0 ? rawYCol : 1,

@@ -395,8 +395,11 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
           )}
 
           {activeSnap && (
-            <span className="px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400 text-[9px] sm:text-[10px] font-sans truncate max-w-[120px] sm:max-w-none">
+            <span className="px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400 text-[9px] sm:text-[10px] font-sans truncate max-w-[160px] sm:max-w-none">
               {activeSnap.label}
+              {activeSnap.point.z !== undefined && Number.isFinite(activeSnap.point.z)
+                ? ` · Z:${activeSnap.point.z.toFixed(3)}`
+                : ''}
             </span>
           )}
         </div>

@@ -598,14 +598,20 @@ export const ImportModal: React.FC<ImportModalProps> = ({
       return;
     }
 
-    // Filter results based on selected layers
+    // Keep Z on points as simple info only; keep all linear geometries strictly 2D planar
     const filteredResult: SHPParseResult = {
       ...shpResult,
       layers: shpResult.layers.filter(l => selectedLayerIds.has(l.id)),
       points: shpResult.points.filter(p => selectedLayerIds.has(p.layerId)),
-      lines: shpResult.lines.filter(l => selectedLayerIds.has(l.layerId)),
-      polylines: shpResult.polylines.filter(pl => selectedLayerIds.has(pl.layerId)),
-      polygons: shpResult.polygons.filter(pg => selectedLayerIds.has(pg.layerId)),
+      lines: shpResult.lines
+        .filter(l => selectedLayerIds.has(l.layerId))
+        .map(l => ({ ...l, start: { x: l.start.x, y: l.start.y }, end: { x: l.end.x, y: l.end.y } })),
+      polylines: shpResult.polylines
+        .filter(pl => selectedLayerIds.has(pl.layerId))
+        .map(pl => ({ ...pl, points: pl.points.map(pt => ({ x: pt.x, y: pt.y })) })),
+      polygons: shpResult.polygons
+        .filter(pg => selectedLayerIds.has(pg.layerId))
+        .map(pg => ({ ...pg, points: pg.points.map(pt => ({ x: pt.x, y: pt.y })) })),
       texts: shpResult.texts?.filter(t => selectedLayerIds.has(t.layerId))
     };
 
@@ -649,6 +655,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
       alert('유효한 좌표가 없습니다. 열 매핑을 확인해 주세요.');
       return;
     }
+
     onImportCSVPoints(points, appendMode, chosenLayer);
     rawInputRef.current = null;
     rawTableRowsRef.current = null;
@@ -1114,27 +1121,34 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
                 {/* Optional Z elevation */}
                 {csvPreview.headers.length > 2 && (
-                  <div className="pt-2 border-t border-slate-100 dark:border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-xs">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] text-slate-600 dark:text-slate-300 font-medium">표고(고도 Z) 속성:</span>
-                      <select
-                        value={csvMapping.zCol ?? -1}
-                        onChange={e => {
-                          const val = parseInt(e.target.value, 10);
-                          setCsvMapping(m => ({
-                            ...m,
-                            zCol: val,
-                            includeElevation: val >= 0
-                          }));
-                        }}
-                        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-sky-500 font-medium shadow-sm"
-                      >
-                        <option value={-1}>사용 안함 (고도 제외)</option>
-                        {csvPreview.headers.map((h, i) => (
-                          <option key={i} value={i}>{h} (열 {i + 1})</option>
-                        ))}
-                      </select>
+                  <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800/80 space-y-1.5 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] text-slate-600 dark:text-slate-300 font-bold">표고(고도 Z) 열:</span>
+                        <select
+                          value={csvMapping.zCol ?? -1}
+                          onChange={e => {
+                            const val = parseInt(e.target.value, 10);
+                            setCsvMapping(m => ({
+                              ...m,
+                              zCol: val,
+                              includeElevation: val >= 0
+                            }));
+                          }}
+                          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-sky-500 font-medium shadow-sm"
+                        >
+                          <option value={-1}>사용 안함 (Z 제외)</option>
+                          {csvPreview.headers.map((h, i) => (
+                            <option key={i} value={i}>{h} (열 {i + 1})</option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
+                    {csvMapping.includeElevation && (
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                        ※ Z값은 측점 단순 정보(표시·측점표 확인용)로만 저장되며, 선 그리기·Join·길이 계산 등 선형 작업에는 반영되지 않습니다.
+                      </p>
+                    )}
                   </div>
                 )}
 

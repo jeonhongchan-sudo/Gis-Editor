@@ -415,22 +415,23 @@ export default function App() {
 
   const handleFinishDrawing = async () => {
     if (activePoints.length >= 2) {
+      const planarPoints = activePoints.map(p => ({ x: p.x, y: p.y }));
       if (tool === 'polyline') {
         const newPl: CADPolyline = {
           id: `pl-${Date.now()}`,
           name: `연속선_${polylines.length + 1}`,
-          points: activePoints,
+          points: planarPoints,
           isClosed: false,
           layerId: activeLayerId
         };
         setPolylines(prev => [...prev, newPl]);
         await saveEntityToDb('polylines', newPl);
         pushHistory('연속선 생성');
-      } else if (tool === 'polygon' && activePoints.length >= 3) {
+      } else if (tool === 'polygon' && planarPoints.length >= 3) {
         const newPoly: CADPolygon = {
           id: `poly-${Date.now()}`,
           name: `구역_${polygons.length + 1}`,
-          points: activePoints,
+          points: planarPoints,
           layerId: activeLayerId
         };
         setPolygons(prev => [...prev, newPoly]);

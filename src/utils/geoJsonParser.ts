@@ -106,20 +106,28 @@ export function parseGeoJson(
     const layer = layerMap.get(layerName)!;
 
     // Coordinate transformation helper
-    const getPoint = (coords: number[]): Point2D => {
+    const getPoint = (coords: number[], includeZ = false): Point2D => {
       const [lng, lat] = coords;
       // transformCoords correctly handles cases where source/target are LOCAL or identical
       const transformed = transformCoords(lng, lat, sourceCrs, targetCrs);
-      return {
-        x: transformed.x,
-        y: transformed.y,
-        z: coords[2] // Preserve Z if present
-      };
+      const rawZ = includeZ && coords[2] !== undefined && Number.isFinite(Number(coords[2]))
+        ? Number(coords[2])
+        : undefined;
+      return rawZ !== undefined
+        ? { x: transformed.x, y: transformed.y, z: rawZ }
+        : { x: transformed.x, y: transformed.y };
+    };
+
+    const resolvePointZ = (pt: Point2D): number | undefined => {
+      if (pt.z !== undefined && Number.isFinite(pt.z)) return pt.z;
+      const propZ = Number(props.z);
+      return props.z !== undefined && Number.isFinite(propZ) ? propZ : undefined;
     };
 
     // 1. Point Geometries
     if (geom.type === 'Point') {
-      const pt = getPoint(geom.coordinates);
+      const pt = getPoint(geom.coordinates, true);
+      const ptZ = resolvePointZ(pt);
       
       // Recognition logic: distinguish between a Text label and a Survey Point
       const dxftype = (props.dxftype || props.entity || '').toUpperCase();
@@ -131,7 +139,7 @@ export function parseGeoJson(
           name,
           x: pt.x,
           y: pt.y,
-          z: pt.z,
+          z: ptZ,
           layerId: layer.id,
           isSurveyNode: true,
           attributes: cleanAttributes(props, name)
@@ -144,7 +152,7 @@ export function parseGeoJson(
           name,
           x: pt.x,
           y: pt.y,
-          z: pt.z,
+          z: ptZ,
           layerId: layer.id,
           isSurveyNode: props.isSurveyNode !== undefined ? !!props.isSurveyNode : true,
           attributes: cleanAttributes(props, name)
@@ -154,23 +162,24 @@ export function parseGeoJson(
     // 2. MultiPoint
     else if (geom.type === 'MultiPoint') {
       geom.coordinates.forEach((c: number[], subIdx: number) => {
-        const pt = getPoint(c);
+        const pt = getPoint(c, true);
+        const ptZ = resolvePointZ(pt);
         const mptName = String(props.TEXTSTRING || props.name || props.title || `MPT_${idx + 1}_${subIdx + 1}`);
         points.push({
           id: props.id ? `${props.id}_${subIdx}` : `gj-mpt-${Date.now()}-${idx}-${subIdx}`,
           name: mptName,
           x: pt.x,
           y: pt.y,
-          z: pt.z,
+          z: ptZ,
           layerId: layer.id,
           isSurveyNode: true,
           attributes: cleanAttributes(props, mptName)
         });
       });
     }
-    // 3. Line Geometries
+    // 3. Line Geometries (strictly 2D)
     else if (geom.type === 'LineString') {
-      const pts = geom.coordinates.map((c: number[]) => getPoint(c));
+      const pts = geom.coordinates.map((c: number[]) => getPoint(c, false));
       const isClosed = !!props.isClosed;
       if (isClosed && pts.length >= 2) {
         const first = pts[0];

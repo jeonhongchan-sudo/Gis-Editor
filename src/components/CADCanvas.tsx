@@ -1109,6 +1109,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 
     let targetWorld = screenToWorld(screenX, screenY, rect.width, rect.height);
     const snapRes = evaluateSnap(targetWorld);
+    const to2D = (pt: Point2D): Point2D => ({ x: pt.x, y: pt.y });
 
     // 2. POLYLINE TOOL: STRICT NODE REQUIREMENT
     // User request: "연속 그리기는 측점(노드)가 있는 곳에서만 적용되게 해줘... 우리 도면은 텍스트가 노드점이 돼..."
@@ -1118,7 +1119,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         return;
       }
 
-      const ptToAdd = snapRes.snap.point;
+      const ptToAdd = to2D(snapRes.snap.point);
       // Prevent consecutive identical points
       if (activePoints.length > 0) {
         const last = activePoints[activePoints.length - 1];
@@ -1130,7 +1131,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 
     // 3. MEASURE TOOL: MULTI-POINT ACCUMULATION
     if (tool === 'measure') {
-      const ptToAdd = snapRes.snap ? snapRes.snap.point : snapRes.effectiveWorld;
+      const ptToAdd = to2D(snapRes.snap ? snapRes.snap.point : snapRes.effectiveWorld);
       if (activePoints.length > 0) {
         const last = activePoints[activePoints.length - 1];
         if (distance2D(last, ptToAdd) < 0.0001) return;
@@ -1161,14 +1162,15 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 
     // 5. LINE TOOL
     if (tool === 'line') {
+      const click2D = to2D(snapRes.effectiveWorld);
       if (activePoints.length === 0) {
-        setActivePoints([snapRes.effectiveWorld]);
+        setActivePoints([click2D]);
       } else {
-        const start = activePoints[0];
+        const start = to2D(activePoints[0]);
         onAddLine({
           id: `line-${Date.now()}`,
           start,
-          end: snapRes.effectiveWorld,
+          end: click2D,
           layerId: activeLayerId
         });
         setActivePoints([]);
@@ -1178,10 +1180,11 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 
     // 6. RECTANGLE TOOL (2-click corner-to-corner or 1-click locked dimension stamp)
     if (tool === 'rectangle') {
+      const click2D = to2D(snapRes.effectiveWorld);
       if (rectDimSpec?.locked && Math.abs(rectDimSpec.width) > 1e-4 && Math.abs(rectDimSpec.height) > 1e-4) {
         onAddPolyline(
           createRectangleByDimensions(
-            snapRes.effectiveWorld,
+            click2D,
             rectDimSpec.width,
             rectDimSpec.height,
             rectDimSpec.anchor,
@@ -1193,10 +1196,10 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         return;
       }
       if (activePoints.length === 0) {
-        setActivePoints([snapRes.effectiveWorld]);
+        setActivePoints([click2D]);
       } else {
-        const p1 = activePoints[0];
-        const p2 = snapRes.effectiveWorld;
+        const p1 = to2D(activePoints[0]);
+        const p2 = click2D;
         if (Math.abs(p2.x - p1.x) > 1e-4 && Math.abs(p2.y - p1.y) > 1e-4) {
           onAddPolyline(createRectanglePolyline(p1, p2, activeLayerId, `사각형_${polylines.length + 1}`));
         }
@@ -1207,10 +1210,11 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 
     // 7. CIRCLE TOOL (2-click center-to-radius or 1-click locked dimension stamp)
     if (tool === 'circle') {
+      const click2D = to2D(snapRes.effectiveWorld);
       if (circleDimSpec?.locked && circleDimSpec.radius > 1e-4) {
         onAddPolyline(
           createCirclePolyline(
-            snapRes.effectiveWorld,
+            click2D,
             circleDimSpec.radius,
             activeLayerId,
             64,
@@ -1221,10 +1225,10 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         return;
       }
       if (activePoints.length === 0) {
-        setActivePoints([snapRes.effectiveWorld]);
+        setActivePoints([click2D]);
       } else {
-        const center = activePoints[0];
-        const radius = distance2D(center, snapRes.effectiveWorld);
+        const center = to2D(activePoints[0]);
+        const radius = distance2D(center, click2D);
         if (radius > 1e-4) {
           onAddPolyline(createCirclePolyline(center, radius, activeLayerId, 64, `원_${polylines.length + 1}`));
         }
@@ -1235,7 +1239,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 
     // 8. POLYGON TOOL
     if (tool === 'polygon') {
-      setActivePoints(prev => [...prev, snapRes.effectiveWorld]);
+      setActivePoints(prev => [...prev, to2D(snapRes.effectiveWorld)]);
       return;
     }
 
@@ -1502,7 +1506,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     if (tool === 'polyline' && activePoints.length >= 2) {
       onAddPolyline({
         id: `pl-${Date.now()}`,
-        points: activePoints,
+        points: activePoints.map(p => ({ x: p.x, y: p.y })),
         isClosed: false,
         layerId: activeLayerId
       });
@@ -1510,7 +1514,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     } else if (tool === 'polygon' && activePoints.length >= 3) {
       onAddPolygon({
         id: `poly-${Date.now()}`,
-        points: activePoints,
+        points: activePoints.map(p => ({ x: p.x, y: p.y })),
         layerId: activeLayerId
       });
       setActivePoints([]);

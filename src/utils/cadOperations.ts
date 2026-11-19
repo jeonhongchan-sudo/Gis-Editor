@@ -142,15 +142,18 @@ function getChainWithArcLengths(
   let isClosed = false;
 
   if (entity.kind === 'line') {
-    pts = [{ ...entity.data.start }, { ...entity.data.end }];
+    pts = [
+      { x: entity.data.start.x, y: entity.data.start.y },
+      { x: entity.data.end.x, y: entity.data.end.y }
+    ];
   } else {
-    pts = entity.data.points.map(p => ({ ...p }));
+    pts = entity.data.points.map(p => ({ x: p.x, y: p.y }));
     isClosed = !!entity.data.isClosed;
     if (isClosed && pts.length >= 2) {
       const first = pts[0];
       const last = pts[pts.length - 1];
       if (distance2D(first, last) > EPS) {
-        pts.push({ ...first });
+        pts.push({ x: first.x, y: first.y });
       }
     }
   }
@@ -911,7 +914,10 @@ export function joinLinearEntities(
     chains.push({
       sourceLineIds: [ln.id],
       sourcePolylineIds: [],
-      points: [{ ...ln.start }, { ...ln.end }],
+      points: [
+        { x: ln.start.x, y: ln.start.y },
+        { x: ln.end.x, y: ln.end.y }
+      ],
       layerId: ln.layerId,
       color: ln.color,
       name: ln.name,
@@ -926,7 +932,7 @@ export function joinLinearEntities(
     chains.push({
       sourceLineIds: [],
       sourcePolylineIds: [pl.id],
-      points: pl.points.map(p => ({ ...p })),
+      points: pl.points.map(p => ({ x: p.x, y: p.y })),
       layerId: pl.layerId,
       color: pl.color,
       name: pl.name,

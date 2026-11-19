@@ -30,7 +30,8 @@ export const ManualPointModal: React.FC<ManualPointModalProps> = ({
     
     const numX = parseFloat(x);
     const numY = parseFloat(y);
-    const numZ = z.trim() ? parseFloat(z) : undefined;
+    const rawZ = z.trim() ? parseFloat(z) : undefined;
+    const numZ = rawZ !== undefined && Number.isFinite(rawZ) ? rawZ : undefined;
 
     if (isNaN(numX) || isNaN(numY)) {
       alert('유효한 X, Y 좌표를 입력해 주세요.');
@@ -126,14 +127,14 @@ export const ManualPointModal: React.FC<ManualPointModalProps> = ({
           </div>
 
           <div className="space-y-1.5 pt-1">
-            <label className="text-[11px] text-slate-500 dark:text-slate-400 font-bold ml-1">표고 (Optional Z)</label>
+            <label className="text-[11px] text-slate-500 dark:text-slate-400 font-bold ml-1">표고 (Optional Z - 단순 정보)</label>
             <input
               type="number"
               step="any"
               value={z}
               onChange={e => setZ(e.target.value)}
               className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-200 text-sm font-mono rounded-xl p-2.5 focus:outline-none focus:ring-1 focus:ring-sky-500"
-              placeholder="미입력 시 제외"
+              placeholder="미입력 시 제외 (선형 작업에는 반영되지 않음)"
             />
           </div>
 

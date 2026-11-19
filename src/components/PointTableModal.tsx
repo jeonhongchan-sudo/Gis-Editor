@@ -77,7 +77,7 @@ export const PointTableModal: React.FC<PointTableModalProps> = ({
               </span>
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              DXF/SHP/CSV 통합 데이터: 측점명 편집 및 검색
+              DXF/SHP/CSV 통합 데이터: 측점명 편집 및 검색 (Z값은 참고 정보로만 보관, 선형 작업은 2D 유지)
             </p>
           </div>
           <button

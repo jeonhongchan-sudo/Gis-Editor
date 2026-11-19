@@ -234,13 +234,11 @@ export function parseDxfBuffer(
             name: `LINE_${idx + 1}`,
             start: {
               x: lStart.x,
-              y: lStart.y,
-              ...(lStart.z !== undefined ? { z: lStart.z } : {})
+              y: lStart.y
             },
             end: {
               x: lEnd.x,
-              y: lEnd.y,
-              ...(lEnd.z !== undefined ? { z: lEnd.z } : {})
+              y: lEnd.y
             },
             layerId,
             color,
@@ -254,11 +252,9 @@ export function parseDxfBuffer(
           if (!ent.vertices || !Array.isArray(ent.vertices)) break;
           const elev = typeof ent.elevation === 'number' && Number.isFinite(ent.elevation) ? ent.elevation : undefined;
           const pts: Point2D[] = ent.vertices.map((v: any) => {
-            const vz = v.z !== undefined && Number.isFinite(Number(v.z)) ? Number(v.z) : elev;
             const p: Point2D = {
               x: Number(v.x ?? 0),
-              y: Number(v.y ?? 0),
-              ...(vz !== undefined ? { z: vz } : {})
+              y: Number(v.y ?? 0)
             };
             updateBounds(p);
             return p;
@@ -421,8 +417,7 @@ export function parseDxfBuffer(
             const ang = startRad + i * deltaRad;
             const p: Point2D = {
               x: center.x + Math.cos(ang) * radius,
-              y: center.y + Math.sin(ang) * radius,
-              ...(center.z !== undefined ? { z: center.z } : {})
+              y: center.y + Math.sin(ang) * radius
             };
             updateBounds(p);
             circlePts.push(p);

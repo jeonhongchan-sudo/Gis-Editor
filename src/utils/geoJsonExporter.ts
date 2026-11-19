@@ -63,9 +63,9 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
   const isWgs84 = targetCrs === 'EPSG:4326';
   const layerById = new Map(layers.map(lay => [lay.id, lay]));
 
-  const projectPoint = (p: Point2D): number[] | null => {
+  const projectPoint = (p: Point2D, includeZ = true): number[] | null => {
     if (!Number.isFinite(p?.x) || !Number.isFinite(p?.y)) return null;
-    const zVal = p.z !== undefined && Number.isFinite(Number(p.z)) ? Number(p.z) : undefined;
+    const zVal = includeZ && p.z !== undefined && Number.isFinite(Number(p.z)) ? Number(p.z) : undefined;
     if (targetCrs && sourceCrs && sourceCrs !== 'LOCAL') {
       const transformed = transformCoords(p.x, p.y, sourceCrs, targetCrs);
       if (!Number.isFinite(transformed.x) || !Number.isFinite(transformed.y)) return null;
@@ -228,11 +228,11 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       });
   });
 
-  // 3. Export Lines
+  // 3. Export Lines (always 2D planar coordinates to match CAD 2D linework)
     lines.forEach(l => {
       if (!l || !l.start || !l.end) return;
-      const c1 = projectPoint(l.start);
-      const c2 = projectPoint(l.end);
+      const c1 = projectPoint(l.start, false);
+      const c2 = projectPoint(l.end, false);
       if (!c1 || !c2) return;
       const layerName = getLayerName(l.layerId);
       const lineName = String(l.name || '').trim() || layerName;
@@ -267,10 +267,10 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       });
     });
 
-    // 4. Export Polylines
+    // 4. Export Polylines (always 2D planar coordinates)
     polylines.forEach(pl => {
       if (!pl || !Array.isArray(pl.points) || pl.points.length < 2) return;
-      const coords = pl.points.map(projectPoint).filter((c): c is number[] => c !== null);
+      const coords = pl.points.map(pt => projectPoint(pt, false)).filter((c): c is number[] => c !== null);
       if (coords.length < 2) return;
       if (pl.isClosed && coords.length >= 2) {
         const first = coords[0];
@@ -317,10 +317,10 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       });
     });
 
-    // 5. Export Polygons as closed LineStrings (외곽선 기준 선으로 통일 출력)
+    // 5. Export Polygons as closed 2D LineStrings (외곽선 기준 선으로 통일 출력)
     polygons.forEach(pg => {
       if (!pg || !Array.isArray(pg.points) || pg.points.length < 2) return;
-      const coords = pg.points.map(projectPoint).filter((c): c is number[] => c !== null);
+      const coords = pg.points.map(pt => projectPoint(pt, false)).filter((c): c is number[] => c !== null);
       if (coords.length < 2) return;
       if (coords.length > 0) {
         const first = coords[0];
