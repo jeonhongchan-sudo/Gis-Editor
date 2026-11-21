@@ -384,7 +384,7 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
         {/* Real-time Cursor Coordinates & Z Toggle */}
         <div className="flex items-center gap-2 sm:gap-3 ml-auto text-slate-700 dark:text-slate-300">
           <label
-            title="체크 시 선 그리기·결합·내보내기에 Z값을 적용하고, 해제 시 2D 평면(Z 제외)으로 처리합니다"
+            title="체크 시 선형(선·면)에 Z좌표 포함(3D), 해제 시 2D 평면 처리"
             className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[10px] font-sans font-semibold cursor-pointer select-none transition ${
               applyZ
                 ? 'bg-sky-50 dark:bg-sky-950/70 border-sky-300 dark:border-sky-600 text-sky-700 dark:text-sky-300'
@@ -397,7 +397,7 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
               onChange={e => onToggleApplyZ(e.target.checked)}
               className="w-3 h-3 rounded border-slate-300 text-sky-600 focus:ring-sky-500 cursor-pointer"
             />
-            <span>Z적용</span>
+            <span>3D(Z)</span>
           </label>
 
           {cursorWorld ? (

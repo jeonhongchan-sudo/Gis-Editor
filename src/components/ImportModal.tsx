@@ -37,6 +37,7 @@ interface ImportModalProps {
   existingLayers?: CADLayer[];
   existingPoints?: CADPoint[];
   activeLayerId?: string;
+  applyZ?: boolean;
   onImportCSVPoints: (
     points: CADPoint[],
     append: boolean,
@@ -77,6 +78,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   existingLayers = [],
   existingPoints = [],
   activeLayerId,
+  applyZ = false,
   onImportCSVPoints,
   onImportSHP,
   onClose
@@ -93,6 +95,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
   const rawInputRef = useRef<StoredRawInput | null>(null);
   const rawTableRowsRef = useRef<(string | number)[][] | null>(null);
+  const detectedCsvZColRef = useRef<number>(-1);
   const excelWorkbookRef = useRef<{
     sheetNames: string[];
     getSheetRows: (sheetName: string) => (string | number)[][];
@@ -129,8 +132,6 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   const [shpResult, setShpResult] = useState<SHPParseResult | null>(null);
   const [shpFileName, setShpFileName] = useState<string | null>(null);
   const [selectedLayerIds, setSelectedLayerIds] = useState<Set<string>>(new Set());
-  const [importPointZ, setImportPointZ] = useState<boolean>(false);
-  const [importLinearZ, setImportLinearZ] = useState<boolean>(false);
 
   const [loadedFormat, setLoadedFormat] = useState<'csv' | 'shp' | 'project' | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -252,12 +253,16 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     try {
       rawTableRowsRef.current = rows;
       const res = analyzeTableRows(rows, headerIdx, autoDetectHeader);
-      const hasZCol = res.detectedMapping.zCol !== undefined && res.detectedMapping.zCol >= 0;
+      const detectedZ = res.detectedMapping.zCol !== undefined && res.detectedMapping.zCol >= 0
+        ? res.detectedMapping.zCol
+        : -1;
+      detectedCsvZColRef.current = detectedZ;
       setHeaderRowIdx(res.headerRowIndex);
       setCsvPreview(res);
       setCsvMapping({
         ...res.detectedMapping,
-        includeElevation: Boolean(hasZCol && zOnlyMergeByXY)
+        zCol: zOnlyMergeByXY && detectedZ >= 0 ? detectedZ : -1,
+        includeElevation: Boolean(zOnlyMergeByXY && detectedZ >= 0)
       });
       setSelectedItemKeys(null);
       setItemFilterSearch('');
@@ -313,11 +318,15 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         const rows = parseCSVToRows(text);
         rawTableRowsRef.current = rows;
         const res = parseCSVPreview(text, headerRowIdx, false);
-        const hasZCol = res.detectedMapping.zCol !== undefined && res.detectedMapping.zCol >= 0;
+        const detectedZ = res.detectedMapping.zCol !== undefined && res.detectedMapping.zCol >= 0
+          ? res.detectedMapping.zCol
+          : -1;
+        detectedCsvZColRef.current = detectedZ;
         setCsvPreview(res);
         setCsvMapping({
           ...res.detectedMapping,
-          includeElevation: Boolean(hasZCol && zOnlyMergeByXY)
+          zCol: zOnlyMergeByXY && detectedZ >= 0 ? detectedZ : -1,
+          includeElevation: Boolean(zOnlyMergeByXY && detectedZ >= 0)
         });
         setSelectedItemKeys(null);
         setItemFilterSearch('');
@@ -670,25 +679,15 @@ export const ImportModal: React.FC<ImportModalProps> = ({
       return;
     }
 
-    const filterPointZ = (pt: CADPoint): CADPoint => {
-      if (importPointZ && pt.z !== undefined && Number.isFinite(pt.z)) {
-        return pt;
-      }
-      const { z: _z, ...rest } = pt;
-      return rest;
-    };
-
     const filterLinearPt = (pt: Point2D): Point2D =>
-      importLinearZ && pt.z !== undefined && Number.isFinite(pt.z)
+      applyZ && pt.z !== undefined && Number.isFinite(pt.z)
         ? { x: pt.x, y: pt.y, z: pt.z }
         : { x: pt.x, y: pt.y };
 
     const filteredResult: SHPParseResult = {
       ...shpResult,
       layers: shpResult.layers.filter(l => selectedLayerIds.has(l.id)),
-      points: shpResult.points
-        .filter(p => selectedLayerIds.has(p.layerId))
-        .map(filterPointZ),
+      points: shpResult.points.filter(p => selectedLayerIds.has(p.layerId)),
       lines: shpResult.lines
         .filter(l => selectedLayerIds.has(l.layerId))
         .map(l => ({ ...l, start: filterLinearPt(l.start), end: filterLinearPt(l.end) })),
@@ -1095,36 +1094,6 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                     </span>
                   </div>
                 )}
-                {/* Z-value Import Check Options for DXF / SHP / GeoJSON */}
-                <div className="p-3 bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 rounded-xl space-y-2 text-xs">
-                  <div className="text-[11px] font-bold text-slate-700 dark:text-slate-200">
-                    Z좌표(표고) 적용 여부 선택
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <label className="flex items-center gap-2 p-2 rounded-lg bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={importPointZ}
-                        onChange={e => setImportPointZ(e.target.checked)}
-                        className="w-3.5 h-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
-                      />
-                      <span className="text-[11px] font-medium text-slate-700 dark:text-slate-200">
-                        측점(Point) Z값 가져오기
-                      </span>
-                    </label>
-                    <label className="flex items-center gap-2 p-2 rounded-lg bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={importLinearZ}
-                        onChange={e => setImportLinearZ(e.target.checked)}
-                        className="w-3.5 h-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
-                      />
-                      <span className="text-[11px] font-medium text-slate-700 dark:text-slate-200">
-                        선형(선·면) Z값 적용 (해제 시 2D 평면)
-                      </span>
-                    </label>
-                  </div>
-                </div>
               </div>
 
               <button
@@ -1271,59 +1240,25 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
                 {/* Optional Z elevation */}
                 {csvPreview.headers.length > 2 && (
-                  <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800/80 space-y-2 text-xs">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex flex-wrap items-center gap-2.5">
-                        <span className="text-[11px] text-slate-600 dark:text-slate-300 font-bold">표고(고도 Z) 열:</span>
-                        <select
-                          value={csvMapping.zCol ?? -1}
-                          onChange={e => {
-                            const val = parseInt(e.target.value, 10);
-                            setCsvMapping(m => ({
-                              ...m,
-                              zCol: val,
-                              includeElevation: val >= 0 ? Boolean(zOnlyMergeByXY || m.includeElevation) : false
-                            }));
-                          }}
-                          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-sky-500 font-medium shadow-sm"
-                        >
-                          <option value={-1}>사용 안함 (Z 제외)</option>
-                          {csvPreview.headers.map((h, i) => (
-                            <option key={i} value={i}>{h} (열 {i + 1})</option>
-                          ))}
-                        </select>
-
-                        <label
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold select-none transition ${
-                            csvMapping.zCol === undefined || csvMapping.zCol < 0
-                              ? 'opacity-50 cursor-not-allowed bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-400'
-                              : csvMapping.includeElevation
-                                ? 'cursor-pointer bg-sky-50 dark:bg-sky-950/60 border-sky-300 dark:border-sky-600 text-sky-700 dark:text-sky-300'
-                                : 'cursor-pointer bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            disabled={csvMapping.zCol === undefined || csvMapping.zCol < 0}
-                            checked={Boolean(csvMapping.includeElevation && csvMapping.zCol !== undefined && csvMapping.zCol >= 0)}
-                            onChange={e =>
-                              setCsvMapping(m => ({
-                                ...m,
-                                includeElevation: e.target.checked
-                              }))
-                            }
-                            className="w-3.5 h-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
-                          />
-                          <span>Z값 적용</span>
-                        </label>
-                      </div>
-                    </div>
-
-                    {csvMapping.includeElevation && !zOnlyMergeByXY && (
-                      <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                        ※ 체크 시 가져오는 측점에 Z값이 함께 저장됩니다. (상단 &apos;Z적용&apos; 체크 여부에 따라 선형 작업 반영을 선택할 수 있습니다)
-                      </p>
-                    )}
+                  <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800/80 flex flex-wrap items-center gap-2.5 text-xs">
+                    <span className="text-[11px] text-slate-600 dark:text-slate-300 font-bold">표고(Z) 열:</span>
+                    <select
+                      value={csvMapping.zCol ?? -1}
+                      onChange={e => {
+                        const val = parseInt(e.target.value, 10);
+                        setCsvMapping(m => ({
+                          ...m,
+                          zCol: val,
+                          includeElevation: val >= 0
+                        }));
+                      }}
+                      className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-sky-500 font-medium shadow-sm"
+                    >
+                      <option value={-1}>사용 안함 (Z 제외)</option>
+                      {csvPreview.headers.map((h, i) => (
+                        <option key={i} value={i}>{h} (열 {i + 1})</option>
+                      ))}
+                    </select>
                   </div>
                 )}
 
@@ -1439,54 +1374,61 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 {appendMode && existingPoints.length > 0 && (
                   <div className="pt-3 border-t border-slate-100 dark:border-slate-800/80 space-y-2">
                     <label
-                      className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition select-none ${
+                      className={`flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-xl border cursor-pointer transition select-none ${
                         zOnlyMergeByXY
                           ? 'bg-emerald-50/90 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-700/70'
                           : 'bg-slate-50 dark:bg-slate-900/70 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
                       }`}
                     >
-                      <input
-                        type="checkbox"
-                        checked={zOnlyMergeByXY}
-                        onChange={e => {
-                          const checked = e.target.checked;
-                          setZOnlyMergeByXY(checked);
-                          if (checked && csvMapping.zCol !== undefined && csvMapping.zCol >= 0) {
-                            setCsvMapping(m => ({ ...m, includeElevation: true }));
-                          }
-                        }}
-                        className="w-4 h-4 mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 shrink-0"
-                      />
-                      <div className="space-y-1 min-w-0 flex-1">
-                        <div className="text-xs font-bold text-slate-800 dark:text-slate-100">
-                          기존 동일 X·Y (소수점 3자리 일치) 측점에 Z값만 추가
-                        </div>
-                        <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                          DXF 원도면 등 기존 측점의 <strong>측점명과 무관하게 X, Y 좌표(소수점 3자리)가 같으면 동일 측점으로 인식</strong>해 Z값만 추가합니다. 새 측점은 추가되지 않으며 기존 명칭·레이어·속성은 유지됩니다.
-                        </p>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={zOnlyMergeByXY}
+                          onChange={e => {
+                            const checked = e.target.checked;
+                            setZOnlyMergeByXY(checked);
+                            if (checked) {
+                              setCsvMapping(m => {
+                                const nextZCol = (m.zCol !== undefined && m.zCol >= 0) ? m.zCol : detectedCsvZColRef.current;
+                                return {
+                                  ...m,
+                                  zCol: nextZCol,
+                                  includeElevation: nextZCol >= 0
+                                };
+                              });
+                            }
+                          }}
+                          className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 shrink-0"
+                        />
+                        <span className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate">
+                          동일 X·Y(소수점 3자리) 기존 측점에 Z값만 추가
+                        </span>
                       </div>
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400 shrink-0 hidden sm:inline">
+                        측점명 무관 · 새 측점 미추가
+                      </span>
                     </label>
 
                     {zOnlyMergeByXY && (
-                      <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-emerald-200 dark:border-emerald-800/70 text-[11px] space-y-1">
+                      <div className="px-3 py-2 rounded-xl bg-white dark:bg-slate-900 border border-emerald-200 dark:border-emerald-800/70 text-[11px]">
                         {csvMapping.zCol === undefined || csvMapping.zCol < 0 ? (
                           <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 font-semibold">
                             <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                            <span>위에서 &apos;표고(고도 Z) 열&apos;을 먼저 지정해 주세요.</span>
+                            <span>위에서 &apos;표고(Z) 열&apos;을 선택해 주세요.</span>
                           </div>
                         ) : xyZMatchStats && xyZMatchStats.matchedExistingCount > 0 ? (
                           <div className="flex flex-wrap items-center justify-between gap-2 text-emerald-700 dark:text-emerald-300 font-semibold">
                             <span>
-                              기존 측점 중 <strong>{xyZMatchStats.matchedExistingCount.toLocaleString()}개</strong> 일치 (Z값 업데이트 대상)
+                              기존 측점 {xyZMatchStats.matchedExistingCount.toLocaleString()}개 일치 (Z 업데이트)
                             </span>
                             <span className="text-[10px] text-slate-500 dark:text-slate-400 font-normal">
-                              미일치 행 {xyZMatchStats.unmatchedCsvRowsCount.toLocaleString()}개 제외
+                              미일치 {xyZMatchStats.unmatchedCsvRowsCount.toLocaleString()}개 제외
                             </span>
                           </div>
                         ) : (
                           <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 font-semibold">
                             <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                            <span>X, Y 소수점 3자리까지 일치하는 기존 측점이 없습니다. (유효 Z행 {xyZMatchStats?.validZRowsCount || 0}개)</span>
+                            <span>일치하는 기존 측점이 없습니다. (유효 Z행 {xyZMatchStats?.validZRowsCount || 0}개)</span>
                           </div>
                         )}
                       </div>
@@ -1635,6 +1577,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
               setSelectedItemKeys(null);
               setItemFilterSearch('');
               setZOnlyMergeByXY(false);
+              detectedCsvZColRef.current = -1;
               rawInputRef.current = null;
               rawTableRowsRef.current = null;
               excelWorkbookRef.current = null;

@@ -1798,6 +1798,7 @@ export default function App() {
           existingLayers={layers}
           existingPoints={points}
           activeLayerId={activeLayerId}
+          applyZ={applyZ}
           onImportCSVPoints={handleImportCSVPoints}
           onImportSHP={handleImportSHP}
           onClose={() => setShowImportModal(false)}
@@ -1808,6 +1809,7 @@ export default function App() {
         <ExportModal
           layers={layers} points={points} lines={lines} polylines={polylines} polygons={polygons} texts={texts}
           defaultSourceCrs={mapConfig.sourceCrs}
+          applyZ={applyZ}
           onClose={() => setShowExportModal(false)}
         />
       )}
