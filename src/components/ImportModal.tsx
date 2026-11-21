@@ -18,7 +18,7 @@ import {
   Search,
   Plus
 } from 'lucide-react';
-import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText } from '../types/cad';
+import { CADLayer, CADLine, CADPoint, CADPolygon, CADPolyline, CADText, Point2D } from '../types/cad';
 import { 
   CSVColumnMapping, 
   CSVParseResult, 
@@ -35,8 +35,14 @@ import { parseDxfBuffer } from '../utils/dxfParser';
 
 interface ImportModalProps {
   existingLayers?: CADLayer[];
+  existingPoints?: CADPoint[];
   activeLayerId?: string;
-  onImportCSVPoints: (points: CADPoint[], append: boolean, targetLayer?: CADLayer) => void;
+  onImportCSVPoints: (
+    points: CADPoint[],
+    append: boolean,
+    targetLayer?: CADLayer,
+    options?: { zOnlyMergeByXY?: boolean }
+  ) => void;
   onImportSHP: (data: SHPParseResult, append: boolean) => void;
   onClose: () => void;
 }
@@ -60,8 +66,16 @@ const DEFAULT_ZERO_LAYER: CADLayer = {
   lineWidth: 1.5
 };
 
+const fmtCoord3 = (val: number): string => {
+  const rounded = Number(val.toFixed(3));
+  return (Object.is(rounded, -0) || rounded === 0 ? 0 : rounded).toFixed(3);
+};
+
+const makeXYKey3 = (x: number, y: number): string => `${fmtCoord3(x)}|${fmtCoord3(y)}`;
+
 export const ImportModal: React.FC<ImportModalProps> = ({
   existingLayers = [],
+  existingPoints = [],
   activeLayerId,
   onImportCSVPoints,
   onImportSHP,
@@ -93,6 +107,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   const [csvMapping, setCsvMapping] = useState<CSVColumnMapping>({
     xCol: 0, yCol: 1, nameCol: 2, zCol: -1, includeElevation: false
   });
+  const [zOnlyMergeByXY, setZOnlyMergeByXY] = useState<boolean>(false);
 
   // CSV/Excel Item Filter State (null = include all items)
   const [selectedItemKeys, setSelectedItemKeys] = useState<Set<string> | null>(null);
@@ -110,10 +125,12 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     () => LAYER_COLORS[availableLayers.length % LAYER_COLORS.length]
   );
 
-  // SHP / GeoJSON Result State
+  // SHP / GeoJSON / DXF Result State
   const [shpResult, setShpResult] = useState<SHPParseResult | null>(null);
   const [shpFileName, setShpFileName] = useState<string | null>(null);
   const [selectedLayerIds, setSelectedLayerIds] = useState<Set<string>>(new Set());
+  const [importPointZ, setImportPointZ] = useState<boolean>(false);
+  const [importLinearZ, setImportLinearZ] = useState<boolean>(false);
 
   const [loadedFormat, setLoadedFormat] = useState<'csv' | 'shp' | 'project' | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -166,6 +183,53 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   const isAllItemsSelected = selectedItemKeys === null;
   const selectedItemCount = selectedItemKeys === null ? uniqueItemEntries.length : selectedItemKeys.size;
 
+  // Match stats for XY (3-decimal exact) Z-only update against existing points
+  const xyZMatchStats = useMemo(() => {
+    if (!appendMode || !zOnlyMergeByXY || existingPoints.length === 0) return null;
+
+    const existingKeySet = new Set<string>();
+    for (const pt of existingPoints) {
+      if (Number.isFinite(pt.x) && Number.isFinite(pt.y)) {
+        existingKeySet.add(makeXYKey3(pt.x, pt.y));
+      }
+    }
+
+    const csvZKeys = new Set<string>();
+    let validZRowsCount = 0;
+    let matchedCsvRowsCount = 0;
+    let unmatchedCsvRowsCount = 0;
+
+    if (csvMapping.zCol !== undefined && csvMapping.zCol >= 0) {
+      for (const row of filteredCsvRows) {
+        const x = Number(row[csvMapping.xCol]);
+        const y = Number(row[csvMapping.yCol]);
+        const rawZStr = row[csvMapping.zCol];
+        const z = rawZStr !== undefined && String(rawZStr).trim() !== '' ? Number(rawZStr) : NaN;
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+
+        validZRowsCount++;
+        const key = makeXYKey3(x, y);
+        csvZKeys.add(key);
+        if (existingKeySet.has(key)) matchedCsvRowsCount++;
+        else unmatchedCsvRowsCount++;
+      }
+    }
+
+    let matchedExistingCount = 0;
+    for (const pt of existingPoints) {
+      if (Number.isFinite(pt.x) && Number.isFinite(pt.y) && csvZKeys.has(makeXYKey3(pt.x, pt.y))) {
+        matchedExistingCount++;
+      }
+    }
+
+    return {
+      validZRowsCount,
+      matchedCsvRowsCount,
+      unmatchedCsvRowsCount,
+      matchedExistingCount
+    };
+  }, [appendMode, zOnlyMergeByXY, existingPoints, filteredCsvRows, csvMapping.xCol, csvMapping.yCol, csvMapping.zCol]);
+
   // Pre-calculate layer counts to prevent O(N*M) lag in render loop
   const layerStats = React.useMemo(() => {
     if (!shpResult) return new Map<string, { pt: number, line: number, poly: number }>();
@@ -188,9 +252,13 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     try {
       rawTableRowsRef.current = rows;
       const res = analyzeTableRows(rows, headerIdx, autoDetectHeader);
+      const hasZCol = res.detectedMapping.zCol !== undefined && res.detectedMapping.zCol >= 0;
       setHeaderRowIdx(res.headerRowIndex);
       setCsvPreview(res);
-      setCsvMapping(res.detectedMapping);
+      setCsvMapping({
+        ...res.detectedMapping,
+        includeElevation: Boolean(hasZCol && zOnlyMergeByXY)
+      });
       setSelectedItemKeys(null);
       setItemFilterSearch('');
       setLoadedFormat('csv');
@@ -245,8 +313,12 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         const rows = parseCSVToRows(text);
         rawTableRowsRef.current = rows;
         const res = parseCSVPreview(text, headerRowIdx, false);
+        const hasZCol = res.detectedMapping.zCol !== undefined && res.detectedMapping.zCol >= 0;
         setCsvPreview(res);
-        setCsvMapping(res.detectedMapping);
+        setCsvMapping({
+          ...res.detectedMapping,
+          includeElevation: Boolean(hasZCol && zOnlyMergeByXY)
+        });
         setSelectedItemKeys(null);
         setItemFilterSearch('');
       } catch {}
@@ -598,20 +670,34 @@ export const ImportModal: React.FC<ImportModalProps> = ({
       return;
     }
 
-    // Keep Z on points as simple info only; keep all linear geometries strictly 2D planar
+    const filterPointZ = (pt: CADPoint): CADPoint => {
+      if (importPointZ && pt.z !== undefined && Number.isFinite(pt.z)) {
+        return pt;
+      }
+      const { z: _z, ...rest } = pt;
+      return rest;
+    };
+
+    const filterLinearPt = (pt: Point2D): Point2D =>
+      importLinearZ && pt.z !== undefined && Number.isFinite(pt.z)
+        ? { x: pt.x, y: pt.y, z: pt.z }
+        : { x: pt.x, y: pt.y };
+
     const filteredResult: SHPParseResult = {
       ...shpResult,
       layers: shpResult.layers.filter(l => selectedLayerIds.has(l.id)),
-      points: shpResult.points.filter(p => selectedLayerIds.has(p.layerId)),
+      points: shpResult.points
+        .filter(p => selectedLayerIds.has(p.layerId))
+        .map(filterPointZ),
       lines: shpResult.lines
         .filter(l => selectedLayerIds.has(l.layerId))
-        .map(l => ({ ...l, start: { x: l.start.x, y: l.start.y }, end: { x: l.end.x, y: l.end.y } })),
+        .map(l => ({ ...l, start: filterLinearPt(l.start), end: filterLinearPt(l.end) })),
       polylines: shpResult.polylines
         .filter(pl => selectedLayerIds.has(pl.layerId))
-        .map(pl => ({ ...pl, points: pl.points.map(pt => ({ x: pt.x, y: pt.y })) })),
+        .map(pl => ({ ...pl, points: pl.points.map(filterLinearPt) })),
       polygons: shpResult.polygons
         .filter(pg => selectedLayerIds.has(pg.layerId))
-        .map(pg => ({ ...pg, points: pg.points.map(pt => ({ x: pt.x, y: pt.y })) })),
+        .map(pg => ({ ...pg, points: pg.points.map(filterLinearPt) })),
       texts: shpResult.texts?.filter(t => selectedLayerIds.has(t.layerId))
     };
 
@@ -625,6 +711,32 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     if (!csvPreview) return;
     if (filteredCsvRows.length === 0) {
       alert('가져올 측점이 없습니다. 열 매핑 또는 항목 필터를 확인해 주세요.');
+      return;
+    }
+
+    if (appendMode && zOnlyMergeByXY && existingPoints.length > 0) {
+      if (csvMapping.zCol === undefined || csvMapping.zCol < 0) {
+        alert('기존 측점에 Z값을 추가하려면 표고(고도 Z) 열을 선택해 주세요.');
+        return;
+      }
+      const effectiveMapping: CSVColumnMapping = { ...csvMapping, includeElevation: true };
+      const parsedPoints = buildCADPointsFromCSV(filteredCsvRows, effectiveMapping, activeLayerId || 'layer-0')
+        .filter(p => p.z !== undefined && Number.isFinite(p.z));
+      if (parsedPoints.length === 0) {
+        alert('선택한 표고(Z) 열에서 유효한 Z 좌표를 찾을 수 없습니다.');
+        return;
+      }
+      if (!xyZMatchStats || xyZMatchStats.matchedExistingCount === 0) {
+        alert('기존 측점 중 X, Y 좌표(소수점 3자리)가 일치하는 측점이 없습니다.');
+        return;
+      }
+      onImportCSVPoints(parsedPoints, true, undefined, { zOnlyMergeByXY: true });
+      rawInputRef.current = null;
+      rawTableRowsRef.current = null;
+      excelWorkbookRef.current = null;
+      setCsvPreview(null);
+      setZOnlyMergeByXY(false);
+      onClose();
       return;
     }
 
@@ -694,7 +806,15 @@ export const ImportModal: React.FC<ImportModalProps> = ({
               <span>기존 작업에 누적 추가</span>
             </label>
             <label className="flex items-center gap-1.5 cursor-pointer text-slate-500 dark:text-slate-400 text-[11px]">
-              <input type="radio" checked={!appendMode} onChange={() => setAppendMode(false)} className="text-sky-500" />
+              <input
+                type="radio"
+                checked={!appendMode}
+                onChange={() => {
+                  setAppendMode(false);
+                  setZOnlyMergeByXY(false);
+                }}
+                className="text-sky-500"
+              />
               <span>새로 시작 (기존 데이터 교체)</span>
             </label>
           </div>
@@ -975,6 +1095,36 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                     </span>
                   </div>
                 )}
+                {/* Z-value Import Check Options for DXF / SHP / GeoJSON */}
+                <div className="p-3 bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 rounded-xl space-y-2 text-xs">
+                  <div className="text-[11px] font-bold text-slate-700 dark:text-slate-200">
+                    Z좌표(표고) 적용 여부 선택
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <label className="flex items-center gap-2 p-2 rounded-lg bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={importPointZ}
+                        onChange={e => setImportPointZ(e.target.checked)}
+                        className="w-3.5 h-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+                      />
+                      <span className="text-[11px] font-medium text-slate-700 dark:text-slate-200">
+                        측점(Point) Z값 가져오기
+                      </span>
+                    </label>
+                    <label className="flex items-center gap-2 p-2 rounded-lg bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={importLinearZ}
+                        onChange={e => setImportLinearZ(e.target.checked)}
+                        className="w-3.5 h-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+                      />
+                      <span className="text-[11px] font-medium text-slate-700 dark:text-slate-200">
+                        선형(선·면) Z값 적용 (해제 시 2D 평면)
+                      </span>
+                    </label>
+                  </div>
+                </div>
               </div>
 
               <button
@@ -1121,9 +1271,9 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
                 {/* Optional Z elevation */}
                 {csvPreview.headers.length > 2 && (
-                  <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800/80 space-y-1.5 text-xs">
+                  <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800/80 space-y-2 text-xs">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2.5">
                         <span className="text-[11px] text-slate-600 dark:text-slate-300 font-bold">표고(고도 Z) 열:</span>
                         <select
                           value={csvMapping.zCol ?? -1}
@@ -1132,7 +1282,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                             setCsvMapping(m => ({
                               ...m,
                               zCol: val,
-                              includeElevation: val >= 0
+                              includeElevation: val >= 0 ? Boolean(zOnlyMergeByXY || m.includeElevation) : false
                             }));
                           }}
                           className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-sky-500 font-medium shadow-sm"
@@ -1142,11 +1292,36 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                             <option key={i} value={i}>{h} (열 {i + 1})</option>
                           ))}
                         </select>
+
+                        <label
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold select-none transition ${
+                            csvMapping.zCol === undefined || csvMapping.zCol < 0
+                              ? 'opacity-50 cursor-not-allowed bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-400'
+                              : csvMapping.includeElevation
+                                ? 'cursor-pointer bg-sky-50 dark:bg-sky-950/60 border-sky-300 dark:border-sky-600 text-sky-700 dark:text-sky-300'
+                                : 'cursor-pointer bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            disabled={csvMapping.zCol === undefined || csvMapping.zCol < 0}
+                            checked={Boolean(csvMapping.includeElevation && csvMapping.zCol !== undefined && csvMapping.zCol >= 0)}
+                            onChange={e =>
+                              setCsvMapping(m => ({
+                                ...m,
+                                includeElevation: e.target.checked
+                              }))
+                            }
+                            className="w-3.5 h-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+                          />
+                          <span>Z값 적용</span>
+                        </label>
                       </div>
                     </div>
-                    {csvMapping.includeElevation && (
+
+                    {csvMapping.includeElevation && !zOnlyMergeByXY && (
                       <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                        ※ Z값은 측점 단순 정보(표시·측점표 확인용)로만 저장되며, 선 그리기·Join·길이 계산 등 선형 작업에는 반영되지 않습니다.
+                        ※ 체크 시 가져오는 측점에 Z값이 함께 저장됩니다. (상단 &apos;Z적용&apos; 체크 여부에 따라 선형 작업 반영을 선택할 수 있습니다)
                       </p>
                     )}
                   </div>
@@ -1260,7 +1435,67 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                   </div>
                 )}
 
-                {/* Target Layer Selection (배치할 레이어 선택) */}
+                {/* Existing Points XY 3-decimal Z-only Merge Mode */}
+                {appendMode && existingPoints.length > 0 && (
+                  <div className="pt-3 border-t border-slate-100 dark:border-slate-800/80 space-y-2">
+                    <label
+                      className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition select-none ${
+                        zOnlyMergeByXY
+                          ? 'bg-emerald-50/90 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-700/70'
+                          : 'bg-slate-50 dark:bg-slate-900/70 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={zOnlyMergeByXY}
+                        onChange={e => {
+                          const checked = e.target.checked;
+                          setZOnlyMergeByXY(checked);
+                          if (checked && csvMapping.zCol !== undefined && csvMapping.zCol >= 0) {
+                            setCsvMapping(m => ({ ...m, includeElevation: true }));
+                          }
+                        }}
+                        className="w-4 h-4 mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 shrink-0"
+                      />
+                      <div className="space-y-1 min-w-0 flex-1">
+                        <div className="text-xs font-bold text-slate-800 dark:text-slate-100">
+                          기존 동일 X·Y (소수점 3자리 일치) 측점에 Z값만 추가
+                        </div>
+                        <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                          DXF 원도면 등 기존 측점의 <strong>측점명과 무관하게 X, Y 좌표(소수점 3자리)가 같으면 동일 측점으로 인식</strong>해 Z값만 추가합니다. 새 측점은 추가되지 않으며 기존 명칭·레이어·속성은 유지됩니다.
+                        </p>
+                      </div>
+                    </label>
+
+                    {zOnlyMergeByXY && (
+                      <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-emerald-200 dark:border-emerald-800/70 text-[11px] space-y-1">
+                        {csvMapping.zCol === undefined || csvMapping.zCol < 0 ? (
+                          <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 font-semibold">
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                            <span>위에서 &apos;표고(고도 Z) 열&apos;을 먼저 지정해 주세요.</span>
+                          </div>
+                        ) : xyZMatchStats && xyZMatchStats.matchedExistingCount > 0 ? (
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-emerald-700 dark:text-emerald-300 font-semibold">
+                            <span>
+                              기존 측점 중 <strong>{xyZMatchStats.matchedExistingCount.toLocaleString()}개</strong> 일치 (Z값 업데이트 대상)
+                            </span>
+                            <span className="text-[10px] text-slate-500 dark:text-slate-400 font-normal">
+                              미일치 행 {xyZMatchStats.unmatchedCsvRowsCount.toLocaleString()}개 제외
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 font-semibold">
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                            <span>X, Y 소수점 3자리까지 일치하는 기존 측점이 없습니다. (유효 Z행 {xyZMatchStats?.validZRowsCount || 0}개)</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Target Layer Selection (배치할 레이어 선택 - disabled when Z-only merge is active) */}
+                {!(appendMode && zOnlyMergeByXY && existingPoints.length > 0) && (
                 <div className="pt-3 border-t border-slate-100 dark:border-slate-800/80 space-y-2">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800 dark:text-slate-200">
@@ -1320,6 +1555,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                     </div>
                   )}
                 </div>
+                )}
 
                 {/* Data Preview Table */}
                 {filteredCsvRows.length > 0 && (
@@ -1334,7 +1570,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                             <th className="py-1.5 px-3">CAD X</th>
                             <th className="py-1.5 px-3">CAD Y</th>
                             <th className="py-1.5 px-3 text-amber-700 dark:text-amber-300">항목 (텍스트)</th>
-                            {csvMapping.includeElevation && <th className="py-1.5 px-3">표고(Z)</th>}
+                            {(csvMapping.includeElevation || (appendMode && zOnlyMergeByXY)) && <th className="py-1.5 px-3">표고(Z)</th>}
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 text-slate-700 dark:text-slate-300">
@@ -1345,7 +1581,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                               <td className="py-1.5 px-3 font-semibold text-amber-600 dark:text-amber-300">
                                 {csvMapping.nameCol !== undefined && csvMapping.nameCol >= 0 ? (row[csvMapping.nameCol] || '-') : String(rIdx + 1)}
                               </td>
-                              {csvMapping.includeElevation && (
+                              {(csvMapping.includeElevation || (appendMode && zOnlyMergeByXY)) && (
                                 <td className="py-1.5 px-3 text-slate-500 dark:text-slate-400">
                                   {csvMapping.zCol !== undefined && csvMapping.zCol >= 0 ? (row[csvMapping.zCol] || '-') : '-'}
                                 </td>
@@ -1360,11 +1596,28 @@ export const ImportModal: React.FC<ImportModalProps> = ({
               </div>
               <button 
                 onClick={handleApplyCSV} 
-                disabled={filteredCsvRows.length === 0}
-                className="w-full py-3.5 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 disabled:opacity-50 text-white font-bold rounded-xl shadow-lg shadow-sky-600/30 transition active:scale-95 flex items-center justify-center gap-2"
+                disabled={
+                  filteredCsvRows.length === 0 ||
+                  (appendMode &&
+                    zOnlyMergeByXY &&
+                    existingPoints.length > 0 &&
+                    (csvMapping.zCol === undefined ||
+                      csvMapping.zCol < 0 ||
+                      !xyZMatchStats ||
+                      xyZMatchStats.matchedExistingCount === 0))
+                }
+                className={`w-full py-3.5 ${
+                  appendMode && zOnlyMergeByXY && existingPoints.length > 0
+                    ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-emerald-600/30'
+                    : 'bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 shadow-sky-600/30'
+                } disabled:opacity-50 text-white font-bold rounded-xl shadow-lg transition active:scale-95 flex items-center justify-center gap-2`}
               >
                 <Check className="w-4 h-4" />
-                <span>선택한 측점 {filteredCsvRows.length.toLocaleString()}개 도면에 배치하기</span>
+                <span>
+                  {appendMode && zOnlyMergeByXY && existingPoints.length > 0
+                    ? `동일 좌표 ${(xyZMatchStats?.matchedExistingCount || 0).toLocaleString()}개 측점에 Z값만 추가하기`
+                    : `선택한 측점 ${filteredCsvRows.length.toLocaleString()}개 도면에 배치하기`}
+                </span>
               </button>
             </div>
           )}
@@ -1381,6 +1634,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
               setSelectedExcelSheet('');
               setSelectedItemKeys(null);
               setItemFilterSearch('');
+              setZOnlyMergeByXY(false);
               rawInputRef.current = null;
               rawTableRowsRef.current = null;
               excelWorkbookRef.current = null;

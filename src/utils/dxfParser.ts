@@ -216,7 +216,7 @@ export function parseDxfBuffer(
             name: `PT_${points.length + 1}`,
             x: ptPos.x,
             y: ptPos.y,
-            z: ptPos.z ?? 0,
+            ...(ptPos.z !== undefined ? { z: ptPos.z } : {}),
             layerId,
             isSurveyNode: true,
             attributes
@@ -234,11 +234,13 @@ export function parseDxfBuffer(
             name: `LINE_${idx + 1}`,
             start: {
               x: lStart.x,
-              y: lStart.y
+              y: lStart.y,
+              ...(lStart.z !== undefined ? { z: lStart.z } : {})
             },
             end: {
               x: lEnd.x,
-              y: lEnd.y
+              y: lEnd.y,
+              ...(lEnd.z !== undefined ? { z: lEnd.z } : {})
             },
             layerId,
             color,
@@ -252,9 +254,11 @@ export function parseDxfBuffer(
           if (!ent.vertices || !Array.isArray(ent.vertices)) break;
           const elev = typeof ent.elevation === 'number' && Number.isFinite(ent.elevation) ? ent.elevation : undefined;
           const pts: Point2D[] = ent.vertices.map((v: any) => {
+            const rawVz = v.z !== undefined && Number.isFinite(Number(v.z)) ? Number(v.z) : elev;
             const p: Point2D = {
               x: Number(v.x ?? 0),
-              y: Number(v.y ?? 0)
+              y: Number(v.y ?? 0),
+              ...(rawVz !== undefined ? { z: rawVz } : {})
             };
             updateBounds(p);
             return p;
@@ -353,7 +357,7 @@ export function parseDxfBuffer(
             name: textContent,
             x: tPos.x,
             y: tPos.y,
-            z: tPos.z ?? 0,
+            ...(tPos.z !== undefined ? { z: tPos.z } : {}),
             layerId,
             isSurveyNode: true,
             attributes: txtAttrs
@@ -388,7 +392,7 @@ export function parseDxfBuffer(
             name: insName,
             x: iPos.x,
             y: iPos.y,
-            z: iPos.z ?? 0,
+            ...(iPos.z !== undefined ? { z: iPos.z } : {}),
             layerId,
             isSurveyNode: true,
             attributes: insAttrs
@@ -417,7 +421,8 @@ export function parseDxfBuffer(
             const ang = startRad + i * deltaRad;
             const p: Point2D = {
               x: center.x + Math.cos(ang) * radius,
-              y: center.y + Math.sin(ang) * radius
+              y: center.y + Math.sin(ang) * radius,
+              ...(center.z !== undefined ? { z: center.z } : {})
             };
             updateBounds(p);
             circlePts.push(p);

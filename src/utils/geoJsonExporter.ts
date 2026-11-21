@@ -15,6 +15,7 @@ interface GeoJsonExportOptions {
   layers: CADLayer[];
   targetCrs?: string; // e.g. "EPSG:4326" for WGS84
   sourceCrs?: string; // The TM CRS to convert from
+  applyLinearZ?: boolean; // Include Z on linear features when checked (default: false)
 }
 
 function normalizeHexColor(val: unknown, fallback = '#38bdf8'): string {
@@ -57,7 +58,8 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
     texts = [],
     layers = [],
     targetCrs,
-    sourceCrs
+    sourceCrs,
+    applyLinearZ = false
   } = options;
 
   const isWgs84 = targetCrs === 'EPSG:4326';
@@ -228,11 +230,11 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       });
   });
 
-  // 3. Export Lines (always 2D planar coordinates to match CAD 2D linework)
+  // 3. Export Lines
     lines.forEach(l => {
       if (!l || !l.start || !l.end) return;
-      const c1 = projectPoint(l.start, false);
-      const c2 = projectPoint(l.end, false);
+      const c1 = projectPoint(l.start, applyLinearZ);
+      const c2 = projectPoint(l.end, applyLinearZ);
       if (!c1 || !c2) return;
       const layerName = getLayerName(l.layerId);
       const lineName = String(l.name || '').trim() || layerName;
@@ -267,10 +269,10 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       });
     });
 
-    // 4. Export Polylines (always 2D planar coordinates)
+    // 4. Export Polylines
     polylines.forEach(pl => {
       if (!pl || !Array.isArray(pl.points) || pl.points.length < 2) return;
-      const coords = pl.points.map(pt => projectPoint(pt, false)).filter((c): c is number[] => c !== null);
+      const coords = pl.points.map(pt => projectPoint(pt, applyLinearZ)).filter((c): c is number[] => c !== null);
       if (coords.length < 2) return;
       if (pl.isClosed && coords.length >= 2) {
         const first = coords[0];
@@ -317,10 +319,10 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       });
     });
 
-    // 5. Export Polygons as closed 2D LineStrings (외곽선 기준 선으로 통일 출력)
+    // 5. Export Polygons as closed LineStrings (외곽선 기준 선으로 통일 출력)
     polygons.forEach(pg => {
       if (!pg || !Array.isArray(pg.points) || pg.points.length < 2) return;
-      const coords = pg.points.map(pt => projectPoint(pt, false)).filter((c): c is number[] => c !== null);
+      const coords = pg.points.map(pt => projectPoint(pt, applyLinearZ)).filter((c): c is number[] => c !== null);
       if (coords.length < 2) return;
       if (coords.length > 0) {
         const first = coords[0];

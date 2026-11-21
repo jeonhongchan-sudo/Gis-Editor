@@ -72,9 +72,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     successTimerRef.current = setTimeout(() => setExportSuccessMsg(null), 3000);
   };
 
-  // GeoJSON Specific states
+  // GeoJSON & Z Export states
   const [geoJsonMode, setGeoJsonMode] = useState<'backup' | 'wgs84'>('backup');
-  const [sourceCrs, setSourceCrs] = useState<string>(() => defaultSourceCrs || 'EPSG:5186');
+  const [sourceCrs, setSourceCrs] = useState<string>(() => {
+    const candidate = defaultSourceCrs || 'EPSG:5186';
+    return COORDINATE_SYSTEMS[candidate]?.isTM ? candidate : 'EPSG:5186';
+  });
+  const [includeLinearZ, setIncludeLinearZ] = useState<boolean>(false);
+  const [includeCsvZ, setIncludeCsvZ] = useState<boolean>(false);
 
   // 0. Export GeoJSON (Backup TM or Single Map WGS84)
   const handleExportGeoJson = async () => {
@@ -91,7 +96,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         texts,
         layers,
         targetCrs: isWgs84 ? 'EPSG:4326' : undefined,
-        sourceCrs: isWgs84 ? sourceCrs : undefined
+        sourceCrs: isWgs84 ? sourceCrs : undefined,
+        applyLinearZ: !isWgs84 && includeLinearZ
       });
 
       const jsonStr = JSON.stringify(geojson, null, 2);
@@ -165,7 +171,15 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       const customPtKeys = Array.from(customPtKeysSet);
       
       // Build CSV Header
-      const headers = ['번호', '측점명', 'X(Easting)', 'Y(Northing)', '고도(Z)', '레이어', ...customPtKeys];
+      const headers = [
+        '번호',
+        '측점명',
+        'X(Easting)',
+        'Y(Northing)',
+        ...(includeCsvZ ? ['고도(Z)'] : []),
+        '레이어',
+        ...customPtKeys
+      ];
       const csvLines = [headers.join(',')];
       
       points.forEach((p, idx) => {
@@ -176,14 +190,16 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           return id || '0';
         };
 
-        const row = [
+        const row: (string | number)[] = [
           idx + 1,
           `"${p.name || ''}"`,
           p.x.toFixed(3),
-          p.y.toFixed(3),
-          p.z !== undefined ? p.z.toFixed(3) : '',
-          `"${getLayerName(p.layerId)}"`
+          p.y.toFixed(3)
         ];
+        if (includeCsvZ) {
+          row.push(p.z !== undefined && Number.isFinite(p.z) ? p.z.toFixed(3) : '');
+        }
+        row.push(`"${getLayerName(p.layerId)}"`);
         
         // Add dynamic attributes
         customPtKeys.forEach(k => {
@@ -308,6 +324,23 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 </span>
               </div>
 
+              {geoJsonMode === 'backup' && (
+                <label className="flex items-center gap-2 p-2.5 bg-white dark:bg-slate-900 rounded-xl border border-sky-100 dark:border-sky-800/80 text-xs cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={includeLinearZ}
+                    onChange={e => setIncludeLinearZ(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+                  />
+                  <span className="font-semibold text-slate-700 dark:text-slate-200">
+                    선형 객체(선·면) Z좌표 포함
+                  </span>
+                  <span className="text-[10px] text-slate-400 dark:text-slate-500 ml-auto">
+                    해제 시 2D 평면 좌표만 저장
+                  </span>
+                </label>
+              )}
+
               {geoJsonMode === 'wgs84' && (
                 <div className="p-2.5 bg-white dark:bg-slate-900 rounded-xl border border-sky-100 dark:border-sky-800 flex flex-col gap-1.5 animate-in slide-in-from-top-1 duration-200">
                   <div className="flex items-center justify-between text-[11px]">
@@ -421,6 +454,19 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 </select>
               </div>
             </div>
+
+            <label className="flex items-center gap-2 p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800 text-xs cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={includeCsvZ}
+                onChange={e => setIncludeCsvZ(e.target.checked)}
+                className="w-3.5 h-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+              />
+              <span className="font-semibold text-slate-700 dark:text-slate-200">표고(Z) 열 포함</span>
+              <span className="text-[10px] text-slate-400 dark:text-slate-500 ml-auto">
+                해제 시 X, Y 평면 좌표만 CSV로 저장
+              </span>
+            </label>
 
             <button
               onClick={handleExportCSV}

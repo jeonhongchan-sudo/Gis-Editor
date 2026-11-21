@@ -56,6 +56,11 @@ function makeId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+const pickCoord = (p: Point2D, applyZ: boolean): Point2D =>
+  applyZ && p.z !== undefined && Number.isFinite(p.z)
+    ? { x: p.x, y: p.y, z: p.z }
+    : { x: p.x, y: p.y };
+
 export function createRectanglePolyline(
   p1: Point2D,
   p2: Point2D,
@@ -66,15 +71,17 @@ export function createRectanglePolyline(
   const maxX = Math.max(p1.x, p2.x);
   const minY = Math.min(p1.y, p2.y);
   const maxY = Math.max(p1.y, p2.y);
+  const zVal = p1.z !== undefined && Number.isFinite(p1.z) ? p1.z : undefined;
+  const withZ = (x: number, y: number): Point2D => (zVal !== undefined ? { x, y, z: zVal } : { x, y });
 
   return {
     id: makeId('rect'),
     name: name || '사각형',
     points: [
-      { x: minX, y: minY },
-      { x: maxX, y: minY },
-      { x: maxX, y: maxY },
-      { x: minX, y: maxY }
+      withZ(minX, minY),
+      withZ(maxX, minY),
+      withZ(maxX, maxY),
+      withZ(minX, maxY)
     ],
     isClosed: true,
     layerId
@@ -89,19 +96,20 @@ export function createRectangleByDimensions(
   layerId: string,
   name?: string
 ): CADPolyline {
+  const zProp = basePoint.z !== undefined && Number.isFinite(basePoint.z) ? { z: basePoint.z } : {};
   if (anchor === 'center') {
     const hw = Math.abs(width) / 2;
     const hh = Math.abs(height) / 2;
     return createRectanglePolyline(
-      { x: basePoint.x - hw, y: basePoint.y - hh },
-      { x: basePoint.x + hw, y: basePoint.y + hh },
+      { x: basePoint.x - hw, y: basePoint.y - hh, ...zProp },
+      { x: basePoint.x + hw, y: basePoint.y + hh, ...zProp },
       layerId,
       name
     );
   }
   return createRectanglePolyline(
     basePoint,
-    { x: basePoint.x + width, y: basePoint.y + height },
+    { x: basePoint.x + width, y: basePoint.y + height, ...zProp },
     layerId,
     name
   );
@@ -114,12 +122,14 @@ export function createCirclePolyline(
   segments = 64,
   name?: string
 ): CADPolyline {
+  const zProp = center.z !== undefined && Number.isFinite(center.z) ? { z: center.z } : {};
   const pts: Point2D[] = [];
   for (let i = 0; i < segments; i++) {
     const angle = (Math.PI * 2 * i) / segments;
     pts.push({
       x: center.x + Math.cos(angle) * radius,
-      y: center.y + Math.sin(angle) * radius
+      y: center.y + Math.sin(angle) * radius,
+      ...zProp
     });
   }
   return {
@@ -136,24 +146,25 @@ export function createCirclePolyline(
  * along with cumulative arc-lengths at each vertex.
  */
 function getChainWithArcLengths(
-  entity: { kind: 'line'; data: CADLine } | { kind: 'polyline'; data: CADPolyline }
+  entity: { kind: 'line'; data: CADLine } | { kind: 'polyline'; data: CADPolyline },
+  applyZ = false
 ): { pts: Point2D[]; cumLen: number[]; totalLength: number; isClosed: boolean } {
   let pts: Point2D[];
   let isClosed = false;
 
   if (entity.kind === 'line') {
     pts = [
-      { x: entity.data.start.x, y: entity.data.start.y },
-      { x: entity.data.end.x, y: entity.data.end.y }
+      pickCoord(entity.data.start, applyZ),
+      pickCoord(entity.data.end, applyZ)
     ];
   } else {
-    pts = entity.data.points.map(p => ({ x: p.x, y: p.y }));
+    pts = entity.data.points.map(p => pickCoord(p, applyZ));
     isClosed = !!entity.data.isClosed;
     if (isClosed && pts.length >= 2) {
       const first = pts[0];
       const last = pts[pts.length - 1];
       if (distance2D(first, last) > EPS) {
-        pts.push({ x: first.x, y: first.y });
+        pts.push({ ...first });
       }
     }
   }
@@ -194,7 +205,11 @@ function dedupeConsecutivePoints(pts: Point2D[]): Point2D[] {
   const res: Point2D[] = [];
   for (const p of pts) {
     if (res.length === 0 || distance2D(res[res.length - 1], p) > 1e-5) {
-      res.push({ x: p.x, y: p.y });
+      res.push(
+        p.z !== undefined && Number.isFinite(p.z)
+          ? { x: p.x, y: p.y, z: p.z }
+          : { x: p.x, y: p.y }
+      );
     }
   }
   return res;
@@ -891,7 +906,8 @@ export function joinLinearEntities(
   lines: CADLine[],
   polylines: CADPolyline[],
   layers: CADLayer[],
-  tolerance = 0.01
+  tolerance = 0.01,
+  applyZ = false
 ): { mutation: CADGeometryMutation | null; error?: string } {
   const idSet = new Set(selectedIds);
   const layerMap = new Map(layers.map(l => [l.id, l]));
@@ -915,8 +931,8 @@ export function joinLinearEntities(
       sourceLineIds: [ln.id],
       sourcePolylineIds: [],
       points: [
-        { x: ln.start.x, y: ln.start.y },
-        { x: ln.end.x, y: ln.end.y }
+        pickCoord(ln.start, applyZ),
+        pickCoord(ln.end, applyZ)
       ],
       layerId: ln.layerId,
       color: ln.color,
@@ -932,7 +948,7 @@ export function joinLinearEntities(
     chains.push({
       sourceLineIds: [],
       sourcePolylineIds: [pl.id],
-      points: pl.points.map(p => ({ x: p.x, y: p.y })),
+      points: pl.points.map(p => pickCoord(p, applyZ)),
       layerId: pl.layerId,
       color: pl.color,
       name: pl.name,

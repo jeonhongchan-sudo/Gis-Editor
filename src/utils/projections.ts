@@ -39,14 +39,6 @@ export const COORDINATE_SYSTEMS: Record<string, CoordinateSystem> = {
     wktPrj: 'PROJCS["Korea 2000 / East Sea Belt 2010",GEOGCS["Korea 2000",DATUM["Geocentric_datum_of_Korea",SPHEROID["GRS 1980",6378137,298.257222101]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",38],PARAMETER["central_meridian",131],PARAMETER["scale_factor",1],PARAMETER["false_easting",200000],PARAMETER["false_northing",600000],UNIT["metre",1]]',
     isTM: true
   },
-  'EPSG:5181': {
-    code: 'EPSG:5181',
-    name: 'Korea 1985 / 중부원점 (카카오맵 타원체)',
-    description: '카카오 지도 API 및 구 GRS80/Bessel 기준 (Y가산수치 500,000)',
-    proj4Def: '+proj=tmerc +lat_0=38 +lon_0=127 +k=1 +x_0=200000 +y_0=500000 +ellps=GRS80 +units=m +no_defs',
-    wktPrj: 'PROJCS["Korea 1985 / Central Belt",GEOGCS["Korea 1985",DATUM["Korean_Datum_1985",SPHEROID["GRS 1980",6378137,298.257222101]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",38],PARAMETER["central_meridian",127],PARAMETER["scale_factor",1],PARAMETER["false_easting",200000],PARAMETER["false_northing",500000],UNIT["metre",1]]',
-    isTM: true
-  },
   'EPSG:5174': {
     code: 'EPSG:5174',
     name: 'Bessel 1841 / 구 지적도 중부원점',

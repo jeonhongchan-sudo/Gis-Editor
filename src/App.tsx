@@ -9,6 +9,7 @@ import { distance2D } from './utils/geometry';
 import { CADGeometryMutation, OffsetTargetHit, createCirclePolyline, createRectangleByDimensions, joinLinearEntities, moveEntitiesByDelta } from './utils/cadOperations';
 import { forceRefreshAppFromServer } from './utils/pwaRefresh';
 import { VWorldMapLayer, VWorldOverlayConfig } from './utils/vworldTiles';
+import { COORDINATE_SYSTEMS } from './utils/projections';
 import { 
   CADLayer, 
   CADLine, 
@@ -63,10 +64,11 @@ export default function App() {
     const savedOpacity = Number(localStorage.getItem('vworld_map_opacity'));
     const savedCrs = localStorage.getItem('vworld_source_crs');
     const validLayers: VWorldMapLayer[] = ['off', 'Base', 'Satellite'];
+    const validCrs = savedCrs && COORDINATE_SYSTEMS[savedCrs]?.isTM ? savedCrs : 'EPSG:5186';
     return {
       layer: savedLayer && validLayers.includes(savedLayer) ? savedLayer : 'off',
       opacity: Number.isFinite(savedOpacity) && savedOpacity >= 0.2 && savedOpacity <= 1 ? savedOpacity : 0.75,
-      sourceCrs: savedCrs || 'EPSG:5186'
+      sourceCrs: validCrs
     };
   });
 
@@ -75,6 +77,12 @@ export default function App() {
     localStorage.setItem('vworld_map_opacity', String(mapConfig.opacity));
     localStorage.setItem('vworld_source_crs', mapConfig.sourceCrs);
   }, [mapConfig]);
+
+  // Global Z-coordinate application toggle (default: off / 2D planar)
+  const [applyZ, setApplyZ] = useState<boolean>(() => localStorage.getItem('cad_apply_z') === 'true');
+  useEffect(() => {
+    localStorage.setItem('cad_apply_z', String(applyZ));
+  }, [applyZ]);
 
   // On Mount: Load last project if exists
   useEffect(() => {
@@ -415,23 +423,27 @@ export default function App() {
 
   const handleFinishDrawing = async () => {
     if (activePoints.length >= 2) {
-      const planarPoints = activePoints.map(p => ({ x: p.x, y: p.y }));
+      const preparedPoints = activePoints.map(p =>
+        applyZ && p.z !== undefined && Number.isFinite(p.z)
+          ? { x: p.x, y: p.y, z: p.z }
+          : { x: p.x, y: p.y }
+      );
       if (tool === 'polyline') {
         const newPl: CADPolyline = {
           id: `pl-${Date.now()}`,
           name: `연속선_${polylines.length + 1}`,
-          points: planarPoints,
+          points: preparedPoints,
           isClosed: false,
           layerId: activeLayerId
         };
         setPolylines(prev => [...prev, newPl]);
         await saveEntityToDb('polylines', newPl);
         pushHistory('연속선 생성');
-      } else if (tool === 'polygon' && planarPoints.length >= 3) {
+      } else if (tool === 'polygon' && preparedPoints.length >= 3) {
         const newPoly: CADPolygon = {
           id: `poly-${Date.now()}`,
           name: `구역_${polygons.length + 1}`,
-          points: planarPoints,
+          points: preparedPoints,
           layerId: activeLayerId
         };
         setPolygons(prev => [...prev, newPoly]);
@@ -574,7 +586,7 @@ export default function App() {
   };
 
   const handleExecuteJoin = async () => {
-    const { mutation, error } = joinLinearEntities(selectedEntityIds, lines, polylines, layers);
+    const { mutation, error } = joinLinearEntities(selectedEntityIds, lines, polylines, layers, 0.01, applyZ);
     if (error || !mutation) {
       showCadToast(error || '결합할 수 있는 선이 없습니다.');
       return;
@@ -980,7 +992,57 @@ export default function App() {
     }
   };
 
-  const handleImportCSVPoints = async (newPoints: CADPoint[], append: boolean, targetLayer?: CADLayer) => {
+  const handleImportCSVPoints = async (
+    newPoints: CADPoint[],
+    append: boolean,
+    targetLayer?: CADLayer,
+    options?: { zOnlyMergeByXY?: boolean }
+  ) => {
+    if (options?.zOnlyMergeByXY && append) {
+      const fmtCoord3 = (val: number): string => {
+        const rounded = Number(val.toFixed(3));
+        return (Object.is(rounded, -0) || rounded === 0 ? 0 : rounded).toFixed(3);
+      };
+      const makeXYKey3 = (x: number, y: number): string => `${fmtCoord3(x)}|${fmtCoord3(y)}`;
+
+      const zByXY = new Map<string, number>();
+      newPoints.forEach(np => {
+        if (np.z !== undefined && Number.isFinite(np.z) && Number.isFinite(np.x) && Number.isFinite(np.y)) {
+          zByXY.set(makeXYKey3(np.x, np.y), np.z);
+        }
+      });
+
+      if (zByXY.size === 0) {
+        showCadToast('추가할 유효한 Z값이 없습니다.');
+        return;
+      }
+
+      const updatedExisting: CADPoint[] = [];
+      const nextPoints = points.map(pt => {
+        const matchedZ = zByXY.get(makeXYKey3(pt.x, pt.y));
+        if (matchedZ !== undefined) {
+          const updated: CADPoint = { ...pt, z: matchedZ };
+          updatedExisting.push(updated);
+          return updated;
+        }
+        return pt;
+      });
+
+      if (updatedExisting.length === 0) {
+        showCadToast('X, Y 소수점 3자리까지 일치하는 기존 측점이 없습니다.');
+        return;
+      }
+
+      pushHistory(`기존 측점 ${updatedExisting.length}개 Z값 추가`);
+      setPoints(nextPoints);
+
+      if (currentProjectId !== null) {
+        await db.points.bulkPut(updatedExisting.map(p => ({ ...p, projectId: currentProjectId })));
+      }
+      showCadToast(`기존 측점 ${updatedExisting.length}개에 Z값을 추가했습니다.`);
+      return;
+    }
+
     const csvLayers = targetLayer
       ? !append && targetLayer.id !== 'layer-0'
         ? [DEFAULT_LAYERS[0], targetLayer]
@@ -1045,6 +1107,8 @@ export default function App() {
         activeSnap={activeSnap}
         pointsCount={points.length}
         liveMeasurement={liveMeasurement}
+        applyZ={applyZ}
+        onToggleApplyZ={setApplyZ}
         onOpenImport={() => setShowImportModal(true)}
         onOpenExport={() => setShowExportModal(true)}
         onOpenTable={() => setShowTableModal(true)}
@@ -1068,6 +1132,7 @@ export default function App() {
           rectDimSpec={rectDimSpec}
           circleDimSpec={circleDimSpec}
           snapEnabled={snapEnabled}
+          applyZ={applyZ}
           layers={layers} points={points} lines={lines} polylines={polylines} polygons={polygons} texts={texts}
           activeLayerId={activeLayerId} 
           selectedEntityId={selectedEntityId}
@@ -1731,6 +1796,7 @@ export default function App() {
       {showImportModal && (
         <ImportModal
           existingLayers={layers}
+          existingPoints={points}
           activeLayerId={activeLayerId}
           onImportCSVPoints={handleImportCSVPoints}
           onImportSHP={handleImportSHP}

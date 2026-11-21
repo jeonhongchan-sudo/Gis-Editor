@@ -177,9 +177,9 @@ export function parseGeoJson(
         });
       });
     }
-    // 3. Line Geometries (strictly 2D)
+    // 3. Line Geometries
     else if (geom.type === 'LineString') {
-      const pts = geom.coordinates.map((c: number[]) => getPoint(c, false));
+      const pts = geom.coordinates.map((c: number[]) => getPoint(c, true));
       const isClosed = !!props.isClosed;
       if (isClosed && pts.length >= 2) {
         const first = pts[0];
@@ -198,7 +198,7 @@ export function parseGeoJson(
       });
     } else if (geom.type === 'MultiLineString') {
       geom.coordinates.forEach((line: number[][], subIdx: number) => {
-        const pts = line.map((c: number[]) => getPoint(c));
+        const pts = line.map((c: number[]) => getPoint(c, true));
         polylines.push({
           id: props.id ? `${props.id}_${subIdx}` : `gj-mpl-${Date.now()}-${idx}-${subIdx}`,
           name: props.NAME || props.name || props.title || `MLINE_${idx + 1}_${subIdx + 1}`,
@@ -213,7 +213,7 @@ export function parseGeoJson(
       const rings: number[][][] = Array.isArray(geom.coordinates) ? geom.coordinates : [];
       rings.forEach((ring: number[][], ringIdx: number) => {
         if (Array.isArray(ring) && ring.length >= 2) {
-          const pts = ring.map((c: number[]) => getPoint(c));
+          const pts = ring.map((c: number[]) => getPoint(c, true));
           const first = pts[0];
           const last = pts[pts.length - 1];
           if (first.x !== last.x || first.y !== last.y) {
@@ -238,7 +238,7 @@ export function parseGeoJson(
         if (!Array.isArray(poly)) return;
         poly.forEach((ring: number[][], ringIdx: number) => {
           if (Array.isArray(ring) && ring.length >= 2) {
-            const pts = ring.map((c: number[]) => getPoint(c));
+            const pts = ring.map((c: number[]) => getPoint(c, true));
             const first = pts[0];
             const last = pts[pts.length - 1];
             if (first.x !== last.x || first.y !== last.y) {
