@@ -4,13 +4,14 @@
  */
 
 import React, { useState } from 'react';
-import { X, Check, MapPin, Hash } from 'lucide-react';
-import { CADPoint } from '../types/cad';
+import { X, Check, MapPin, Hash, Layers } from 'lucide-react';
+import { CADLayer, CADPoint } from '../types/cad';
 
 interface ManualPointModalProps {
-  onAdd: (point: CADPoint) => void;
+  onAdd: (point: CADPoint) => void | Promise<void>;
   onClose: () => void;
   activeLayerId: string;
+  layers?: CADLayer[];
   nextPointNumber: number;
 }
 
@@ -18,12 +19,17 @@ export const ManualPointModal: React.FC<ManualPointModalProps> = ({
   onAdd, 
   onClose, 
   activeLayerId,
+  layers = [],
   nextPointNumber 
 }) => {
   const [name, setName] = useState(`측점_${nextPointNumber}`);
   const [x, setX] = useState('');
   const [y, setY] = useState('');
   const [z, setZ] = useState('');
+  const [targetLayerId, setTargetLayerId] = useState<string>(() => {
+    if (layers.length === 0) return activeLayerId;
+    return layers.some(l => l.id === activeLayerId) ? activeLayerId : layers[0].id;
+  });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,20 +39,24 @@ export const ManualPointModal: React.FC<ManualPointModalProps> = ({
     const rawZ = z.trim() ? parseFloat(z) : undefined;
     const numZ = rawZ !== undefined && Number.isFinite(rawZ) ? rawZ : undefined;
 
-    if (isNaN(numX) || isNaN(numY)) {
+    if (!Number.isFinite(numX) || !Number.isFinite(numY)) {
       alert('유효한 X, Y 좌표를 입력해 주세요.');
       return;
     }
 
     const ptName = name.trim() || `측점_${nextPointNumber}`;
+    const chosenLayerId =
+      layers.length > 0 && !layers.some(l => l.id === targetLayerId)
+        ? layers[0].id
+        : (targetLayerId || activeLayerId || 'layer-0');
 
     onAdd({
       id: `point-${Date.now()}`,
       name: ptName,
       x: numX,
       y: numY,
-      z: numZ,
-      layerId: activeLayerId,
+      ...(numZ !== undefined ? { z: numZ } : {}),
+      layerId: chosenLayerId,
       isSurveyNode: false,
       attributes: {
         TEXTSTRING: ptName,
@@ -137,6 +147,26 @@ export const ManualPointModal: React.FC<ManualPointModalProps> = ({
               placeholder="미입력 시 제외 (선형 작업에는 반영되지 않음)"
             />
           </div>
+
+          {layers.length > 0 && (
+            <div className="space-y-1.5">
+              <label className="text-[11px] text-slate-500 dark:text-slate-400 font-bold ml-1 flex items-center gap-1">
+                <Layers className="w-3 h-3" />
+                <span>배치 레이어</span>
+              </label>
+              <select
+                value={targetLayerId}
+                onChange={e => setTargetLayerId(e.target.value)}
+                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 focus:outline-none focus:ring-1 focus:ring-sky-500 font-medium"
+              >
+                {layers.map(l => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}{!l.visible ? ' (숨김 → 자동 표시)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div className="pt-4 flex gap-2">
             <button

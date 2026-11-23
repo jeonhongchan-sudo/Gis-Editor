@@ -170,10 +170,9 @@ export default function App() {
   // Sync DB results to local state for fast canvas rendering and transient edits
   useEffect(() => {
     if (dbLayers) {
-      setLayers(dbLayers.length > 0 ? dbLayers : DEFAULT_LAYERS);
-      if (dbLayers.length > 0) {
-        setActiveLayerId(prev => (dbLayers.some(l => l.id === prev) ? prev : dbLayers[0].id));
-      }
+      const effectiveLayers = dbLayers.length > 0 ? dbLayers : DEFAULT_LAYERS;
+      setLayers(effectiveLayers);
+      setActiveLayerId(prev => (effectiveLayers.some(l => l.id === prev) ? prev : effectiveLayers[0].id));
     }
   }, [dbLayers]);
 
@@ -409,6 +408,7 @@ export default function App() {
             lineWidth: 1.5
           };
           await db.layers.put({ ...matchingLayer, projectId: pid! });
+          setLayers(prev => (prev.some(l => l.id === matchingLayer.id) ? prev : [...prev, matchingLayer]));
         }
       }
       await (db as any)[type].put({ ...data, projectId: pid! });
@@ -1829,12 +1829,26 @@ export default function App() {
       {showManualPointModal && (
         <ManualPointModal
           onAdd={async (pt) => {
+            const targetLayer = layers.find(l => l.id === pt.layerId);
+            if (targetLayer && !targetLayer.visible) {
+              setLayers(prev => prev.map(l => (l.id === targetLayer.id ? { ...l, visible: true } : l)));
+              if (currentProjectId !== null) {
+                await db.layers.where('id').equals(targetLayer.id).modify({ visible: true });
+              }
+            }
+            if (pt.layerId) setActiveLayerId(pt.layerId);
             await handleAddPoint(pt);
             setSelectedEntityId(pt.id);
             handleZoomExtents([{ x: pt.x, y: pt.y }]);
+            showCadToast(
+              targetLayer && !targetLayer.visible
+                ? `'${pt.name}' 측점을 추가하고 숨겨진 '${targetLayer.name}' 레이어를 표시했습니다.`
+                : `'${pt.name}' 측점을 추가했습니다.`
+            );
           }}
           onClose={() => setShowManualPointModal(false)}
           activeLayerId={activeLayerId}
+          layers={layers}
           nextPointNumber={points.length + 1}
         />
       )}

@@ -381,13 +381,14 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     };
   }, []);
 
-  // Quick lookup for layer visibility and color
-  const layerMap = useRef<Map<string, CADLayer>>(new Map());
-  useEffect(() => {
+  // Quick lookup for layer visibility and color (updated synchronously so render never sees stale map)
+  const layerLookup = useMemo(() => {
     const map = new Map<string, CADLayer>();
     layers.forEach(l => map.set(l.id, l));
-    layerMap.current = map;
+    return map;
   }, [layers]);
+  const layerMap = useRef<Map<string, CADLayer>>(layerLookup);
+  layerMap.current = layerLookup;
 
   // Unified selected entity Set for ultra-fast O(1) checks
   const selectedSet = useMemo(() => {
@@ -467,7 +468,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       setView({
         panX: isFinite(minX + maxX) ? (minX + maxX) / 2 : 0,
         panY: isFinite(minY + maxY) ? (minY + maxY) / 2 : 0,
-        zoom: 2.0
+        zoom: Math.max(2.0, viewRef.current?.zoom || 2.0)
       });
       return;
     }
@@ -1836,7 +1837,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 
     linesByLayer.forEach((layerLines, layerId) => {
       const layer = layerMap.current.get(layerId);
-      if (!layer || !layer.visible) return;
+      if (layer && !layer.visible) return;
 
       for (let i = 0; i < layerLines.length; i++) {
         const l = layerLines[i];
@@ -1859,7 +1860,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       const pt = points[i];
       if (pt.x < visMinX || pt.x > visMaxX || pt.y < visMinY || pt.y > visMaxY) continue;
       const layer = layerMap.current.get(pt.layerId);
-      if (!layer || !layer.visible) continue;
+      if (layer && !layer.visible) continue;
       visiblePoints.push(pt);
     }
 
@@ -2114,7 +2115,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       const txt = texts[i];
       if (txt.x < visMinX || txt.x > visMaxX || txt.y < visMinY || txt.y > visMaxY) continue;
       const tLayer = layerMap.current.get(txt.layerId);
-      if (!tLayer || !tLayer.visible) continue;
+      if (tLayer && !tLayer.visible) continue;
 
       const pxHeight = txt.height * view.zoom;
       if (pxHeight < 0.2) continue; 
@@ -2921,6 +2922,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     ctx.restore();
   }, [
     view,
+    layerLookup,
     points,
     lines,
     polylines,
