@@ -38,6 +38,7 @@ import {
 } from '../utils/geometry';
 import {
   CADGeometryMutation,
+  CalloutStyle,
   LinearTargetHit,
   OffsetTargetHit,
   breakEntityAtPoint,
@@ -47,7 +48,10 @@ import {
   computeExtendToBoundaryOperation,
   computeOffsetOperation,
   computeTrimOperation,
+  createCalloutPolylines,
   createCirclePolyline,
+  createEllipseByBounds,
+  createEllipseByDimensions,
   createRectangleByDimensions,
   createRectanglePolyline,
   findClosestLinearTarget,
@@ -69,6 +73,14 @@ interface CADCanvasProps {
   onChangeOffsetTarget?: (target: OffsetTargetHit | null) => void;
   rectDimSpec?: { width: number; height: number; anchor: 'corner' | 'center'; locked: boolean } | null;
   circleDimSpec?: { radius: number; locked: boolean } | null;
+  ellipseDimSpec?: { width: number; height: number; anchor: 'corner' | 'center'; locked: boolean } | null;
+  calloutSpec?: {
+    style: CalloutStyle;
+    text: string;
+    textHeight: number | null;
+    autoSize: boolean;
+    withLeader: boolean;
+  } | null;
   snapEnabled: boolean;
   applyZ?: boolean;
   layers: CADLayer[];
@@ -85,7 +97,7 @@ interface CADCanvasProps {
   onAddPoint: (point: CADPoint) => void;
   onAddLine: (line: CADLine) => void;
   onAddPolyline: (polyline: CADPolyline) => void;
-  onAddPolygon: (polygon: CADPolygon) => void;
+  onAddPolylines?: (polylines: CADPolyline[], description?: string) => void;
   onApplyGeometryMutation?: (description: string, mutation: CADGeometryMutation) => void;
   onCursorMove: (world: Point2D | null, snap: SnapPoint | null) => void;
   onLiveMeasurementChange?: (data: { currentSegment: number; totalLength: number; area?: number; pointCount: number }) => void;
@@ -107,6 +119,8 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
   onChangeOffsetTarget,
   rectDimSpec = null,
   circleDimSpec = null,
+  ellipseDimSpec = null,
+  calloutSpec = null,
   snapEnabled,
   applyZ = false,
   layers,
@@ -123,7 +137,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
   onAddPoint,
   onAddLine,
   onAddPolyline,
-  onAddPolygon,
+  onAddPolylines,
   onApplyGeometryMutation,
   onCursorMove,
   onLiveMeasurementChange,
@@ -534,6 +548,16 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         currentSegment: r,
         totalLength: 2 * Math.PI * r,
         area: Math.PI * r * r,
+        pointCount: 1
+      };
+    } else if (tool === 'ellipse' && activePoints.length === 1 && targetPoint) {
+      const rx = Math.abs(targetPoint.x - activePoints[0].x) / 2;
+      const ry = Math.abs(targetPoint.y - activePoints[0].y) / 2;
+      const perimeter = Math.PI * (3 * (rx + ry) - Math.sqrt(Math.max(0, (3 * rx + ry) * (rx + 3 * ry))));
+      nextMeasurement = {
+        currentSegment: distance2D(activePoints[0], targetPoint),
+        totalLength: perimeter,
+        area: Math.PI * rx * ry,
         pointCount: 1
       };
     } else {
@@ -987,6 +1011,28 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         const { distance } = closestPointOnSegment(targetWorld, pl.points[pl.points.length - 1], pl.points[0]);
         if (distance < hitRadius) return pl.id;
       }
+      if (pl.attributes?.CALLOUT_TEXT && pl.points.length >= 2) {
+        let pMinX = Infinity, pMinY = Infinity, pMaxX = -Infinity, pMaxY = -Infinity;
+        for (let i = 0; i < pl.points.length; i++) {
+          pMinX = Math.min(pMinX, pl.points[i].x);
+          pMinY = Math.min(pMinY, pl.points[i].y);
+          pMaxX = Math.max(pMaxX, pl.points[i].x);
+          pMaxY = Math.max(pMaxY, pl.points[i].y);
+        }
+        if (String(pl.attributes.CALLOUT_STYLE) === 'leader') {
+          const pA = pl.points[pl.points.length - 2];
+          const pB = pl.points[pl.points.length - 1];
+          const sMinX = Math.min(pA.x, pB.x);
+          const sMaxX = Math.max(pA.x, pB.x);
+          const shelfY = (pA.y + pB.y) / 2;
+          const fh = Number(pl.attributes.CALLOUT_FONT_H) || 1;
+          if (targetWorld.x >= sMinX && targetWorld.x <= sMaxX && targetWorld.y >= shelfY - hitRadius && targetWorld.y <= shelfY + fh * 1.6) {
+            return pl.id;
+          }
+        } else if (pl.isClosed && targetWorld.x >= pMinX && targetWorld.x <= pMaxX && targetWorld.y >= pMinY && targetWorld.y <= pMaxY) {
+          return pl.id;
+        }
+      }
     }
     for (const ln of lines) {
       const l = layerMap.current.get(ln.layerId);
@@ -1248,9 +1294,86 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       return;
     }
 
-    // 8. POLYGON TOOL
+    // 7.5 ELLIPSE TOOL (2-click bounding box or 1-click locked dimension stamp -> closed Polyline)
+    if (tool === 'ellipse') {
+      const clickCoord = pickCoord(snapRes.effectiveWorld);
+      if (ellipseDimSpec?.locked && Math.abs(ellipseDimSpec.width) > 1e-4 && Math.abs(ellipseDimSpec.height) > 1e-4) {
+        onAddPolyline(
+          createEllipseByDimensions(
+            clickCoord,
+            ellipseDimSpec.width,
+            ellipseDimSpec.height,
+            ellipseDimSpec.anchor,
+            activeLayerId,
+            64,
+            `타원_${polylines.length + 1}`
+          )
+        );
+        setActivePoints([]);
+        return;
+      }
+      if (activePoints.length === 0) {
+        setActivePoints([clickCoord]);
+      } else {
+        const p1 = pickCoord(activePoints[0]);
+        const p2 = clickCoord;
+        if (Math.abs(p2.x - p1.x) > 1e-4 && Math.abs(p2.y - p1.y) > 1e-4) {
+          onAddPolyline(createEllipseByBounds(p1, p2, activeLayerId, 64, `타원_${polylines.length + 1}`));
+        }
+        setActivePoints([]);
+      }
+      return;
+    }
+
+    // 8. POLYGON TOOL (Closed Line / Polyline)
     if (tool === 'polygon') {
       setActivePoints(prev => [...prev, pickCoord(snapRes.effectiveWorld)]);
+      return;
+    }
+
+    // 8.5 CALLOUT / LEADER TOOL (Pure Line frame + marker-free text attribute)
+    if (tool === 'callout') {
+      const rawText = (calloutSpec?.text || '').trim();
+      if (!rawText) {
+        showNodeHint('상단 입력창에 말풍선에 표시할 글자를 먼저 입력해 주세요.');
+        return;
+      }
+      const clickCoord = pickCoord(snapRes.effectiveWorld);
+      const effectiveHeight =
+        calloutSpec?.autoSize || !calloutSpec?.textHeight
+          ? Math.max(0.05, Number((14 / Math.max(view.zoom, 0.001)).toFixed(2)))
+          : calloutSpec.textHeight;
+      const spec = {
+        style: calloutSpec?.style || 'rect',
+        text: rawText,
+        textHeight: effectiveHeight,
+        withLeader: calloutSpec?.withLeader ?? true
+      };
+
+      if (!spec.withLeader) {
+        const created = createCalloutPolylines(clickCoord, null, spec, activeLayerId);
+        if (onAddPolylines) {
+          onAddPolylines(created, '말풍선 생성');
+        } else {
+          created.forEach(pl => onAddPolyline(pl));
+        }
+        setActivePoints([]);
+        return;
+      }
+
+      if (activePoints.length === 0) {
+        setActivePoints([clickCoord]);
+        showNodeHint('말풍선을 배치할 위치를 클릭하세요.');
+      } else {
+        const targetPt = pickCoord(activePoints[0]);
+        const created = createCalloutPolylines(clickCoord, targetPt, spec, activeLayerId);
+        if (onAddPolylines) {
+          onAddPolylines(created, '말풍선/인출선 생성');
+        } else {
+          created.forEach(pl => onAddPolyline(pl));
+        }
+        setActivePoints([]);
+      }
       return;
     }
 
@@ -1528,9 +1651,11 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       });
       setActivePoints([]);
     } else if (tool === 'polygon' && activePoints.length >= 3) {
-      onAddPolygon({
+      onAddPolyline({
         id: `poly-${Date.now()}`,
+        name: `다각형_${polylines.length + 1}`,
         points: activePoints.map(pickCoord),
+        isClosed: true,
         layerId: activeLayerId
       });
       setActivePoints([]);
@@ -1803,6 +1928,50 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       ctx.strokeStyle = color;
       ctx.lineWidth = isSelected ? 4 : (layer?.lineWidth || 2);
       ctx.stroke();
+
+      // Render embedded Callout text (pure line-framed label with ZERO marker dots)
+      const calloutText = typeof pl.attributes?.CALLOUT_TEXT === 'string' ? pl.attributes.CALLOUT_TEXT.trim() : '';
+      if (calloutText) {
+        const rawFontH = Number(pl.attributes?.CALLOUT_FONT_H);
+        const worldFontH = Number.isFinite(rawFontH) && rawFontH > 0 ? rawFontH : 1;
+        const pxHeight = worldFontH * view.zoom;
+        if (pxHeight >= 1.5) {
+          const style = String(pl.attributes?.CALLOUT_STYLE || 'rect');
+          const linesText = calloutText.split(/\r?\n/);
+          const lineStepPx = pxHeight * 1.25;
+
+          ctx.save();
+          ctx.font = `600 ${pxHeight}px ${CANVAS_SANS_FONT}`;
+          ctx.textAlign = 'center';
+          ctx.lineJoin = 'round';
+          ctx.strokeStyle = theme === 'dark' ? '#090d16' : '#ffffff';
+          ctx.lineWidth = Math.max(1.5, Math.min(3.5, pxHeight * 0.18));
+          ctx.fillStyle = isSelected ? '#fbbf24' : (pl.color || layer?.color || (theme === 'dark' ? '#f8fafc' : '#0f172a'));
+
+          if (style === 'leader' && pl.points.length >= 2) {
+            const pA = pl.points[pl.points.length - 2];
+            const pB = pl.points[pl.points.length - 1];
+            const shelfMidScreen = getScreen({ x: (pA.x + pB.x) / 2, y: (pA.y + pB.y) / 2 });
+            ctx.textBaseline = 'bottom';
+            const bottomGap = Math.max(2, pxHeight * 0.25);
+            for (let li = 0; li < linesText.length; li++) {
+              const rowY = shelfMidScreen.y - bottomGap - (linesText.length - 1 - li) * lineStepPx;
+              ctx.strokeText(linesText[li], shelfMidScreen.x, rowY);
+              ctx.fillText(linesText[li], shelfMidScreen.x, rowY);
+            }
+          } else {
+            const centerScreen = getScreen({ x: (pMinX + pMaxX) / 2, y: (pMinY + pMaxY) / 2 });
+            ctx.textBaseline = 'middle';
+            const startY = centerScreen.y - ((linesText.length - 1) * lineStepPx) / 2;
+            for (let li = 0; li < linesText.length; li++) {
+              const rowY = startY + li * lineStepPx;
+              ctx.strokeText(linesText[li], centerScreen.x, rowY);
+              ctx.fillText(linesText[li], centerScreen.x, rowY);
+            }
+          }
+          ctx.restore();
+        }
+      }
 
       // If selected, highlight vertex nodes
       if (isSelected) {
@@ -2234,6 +2403,101 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         ctx.textBaseline = 'middle';
         ctx.fillText(label, sc.x + 18, sc.y - 14);
         ctx.restore();
+      } else if (tool === 'ellipse' && ellipseDimSpec?.locked && Math.abs(ellipseDimSpec.width) > 1e-4 && Math.abs(ellipseDimSpec.height) > 1e-4) {
+        const previewPoly = createEllipseByDimensions(
+          effectivePreviewCursor,
+          ellipseDimSpec.width,
+          ellipseDimSpec.height,
+          ellipseDimSpec.anchor,
+          activeLayerId,
+          64
+        );
+        const sPts = previewPoly.points.map(getScreen);
+        ctx.save();
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.14)';
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(sPts[0].x, sPts[0].y);
+        for (let i = 1; i < sPts.length; i++) ctx.lineTo(sPts[i].x, sPts[i].y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        const sc = getScreen(effectivePreviewCursor);
+        ctx.fillStyle = '#10b981';
+        ctx.beginPath();
+        ctx.arc(sc.x, sc.y, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        const label = `타원 ${Math.abs(ellipseDimSpec.width).toFixed(2)}m × ${Math.abs(ellipseDimSpec.height).toFixed(2)}m (고정)`;
+        ctx.font = `10.5px ${CANVAS_MONO_FONT}`;
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+        ctx.strokeStyle = '#0284c7';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(sc.x + 12, sc.y - 24, tw + 12, 20, 5);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#38bdf8';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, sc.x + 18, sc.y - 14);
+        ctx.restore();
+      } else if (tool === 'callout' && !calloutSpec?.withLeader && calloutSpec?.text.trim()) {
+        const effH = calloutSpec.autoSize || !calloutSpec.textHeight
+          ? Math.max(0.05, Number((14 / Math.max(view.zoom, 0.001)).toFixed(2)))
+          : calloutSpec.textHeight;
+        const previewItems = createCalloutPolylines(
+          effectivePreviewCursor,
+          null,
+          { style: calloutSpec.style, text: calloutSpec.text.trim(), textHeight: effH, withLeader: false },
+          activeLayerId
+        );
+        ctx.save();
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 4]);
+        previewItems.forEach(item => {
+          if (item.points.length < 2) return;
+          ctx.beginPath();
+          const p0 = getScreen(item.points[0]);
+          ctx.moveTo(p0.x, p0.y);
+          for (let i = 1; i < item.points.length; i++) {
+            const ps = getScreen(item.points[i]);
+            ctx.lineTo(ps.x, ps.y);
+          }
+          if (item.isClosed) ctx.closePath();
+          ctx.stroke();
+        });
+        ctx.setLineDash([]);
+
+        const pxH = effH * view.zoom;
+        if (pxH >= 2) {
+          const linesText = calloutSpec.text.trim().split(/\r?\n/);
+          const lineStepPx = pxH * 1.25;
+          const sc = getScreen(effectivePreviewCursor);
+          ctx.font = `600 ${pxH}px ${CANVAS_SANS_FONT}`;
+          ctx.textAlign = 'center';
+          ctx.fillStyle = 'rgba(56, 189, 248, 0.9)';
+          if (calloutSpec.style === 'leader') {
+            ctx.textBaseline = 'bottom';
+            const bottomGap = Math.max(2, pxH * 0.25);
+            linesText.forEach((lt, li) => {
+              ctx.fillText(lt, sc.x, sc.y - bottomGap - (linesText.length - 1 - li) * lineStepPx);
+            });
+          } else {
+            ctx.textBaseline = 'middle';
+            const startY = sc.y - ((linesText.length - 1) * lineStepPx) / 2;
+            linesText.forEach((lt, li) => {
+              ctx.fillText(lt, sc.x, startY + li * lineStepPx);
+            });
+          }
+        }
+        ctx.restore();
       }
     }
 
@@ -2526,6 +2790,113 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
         ctx.fillText(label, sp.x + 18, sp.y - 14);
+      } else if (tool === 'ellipse' && activePoints.length === 1 && cursorWorld) {
+        const p1 = activePoints[0];
+        const p2 = cursorWorld;
+        const center = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+        const sc = getScreen(center);
+        const s1 = getScreen(p1);
+        const s2 = getScreen(p2);
+        const rxPx = Math.abs(s2.x - s1.x) / 2;
+        const ryPx = Math.abs(s2.y - s1.y) / 2;
+
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.12)';
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.ellipse(sc.x, sc.y, Math.max(1, rxPx), Math.max(1, ryPx), 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Bounding rect light guide
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.45)';
+        ctx.strokeRect(Math.min(s1.x, s2.x), Math.min(s1.y, s2.y), Math.abs(s2.x - s1.x), Math.abs(s2.y - s1.y));
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = '#10b981';
+        ctx.beginPath();
+        ctx.arc(s1.x, s1.y, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        const wM = Math.abs(p2.x - p1.x);
+        const hM = Math.abs(p2.y - p1.y);
+        const areaM2 = Math.PI * (wM / 2) * (hM / 2);
+        const label = `타원 ${wM.toFixed(3)}m × ${hM.toFixed(3)}m (${areaM2.toFixed(2)}㎡)`;
+        ctx.font = `10.5px ${CANVAS_MONO_FONT}`;
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+        ctx.strokeStyle = '#0284c7';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(s2.x + 12, s2.y - 24, tw + 12, 20, 5);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#38bdf8';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, s2.x + 18, s2.y - 14);
+      } else if (tool === 'callout' && activePoints.length === 1 && cursorWorld) {
+        const targetPt = activePoints[0];
+        const sTarget = getScreen(targetPt);
+        const textStr = (calloutSpec?.text || '').trim() || '주석';
+        const effH = calloutSpec?.autoSize || !calloutSpec?.textHeight
+          ? Math.max(0.05, Number((14 / Math.max(view.zoom, 0.001)).toFixed(2)))
+          : calloutSpec.textHeight;
+        const previewItems = createCalloutPolylines(
+          cursorWorld,
+          targetPt,
+          { style: calloutSpec?.style || 'rect', text: textStr, textHeight: effH, withLeader: true },
+          activeLayerId
+        );
+
+        ctx.save();
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 4]);
+        previewItems.forEach(item => {
+          if (item.points.length < 2) return;
+          ctx.beginPath();
+          const p0 = getScreen(item.points[0]);
+          ctx.moveTo(p0.x, p0.y);
+          for (let i = 1; i < item.points.length; i++) {
+            const ps = getScreen(item.points[i]);
+            ctx.lineTo(ps.x, ps.y);
+          }
+          if (item.isClosed) ctx.closePath();
+          ctx.stroke();
+        });
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = '#10b981';
+        ctx.beginPath();
+        ctx.arc(sTarget.x, sTarget.y, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        const pxH = effH * view.zoom;
+        if (pxH >= 2) {
+          const linesText = textStr.split(/\r?\n/);
+          const lineStepPx = pxH * 1.25;
+          const sc = getScreen(cursorWorld);
+          ctx.font = `600 ${pxH}px ${CANVAS_SANS_FONT}`;
+          ctx.textAlign = 'center';
+          ctx.fillStyle = '#38bdf8';
+          if ((calloutSpec?.style || 'rect') === 'leader') {
+            ctx.textBaseline = 'bottom';
+            const bottomGap = Math.max(2, pxH * 0.25);
+            linesText.forEach((lt, li) => {
+              ctx.fillText(lt, sc.x, sc.y - bottomGap - (linesText.length - 1 - li) * lineStepPx);
+            });
+          } else {
+            ctx.textBaseline = 'middle';
+            const startY = sc.y - ((linesText.length - 1) * lineStepPx) / 2;
+            linesText.forEach((lt, li) => {
+              ctx.fillText(lt, sc.x, startY + li * lineStepPx);
+            });
+          }
+        }
+        ctx.restore();
       } else {
         // Standard Polyline / Polygon / Line Drawing Preview
         ctx.strokeStyle = '#38bdf8';

@@ -4,9 +4,9 @@
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Trash2, Ruler, X, Check, Layers, CheckSquare, Database, Unlink, Scissors, ArrowUpRight, Link2, Square, Circle, Lock, Move } from 'lucide-react';
+import { Trash2, Ruler, X, Check, Layers, CheckSquare, Database, Unlink, Scissors, ArrowUpRight, Link2, Square, Circle, Lock, Move, MessageSquare } from 'lucide-react';
 import { distance2D } from './utils/geometry';
-import { CADGeometryMutation, OffsetTargetHit, createCirclePolyline, createRectangleByDimensions, joinLinearEntities, moveEntitiesByDelta } from './utils/cadOperations';
+import { CADGeometryMutation, CalloutStyle, OffsetTargetHit, createCirclePolyline, createEllipseByDimensions, createRectangleByDimensions, joinLinearEntities, moveEntitiesByDelta } from './utils/cadOperations';
 import { forceRefreshAppFromServer } from './utils/pwaRefresh';
 import { VWorldMapLayer, VWorldOverlayConfig } from './utils/vworldTiles';
 import { COORDINATE_SYSTEMS } from './utils/projections';
@@ -216,6 +216,15 @@ export default function App() {
   const [circleDimMode, setCircleDimMode] = useState<'radius' | 'diameter'>('radius');
   const [circleDimInput, setCircleDimInput] = useState<string>('');
   const [circleDimLocked, setCircleDimLocked] = useState<boolean>(false);
+  const [ellipseWidthInput, setEllipseWidthInput] = useState<string>('');
+  const [ellipseHeightInput, setEllipseHeightInput] = useState<string>('');
+  const [ellipseAnchor, setEllipseAnchor] = useState<'corner' | 'center'>('center');
+  const [ellipseDimLocked, setEllipseDimLocked] = useState<boolean>(false);
+  const [calloutStyle, setCalloutStyle] = useState<CalloutStyle>('rect');
+  const [calloutTextInput, setCalloutTextInput] = useState<string>('');
+  const [calloutHeightInput, setCalloutHeightInput] = useState<string>('1.5');
+  const [calloutAutoSize, setCalloutAutoSize] = useState<boolean>(true);
+  const [calloutWithLeader, setCalloutWithLeader] = useState<boolean>(true);
   const [cadToast, setCadToast] = useState<string | null>(null);
   const cadToastTimerRef = useRef<any>(null);
   const [snapEnabled, setSnapEnabled] = useState<boolean>(true);
@@ -338,6 +347,25 @@ export default function App() {
     return { radius, locked: circleDimLocked };
   }, [circleDimInput, circleDimMode, circleDimLocked]);
 
+  const ellipseDimSpec = useMemo(() => {
+    const w = parseFloat(ellipseWidthInput);
+    const h = parseFloat(ellipseHeightInput);
+    if (!isFinite(w) || !isFinite(h) || Math.abs(w) <= 1e-4 || Math.abs(h) <= 1e-4) return null;
+    return { width: w, height: h, anchor: ellipseAnchor, locked: ellipseDimLocked };
+  }, [ellipseWidthInput, ellipseHeightInput, ellipseAnchor, ellipseDimLocked]);
+
+  const calloutSpec = useMemo(() => {
+    const rawH = parseFloat(calloutHeightInput);
+    const textHeight = isFinite(rawH) && rawH > 1e-3 ? rawH : null;
+    return {
+      style: calloutStyle,
+      text: calloutTextInput,
+      textHeight,
+      autoSize: calloutAutoSize,
+      withLeader: calloutWithLeader
+    };
+  }, [calloutStyle, calloutTextInput, calloutHeightInput, calloutAutoSize, calloutWithLeader]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'SELECT') return;
@@ -360,6 +388,8 @@ export default function App() {
           handleCreateRectangleByDimension();
         } else if (tool === 'circle' && activePoints.length === 1 && circleDimSpec) {
           handleCreateCircleByDimension();
+        } else if (tool === 'ellipse' && activePoints.length === 1 && ellipseDimSpec) {
+          handleCreateEllipseByDimension();
         } else {
           handleFinishDrawing();
         }
@@ -386,7 +416,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleUndo, handleRedo, handleZoomExtents, selectedEntityIds, activePoints, points, lines, polylines, polygons, texts, tool, rectDimSpec, circleDimSpec]);
+  }, [handleUndo, handleRedo, handleZoomExtents, selectedEntityIds, activePoints, points, lines, polylines, polygons, texts, tool, rectDimSpec, circleDimSpec, ellipseDimSpec]);
 
   const saveEntityToDb = async (type: 'points'|'lines'|'polylines'|'polygons'|'texts', data: any) => {
     try {
@@ -440,15 +470,16 @@ export default function App() {
         await saveEntityToDb('polylines', newPl);
         pushHistory('연속선 생성');
       } else if (tool === 'polygon' && preparedPoints.length >= 3) {
-        const newPoly: CADPolygon = {
+        const newPolyLine: CADPolyline = {
           id: `poly-${Date.now()}`,
-          name: `구역_${polygons.length + 1}`,
+          name: `다각형_${polylines.length + 1}`,
           points: preparedPoints,
+          isClosed: true,
           layerId: activeLayerId
         };
-        setPolygons(prev => [...prev, newPoly]);
-        await saveEntityToDb('polygons', newPoly);
-        pushHistory('면적 폴리곤 생성');
+        setPolylines(prev => [...prev, newPolyLine]);
+        await saveEntityToDb('polylines', newPolyLine);
+        pushHistory('다각형 선 생성');
       }
     }
     setActivePoints([]);
@@ -472,10 +503,23 @@ export default function App() {
     pushHistory('연속선 추가');
   };
 
-  const handleAddPolygon = async (polygon: CADPolygon) => {
-    setPolygons(prev => [...prev, polygon]);
-    await saveEntityToDb('polygons', polygon);
-    pushHistory('폴리곤 추가');
+  const handleAddPolylines = async (items: CADPolyline[], description = '선 객체 추가') => {
+    if (items.length === 0) return;
+    setPolylines(prev => [...prev, ...items]);
+    try {
+      let pid = currentProjectId;
+      if (pid === null) {
+        pid = await db.projects.add({ name: '새 프로젝트', createdAt: Date.now(), updatedAt: Date.now() });
+        const layersToSave = layers.length > 0 ? layers : DEFAULT_LAYERS;
+        await db.layers.bulkPut(layersToSave.map(l => ({ ...l, projectId: pid! })));
+        lastZoomedProjectRef.current = pid!;
+        setCurrentProjectId(pid!);
+      }
+      await db.polylines.bulkPut(items.map(pl => ({ ...pl, projectId: pid! })));
+    } catch (err) {
+      console.error('Failed to save polylines to IndexedDB:', err);
+    }
+    pushHistory(description);
   };
 
   const handleSelectTool = useCallback((nextTool: ToolMode) => {
@@ -533,6 +577,31 @@ export default function App() {
     await handleAddPolyline(newCircle);
     setActivePoints([]);
     showCadToast(`반지름 ${radius.toFixed(3)}m 원을 생성했습니다.`);
+  };
+
+  const handleCreateEllipseByDimension = async () => {
+    const w = parseFloat(ellipseWidthInput);
+    const h = parseFloat(ellipseHeightInput);
+    if (!isFinite(w) || !isFinite(h) || Math.abs(w) <= 1e-4 || Math.abs(h) <= 1e-4) {
+      showCadToast('가로(W)와 세로(H) 지름 치수(m)를 0이 아닌 값으로 입력해 주세요.');
+      return;
+    }
+    if (activePoints.length === 0) {
+      showCadToast('먼저 도면에서 기준점(중심 또는 모서리)을 클릭해 주세요.');
+      return;
+    }
+    const newEllipse = createEllipseByDimensions(
+      activePoints[0],
+      w,
+      h,
+      ellipseAnchor,
+      activeLayerId,
+      64,
+      `타원_${polylines.length + 1}`
+    );
+    await handleAddPolyline(newEllipse);
+    setActivePoints([]);
+    showCadToast(`${Math.abs(w).toFixed(2)}m × ${Math.abs(h).toFixed(2)}m 타원을 생성했습니다.`);
   };
 
   const applyGeometryMutation = async (description: string, mutation: CADGeometryMutation) => {
@@ -1131,6 +1200,8 @@ export default function App() {
           onChangeOffsetTarget={setOffsetTarget}
           rectDimSpec={rectDimSpec}
           circleDimSpec={circleDimSpec}
+          ellipseDimSpec={ellipseDimSpec}
+          calloutSpec={calloutSpec}
           snapEnabled={snapEnabled}
           applyZ={applyZ}
           layers={layers} points={points} lines={lines} polylines={polylines} polygons={polygons} texts={texts}
@@ -1140,7 +1211,7 @@ export default function App() {
           multiSelectMode={multiSelectMode}
           onSelectEntities={setSelectedEntityIds}
           onAddPoint={handleAddPoint}
-          onAddLine={handleAddLine} onAddPolyline={handleAddPolyline} onAddPolygon={handleAddPolygon}
+          onAddLine={handleAddLine} onAddPolyline={handleAddPolyline} onAddPolylines={handleAddPolylines}
           onApplyGeometryMutation={applyGeometryMutation}
           onCursorMove={handleCursorMove}
           onLiveMeasurementChange={setLiveMeasurement}
@@ -1322,6 +1393,187 @@ export default function App() {
               <Check className="w-3 h-3" />
               <span>생성</span>
             </button>
+            <button
+              onClick={() => handleSelectTool('pan')}
+              title="종료"
+              className="p-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* CAD Ellipse Dimension Floating Bar */}
+        {tool === 'ellipse' && (
+          <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-sky-400 dark:border-sky-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0">
+              <ellipse cx="12" cy="12" rx="9" ry="5.5" />
+            </svg>
+            <div className="flex items-center gap-1">
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">W</span>
+              <input
+                type="number"
+                step="any"
+                value={ellipseWidthInput}
+                onChange={e => setEllipseWidthInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleCreateEllipseByDimension();
+                  } else if (e.key === 'Escape') {
+                    (e.target as HTMLInputElement).blur();
+                    setActivePoints([]);
+                  }
+                }}
+                placeholder="가로폭(m)"
+                className="w-18 px-1.5 py-1 rounded-lg text-[11px] font-mono bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
+              />
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 ml-0.5">H</span>
+              <input
+                type="number"
+                step="any"
+                value={ellipseHeightInput}
+                onChange={e => setEllipseHeightInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleCreateEllipseByDimension();
+                  } else if (e.key === 'Escape') {
+                    (e.target as HTMLInputElement).blur();
+                    setActivePoints([]);
+                  }
+                }}
+                placeholder="세로폭(m)"
+                className="w-18 px-1.5 py-1 rounded-lg text-[11px] font-mono bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
+              />
+            </div>
+            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg">
+              <button
+                onClick={() => setEllipseAnchor('center')}
+                title="클릭 지점을 타원 중심으로 사용"
+                className={`px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap transition ${
+                  ellipseAnchor === 'center' ? 'bg-sky-500 text-white shadow-sm' : 'text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                중심
+              </button>
+              <button
+                onClick={() => setEllipseAnchor('corner')}
+                title="클릭 지점을 바운딩 모서리로 사용"
+                className={`px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap transition ${
+                  ellipseAnchor === 'corner' ? 'bg-sky-500 text-white shadow-sm' : 'text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                모서리
+              </button>
+            </div>
+            <button
+              onClick={() => setEllipseDimLocked(prev => !prev)}
+              title="켜면 입력한 가로×세로 치수의 타원을 도면 클릭 한 번으로 바로 배치합니다"
+              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap transition ${
+                ellipseDimLocked
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              <Lock className="w-3 h-3" />
+              <span>고정</span>
+            </button>
+            <button
+              onClick={handleCreateEllipseByDimension}
+              disabled={activePoints.length === 0 || !ellipseDimSpec}
+              title="기준점 클릭 후 입력한 치수로 타원 생성 (Enter)"
+              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap transition ${
+                activePoints.length > 0 && ellipseDimSpec
+                  ? 'bg-sky-500 hover:bg-sky-400 text-white shadow-sm'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
+              }`}
+            >
+              <Check className="w-3 h-3" />
+              <span>생성</span>
+            </button>
+            <button
+              onClick={() => handleSelectTool('pan')}
+              title="종료"
+              className="p-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* CAD Callout / Leader Floating Bar (Line-based, Zero Markers) */}
+        {tool === 'callout' && (
+          <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-sky-400 dark:border-sky-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
+            <MessageSquare className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
+            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg">
+              {([
+                { id: 'rect', label: '사각틀' },
+                { id: 'ellipse', label: '타원틀' },
+                { id: 'cloud', label: '구름틀' },
+                { id: 'leader', label: '인출선' }
+              ] as const).map(opt => (
+                <button
+                  key={opt.id}
+                  onClick={() => setCalloutStyle(opt.id)}
+                  className={`px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap transition ${
+                    calloutStyle === opt.id ? 'bg-sky-500 text-white shadow-sm' : 'text-slate-600 dark:text-slate-300'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <input
+              type="text"
+              value={calloutTextInput}
+              onChange={e => setCalloutTextInput(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Escape') {
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+              placeholder="표시할 글자 입력..."
+              className="w-36 sm:w-44 px-2 py-1 rounded-lg text-[11px] bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
+            />
+            <button
+              onClick={() => setCalloutWithLeader(prev => !prev)}
+              title={calloutWithLeader ? '2점 클릭: 1점 지시위치 -> 2점 말풍선 배치' : '1점 클릭: 인출선 없이 틀+글자만 바로 배치'}
+              className={`px-2 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap transition ${
+                calloutWithLeader
+                  ? 'bg-sky-500 text-white shadow-sm'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              {calloutWithLeader ? '인출선 ON' : '틀만 배치'}
+            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setCalloutAutoSize(prev => !prev)}
+                title="켜면 현재 화면 줌 배율에 맞춘 글자/틀 크기로 자동 배치됩니다"
+                className={`px-2 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap transition ${
+                  calloutAutoSize
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                크기 자동
+              </button>
+              {!calloutAutoSize && (
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    step="any"
+                    min="0.05"
+                    value={calloutHeightInput}
+                    onChange={e => setCalloutHeightInput(e.target.value)}
+                    placeholder="m"
+                    className="w-14 px-1.5 py-1 rounded-lg text-[11px] font-mono bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
+                  />
+                  <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">m</span>
+                </div>
+              )}
+            </div>
             <button
               onClick={() => handleSelectTool('pan')}
               title="종료"

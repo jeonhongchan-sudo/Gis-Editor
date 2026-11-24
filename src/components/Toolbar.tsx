@@ -27,7 +27,8 @@ import {
   Scissors,
   ArrowUpRight,
   Link2,
-  Move
+  Move,
+  MessageSquare
 } from 'lucide-react';
 import { ToolMode } from '../types/cad';
 
@@ -36,6 +37,12 @@ const OffsetIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' })
     <path d="M5 17C5 10.5 10.5 5 17 5" />
     <path d="M10 19C10 14 14 10 19 10" />
     <path d="M14 14L17 17" />
+  </svg>
+);
+
+const EllipseIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <ellipse cx="12" cy="12" rx="9" ry="5.5" />
   </svg>
 );
 
@@ -170,19 +177,37 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         {/* Circle */}
         <button
           onClick={() => setTool('circle')}
-          title="원 그리기 (Circle)"
+          title="원 그리기 (Circle - Line)"
           className={`p-2.5 rounded-xl transition flex items-center justify-center ${btnClass(tool === 'circle')}`}
         >
           <Circle className="w-4 h-4" />
         </button>
 
-        {/* Polygon */}
+        {/* Ellipse */}
+        <button
+          onClick={() => setTool('ellipse')}
+          title="타원 그리기 (Ellipse - Line)"
+          className={`p-2.5 rounded-xl transition flex items-center justify-center ${btnClass(tool === 'ellipse')}`}
+        >
+          <EllipseIcon className="w-4 h-4" />
+        </button>
+
+        {/* Polygon (Closed Line) */}
         <button
           onClick={() => setTool('polygon')}
-          title="면적 폐합 폴리곤 (Polygon)"
+          title="다각형 선 그리기 (폐합 Line)"
           className={`p-2.5 rounded-xl transition flex items-center justify-center ${btnClass(tool === 'polygon')}`}
         >
           <Pentagon className="w-4 h-4" />
+        </button>
+
+        {/* Callout / Speech Bubble (Line + Text without Marker) */}
+        <button
+          onClick={() => setTool('callout')}
+          title="말풍선 / 인출선 (마커 없는 선형 주석)"
+          className={`p-2.5 rounded-xl transition flex items-center justify-center ${btnClass(tool === 'callout')}`}
+        >
+          <MessageSquare className="w-4 h-4" />
         </button>
 
         {/* Add Point */}
@@ -303,6 +328,20 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               <span>원</span>
             </button>
             <button
+              onClick={() => { setTool('ellipse'); setMobileExpanded(false); }}
+              className={`p-2 rounded-xl flex flex-col items-center gap-0.5 text-[10px] ${tool === 'ellipse' ? 'bg-sky-500 text-white' : 'text-slate-500 dark:text-slate-300'}`}
+            >
+              <EllipseIcon className="w-4 h-4" />
+              <span>타원</span>
+            </button>
+            <button
+              onClick={() => { setTool('callout'); setMobileExpanded(false); }}
+              className={`p-2 rounded-xl flex flex-col items-center gap-0.5 text-[10px] ${tool === 'callout' ? 'bg-sky-500 text-white' : 'text-slate-500 dark:text-slate-300'}`}
+            >
+              <MessageSquare className="w-4 h-4" />
+              <span>말풍선</span>
+            </button>
+            <button
               onClick={() => { setTool('break'); setMobileExpanded(false); }}
               className={`p-2 rounded-xl flex flex-col items-center gap-0.5 text-[10px] ${tool === 'break' ? 'bg-rose-500 text-white' : 'text-slate-500 dark:text-slate-300'}`}
             >
@@ -369,7 +408,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               className={`p-2 rounded-xl flex flex-col items-center gap-0.5 text-[10px] ${tool === 'polygon' ? 'bg-sky-500 text-white' : 'text-slate-500 dark:text-slate-300'}`}
             >
               <Pentagon className="w-4 h-4" />
-              <span>면적</span>
+              <span>다각형선</span>
             </button>
             <button
               onClick={() => { setTool('measure'); setMobileExpanded(false); }}

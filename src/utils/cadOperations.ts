@@ -141,6 +141,282 @@ export function createCirclePolyline(
   };
 }
 
+export function createEllipsePolyline(
+  center: Point2D,
+  rx: number,
+  ry: number,
+  layerId: string,
+  segments = 64,
+  name?: string
+): CADPolyline {
+  const safeRx = Math.abs(rx);
+  const safeRy = Math.abs(ry);
+  const zProp = center.z !== undefined && Number.isFinite(center.z) ? { z: center.z } : {};
+  const pts: Point2D[] = [];
+  for (let i = 0; i < segments; i++) {
+    const angle = (Math.PI * 2 * i) / segments;
+    pts.push({
+      x: center.x + Math.cos(angle) * safeRx,
+      y: center.y + Math.sin(angle) * safeRy,
+      ...zProp
+    });
+  }
+  return {
+    id: makeId('ellipse'),
+    name: name || '타원',
+    points: pts,
+    isClosed: true,
+    layerId
+  };
+}
+
+export function createEllipseByBounds(
+  p1: Point2D,
+  p2: Point2D,
+  layerId: string,
+  segments = 64,
+  name?: string
+): CADPolyline {
+  const cx = (p1.x + p2.x) / 2;
+  const cy = (p1.y + p2.y) / 2;
+  const rx = Math.abs(p2.x - p1.x) / 2;
+  const ry = Math.abs(p2.y - p1.y) / 2;
+  const center: Point2D =
+    p1.z !== undefined && Number.isFinite(p1.z)
+      ? { x: cx, y: cy, z: p1.z }
+      : { x: cx, y: cy };
+  return createEllipsePolyline(center, rx, ry, layerId, segments, name);
+}
+
+export function createEllipseByDimensions(
+  basePoint: Point2D,
+  width: number,
+  height: number,
+  anchor: 'corner' | 'center',
+  layerId: string,
+  segments = 64,
+  name?: string
+): CADPolyline {
+  const rx = Math.abs(width) / 2;
+  const ry = Math.abs(height) / 2;
+  const zProp = basePoint.z !== undefined && Number.isFinite(basePoint.z) ? { z: basePoint.z } : {};
+  const center: Point2D =
+    anchor === 'center'
+      ? { x: basePoint.x, y: basePoint.y, ...zProp }
+      : { x: basePoint.x + width / 2, y: basePoint.y + height / 2, ...zProp };
+  return createEllipsePolyline(center, rx, ry, layerId, segments, name);
+}
+
+export type CalloutStyle = 'rect' | 'ellipse' | 'cloud' | 'leader';
+
+export interface CalloutSpec {
+  style: CalloutStyle;
+  text: string;
+  textHeight: number;
+  withLeader: boolean;
+}
+
+let cachedMeasureCtx: CanvasRenderingContext2D | null = null;
+function measureCalloutTextLayout(text: string, textHeight: number): { width: number; height: number; lineCount: number } {
+  const safeH = Math.max(0.01, textHeight);
+  const rawLines = text.split(/\r?\n/);
+  const lines = rawLines.length > 0 ? rawLines : [''];
+
+  if (!cachedMeasureCtx && typeof document !== 'undefined') {
+    const c = document.createElement('canvas');
+    cachedMeasureCtx = c.getContext('2d');
+  }
+
+  let maxLineW = 0;
+  for (const line of lines) {
+    if (cachedMeasureCtx) {
+      cachedMeasureCtx.font = '600 100px system-ui, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif';
+      const w = cachedMeasureCtx.measureText(line).width * (safeH / 100);
+      if (w > maxLineW) maxLineW = w;
+    } else {
+      let approx = 0;
+      for (const ch of line) {
+        approx += ch.charCodeAt(0) > 127 ? 1.0 : 0.62;
+      }
+      const w = approx * safeH;
+      if (w > maxLineW) maxLineW = w;
+    }
+  }
+
+  const contentW = Math.max(safeH * 1.6, maxLineW);
+  const contentH = lines.length * safeH * 1.25;
+  return { width: contentW, height: contentH, lineCount: lines.length };
+}
+
+function createCloudPoints(cx: number, cy: number, boxW: number, boxH: number, textHeight: number, zVal?: number): Point2D[] {
+  const hw = boxW / 2;
+  const hh = boxH / 2;
+  const corners: Point2D[] = [
+    { x: cx - hw, y: cy + hh }, // Top-Left
+    { x: cx + hw, y: cy + hh }, // Top-Right
+    { x: cx + hw, y: cy - hh }, // Bottom-Right
+    { x: cx - hw, y: cy - hh }  // Bottom-Left
+  ];
+
+  const targetChord = Math.max(textHeight * 0.75, Math.min(boxW, boxH) * 0.42);
+  const out: Point2D[] = [];
+  const withZ = (x: number, y: number): Point2D => (zVal !== undefined ? { x, y, z: zVal } : { x, y });
+
+  for (let e = 0; e < 4; e++) {
+    const a = corners[e];
+    const b = corners[(e + 1) % 4];
+    const edgeLen = Math.hypot(b.x - a.x, b.y - a.y);
+    const count = Math.max(e % 2 === 0 ? 2 : 1, Math.round(edgeLen / targetChord));
+    const dx = (b.x - a.x) / count;
+    const dy = (b.y - a.y) / count;
+    const subLen = Math.hypot(dx, dy);
+    // Outward normal for clockwise traversal in Y-up world coordinates
+    const nx = -dy / Math.max(subLen, 1e-9);
+    const ny = dx / Math.max(subLen, 1e-9);
+    const bulge = subLen * 0.38;
+    const steps = 6;
+
+    for (let s = 0; s < count; s++) {
+      const sx = a.x + dx * s;
+      const sy = a.y + dy * s;
+      for (let k = 0; k < steps; k++) {
+        const t = k / steps;
+        const arcOut = Math.sin(Math.PI * t) * bulge;
+        out.push(withZ(sx + dx * t + nx * arcOut, sy + dy * t + ny * arcOut));
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Creates pure line-entity (CADPolyline) callout frames and optional leader lines.
+ * Callout text is stored inside frame polyline attributes (`CALLOUT_TEXT`, `CALLOUT_STYLE`, `CALLOUT_FONT_H`)
+ * so it renders cleanly inside the line frame without creating CADText or CADPoint markers.
+ */
+export function createCalloutPolylines(
+  boxCenter: Point2D,
+  targetPoint: Point2D | null,
+  spec: CalloutSpec,
+  layerId: string,
+  baseName?: string
+): CADPolyline[] {
+  const cleanText = spec.text.trim();
+  const safeH = Math.max(0.01, spec.textHeight);
+  const layout = measureCalloutTextLayout(cleanText || ' ', safeH);
+  const zVal = boxCenter.z !== undefined && Number.isFinite(boxCenter.z) ? boxCenter.z : undefined;
+  const withZ = (x: number, y: number): Point2D => (zVal !== undefined ? { x, y, z: zVal } : { x, y });
+  const zTargetProp = targetPoint?.z !== undefined && Number.isFinite(targetPoint.z) ? { z: targetPoint.z } : (zVal !== undefined ? { z: zVal } : {});
+
+  const sharedAttrs: Record<string, string | number> = {
+    CALLOUT_TEXT: cleanText,
+    CALLOUT_STYLE: spec.style,
+    CALLOUT_FONT_H: Number(safeH.toFixed(4))
+  };
+
+  if (spec.style === 'leader') {
+    const shelfHalfW = layout.width / 2 + safeH * 0.35;
+    const leftPt = withZ(boxCenter.x - shelfHalfW, boxCenter.y);
+    const rightPt = withZ(boxCenter.x + shelfHalfW, boxCenter.y);
+
+    let pts: Point2D[];
+    if (spec.withLeader && targetPoint && distance2D(targetPoint, boxCenter) > 1e-4) {
+      const targetOnLeft = targetPoint.x <= boxCenter.x;
+      const elbow = targetOnLeft ? leftPt : rightPt;
+      const end = targetOnLeft ? rightPt : leftPt;
+      pts = [{ x: targetPoint.x, y: targetPoint.y, ...zTargetProp }, elbow, end];
+    } else {
+      pts = [leftPt, rightPt];
+    }
+
+    return [
+      {
+        id: makeId('callout'),
+        name: baseName || `인출선_${cleanText.slice(0, 12) || '주석'}`,
+        points: pts,
+        isClosed: false,
+        layerId,
+        attributes: sharedAttrs
+      }
+    ];
+  }
+
+  let boxW: number;
+  let boxH: number;
+  let framePts: Point2D[];
+
+  if (spec.style === 'ellipse') {
+    const rx = (layout.width / 2) * 1.32 + safeH * 0.45;
+    const ry = (layout.height / 2) * 1.32 + safeH * 0.45;
+    boxW = rx * 2;
+    boxH = ry * 2;
+    framePts = [];
+    const segments = 56;
+    for (let i = 0; i < segments; i++) {
+      const ang = (Math.PI * 2 * i) / segments;
+      framePts.push(withZ(boxCenter.x + Math.cos(ang) * rx, boxCenter.y + Math.sin(ang) * ry));
+    }
+  } else if (spec.style === 'cloud') {
+    boxW = layout.width + safeH * 1.6;
+    boxH = layout.height + safeH * 1.3;
+    framePts = createCloudPoints(boxCenter.x, boxCenter.y, boxW, boxH, safeH, zVal);
+  } else {
+    boxW = layout.width + safeH * 1.3;
+    boxH = layout.height + safeH * 1.0;
+    const hw = boxW / 2;
+    const hh = boxH / 2;
+    framePts = [
+      withZ(boxCenter.x - hw, boxCenter.y - hh),
+      withZ(boxCenter.x + hw, boxCenter.y - hh),
+      withZ(boxCenter.x + hw, boxCenter.y + hh),
+      withZ(boxCenter.x - hw, boxCenter.y + hh)
+    ];
+  }
+
+  const result: CADPolyline[] = [
+    {
+      id: makeId('callout'),
+      name: baseName || `말풍선_${cleanText.slice(0, 12) || '주석'}`,
+      points: framePts,
+      isClosed: true,
+      layerId,
+      attributes: sharedAttrs
+    }
+  ];
+
+  if (spec.withLeader && targetPoint) {
+    const dx = targetPoint.x - boxCenter.x;
+    const dy = targetPoint.y - boxCenter.y;
+    const hw = boxW / 2;
+    const hh = boxH / 2;
+
+    let attachPt: Point2D | null = null;
+    if (spec.style === 'ellipse') {
+      const norm = Math.hypot(dx / Math.max(hw, 1e-6), dy / Math.max(hh, 1e-6));
+      if (norm > 1.02) {
+        attachPt = withZ(boxCenter.x + dx / norm, boxCenter.y + dy / norm);
+      }
+    } else {
+      const scale = 1 / Math.max(Math.abs(dx) / Math.max(hw, 1e-6), Math.abs(dy) / Math.max(hh, 1e-6));
+      if (scale < 0.98) {
+        attachPt = withZ(boxCenter.x + dx * scale, boxCenter.y + dy * scale);
+      }
+    }
+
+    if (attachPt && distance2D(targetPoint, attachPt) > 1e-4) {
+      result.push({
+        id: makeId('leader'),
+        name: `인출선_${cleanText.slice(0, 12) || '주석'}`,
+        points: [{ x: targetPoint.x, y: targetPoint.y, ...zTargetProp }, attachPt],
+        isClosed: false,
+        layerId
+      });
+    }
+  }
+
+  return result;
+}
+
 /**
  * Unwraps a line or polyline (including closing segment if closed) into an explicit open vertex chain
  * along with cumulative arc-lengths at each vertex.
