@@ -12,7 +12,7 @@ export type ToolMode =
   | 'circle'
   | 'ellipse'
   | 'polygon' 
-  | 'callout'
+  | 'leader'
   | 'point' 
   | 'measure' 
   | 'text' 

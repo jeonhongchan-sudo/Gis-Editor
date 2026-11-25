@@ -38,7 +38,6 @@ import {
 } from '../utils/geometry';
 import {
   CADGeometryMutation,
-  CalloutStyle,
   LinearTargetHit,
   OffsetTargetHit,
   breakEntityAtPoint,
@@ -48,10 +47,10 @@ import {
   computeExtendToBoundaryOperation,
   computeOffsetOperation,
   computeTrimOperation,
-  createCalloutPolylines,
   createCirclePolyline,
   createEllipseByBounds,
   createEllipseByDimensions,
+  createLeaderPolyline,
   createRectangleByDimensions,
   createRectanglePolyline,
   findClosestLinearTarget,
@@ -74,13 +73,21 @@ interface CADCanvasProps {
   rectDimSpec?: { width: number; height: number; anchor: 'corner' | 'center'; locked: boolean } | null;
   circleDimSpec?: { radius: number; locked: boolean } | null;
   ellipseDimSpec?: { width: number; height: number; anchor: 'corner' | 'center'; locked: boolean } | null;
-  calloutSpec?: {
-    style: CalloutStyle;
+  leaderSpec?: {
     text: string;
     textHeight: number | null;
     autoSize: boolean;
-    withLeader: boolean;
   } | null;
+  pendingLeader?: {
+    target: Point2D;
+    landing: Point2D;
+    textHeight: number;
+  } | null;
+  onRequestLeaderText?: (draft: {
+    target: Point2D;
+    landing: Point2D;
+    textHeight: number;
+  }) => void;
   snapEnabled: boolean;
   applyZ?: boolean;
   layers: CADLayer[];
@@ -97,7 +104,6 @@ interface CADCanvasProps {
   onAddPoint: (point: CADPoint) => void;
   onAddLine: (line: CADLine) => void;
   onAddPolyline: (polyline: CADPolyline) => void;
-  onAddPolylines?: (polylines: CADPolyline[], description?: string) => void;
   onApplyGeometryMutation?: (description: string, mutation: CADGeometryMutation) => void;
   onCursorMove: (world: Point2D | null, snap: SnapPoint | null) => void;
   onLiveMeasurementChange?: (data: { currentSegment: number; totalLength: number; area?: number; pointCount: number }) => void;
@@ -120,7 +126,9 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
   rectDimSpec = null,
   circleDimSpec = null,
   ellipseDimSpec = null,
-  calloutSpec = null,
+  leaderSpec = null,
+  pendingLeader = null,
+  onRequestLeaderText,
   snapEnabled,
   applyZ = false,
   layers,
@@ -137,7 +145,6 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
   onAddPoint,
   onAddLine,
   onAddPolyline,
-  onAddPolylines,
   onApplyGeometryMutation,
   onCursorMove,
   onLiveMeasurementChange,
@@ -1011,26 +1018,32 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         const { distance } = closestPointOnSegment(targetWorld, pl.points[pl.points.length - 1], pl.points[0]);
         if (distance < hitRadius) return pl.id;
       }
-      if (pl.attributes?.CALLOUT_TEXT && pl.points.length >= 2) {
-        let pMinX = Infinity, pMinY = Infinity, pMaxX = -Infinity, pMaxY = -Infinity;
-        for (let i = 0; i < pl.points.length; i++) {
-          pMinX = Math.min(pMinX, pl.points[i].x);
-          pMinY = Math.min(pMinY, pl.points[i].y);
-          pMaxX = Math.max(pMaxX, pl.points[i].x);
-          pMaxY = Math.max(pMaxY, pl.points[i].y);
-        }
-        if (String(pl.attributes.CALLOUT_STYLE) === 'leader') {
+      const leaderLabel =
+        (typeof pl.attributes?.LEADER_TEXT === 'string' && pl.attributes.LEADER_TEXT) ||
+        (typeof pl.attributes?.CALLOUT_TEXT === 'string' && pl.attributes.CALLOUT_TEXT) ||
+        '';
+      if (leaderLabel && pl.points.length >= 2) {
+        if (pl.attributes?.LEADER_TEXT || String(pl.attributes?.CALLOUT_STYLE) === 'leader') {
           const pA = pl.points[pl.points.length - 2];
           const pB = pl.points[pl.points.length - 1];
           const sMinX = Math.min(pA.x, pB.x);
           const sMaxX = Math.max(pA.x, pB.x);
           const shelfY = (pA.y + pB.y) / 2;
-          const fh = Number(pl.attributes.CALLOUT_FONT_H) || 1;
+          const fh = Number(pl.attributes?.LEADER_FONT_H ?? pl.attributes?.CALLOUT_FONT_H) || 1;
           if (targetWorld.x >= sMinX && targetWorld.x <= sMaxX && targetWorld.y >= shelfY - hitRadius && targetWorld.y <= shelfY + fh * 1.6) {
             return pl.id;
           }
-        } else if (pl.isClosed && targetWorld.x >= pMinX && targetWorld.x <= pMaxX && targetWorld.y >= pMinY && targetWorld.y <= pMaxY) {
-          return pl.id;
+        } else if (pl.isClosed) {
+          let pMinX = Infinity, pMinY = Infinity, pMaxX = -Infinity, pMaxY = -Infinity;
+          for (let i = 0; i < pl.points.length; i++) {
+            pMinX = Math.min(pMinX, pl.points[i].x);
+            pMinY = Math.min(pMinY, pl.points[i].y);
+            pMaxX = Math.max(pMaxX, pl.points[i].x);
+            pMaxY = Math.max(pMaxY, pl.points[i].y);
+          }
+          if (targetWorld.x >= pMinX && targetWorld.x <= pMaxX && targetWorld.y >= pMinY && targetWorld.y <= pMaxY) {
+            return pl.id;
+          }
         }
       }
     }
@@ -1331,48 +1344,35 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       return;
     }
 
-    // 8.5 CALLOUT / LEADER TOOL (Pure Line frame + marker-free text attribute)
-    if (tool === 'callout') {
-      const rawText = (calloutSpec?.text || '').trim();
-      if (!rawText) {
-        showNodeHint('상단 입력창에 말풍선에 표시할 글자를 먼저 입력해 주세요.');
-        return;
-      }
+    // 8.5 LEADER TOOL (Pure Line leader + marker-free text attribute)
+    if (tool === 'leader') {
       const clickCoord = pickCoord(snapRes.effectiveWorld);
-      const effectiveHeight =
-        calloutSpec?.autoSize || !calloutSpec?.textHeight
-          ? Math.max(0.05, Number((14 / Math.max(view.zoom, 0.001)).toFixed(2)))
-          : calloutSpec.textHeight;
-      const spec = {
-        style: calloutSpec?.style || 'rect',
-        text: rawText,
-        textHeight: effectiveHeight,
-        withLeader: calloutSpec?.withLeader ?? true
-      };
-
-      if (!spec.withLeader) {
-        const created = createCalloutPolylines(clickCoord, null, spec, activeLayerId);
-        if (onAddPolylines) {
-          onAddPolylines(created, '말풍선 생성');
-        } else {
-          created.forEach(pl => onAddPolyline(pl));
-        }
-        setActivePoints([]);
-        return;
-      }
-
       if (activePoints.length === 0) {
         setActivePoints([clickCoord]);
-        showNodeHint('말풍선을 배치할 위치를 클릭하세요.');
+        showNodeHint('인출선이 꺾일 지점(글자 위치)을 클릭하세요.');
       } else {
         const targetPt = pickCoord(activePoints[0]);
-        const created = createCalloutPolylines(clickCoord, targetPt, spec, activeLayerId);
-        if (onAddPolylines) {
-          onAddPolylines(created, '말풍선/인출선 생성');
+        const effectiveHeight =
+          leaderSpec?.autoSize || !leaderSpec?.textHeight
+            ? Math.max(0.05, Number((14 / Math.max(view.zoom, 0.001)).toFixed(2)))
+            : leaderSpec.textHeight;
+        const presetText = (leaderSpec?.text || '').trim();
+
+        if (presetText) {
+          onAddPolyline(
+            createLeaderPolyline(targetPt, clickCoord, presetText, effectiveHeight, activeLayerId)
+          );
+          setActivePoints([]);
+        } else if (onRequestLeaderText) {
+          onRequestLeaderText({
+            target: targetPt,
+            landing: clickCoord,
+            textHeight: effectiveHeight
+          });
+          setActivePoints([]);
         } else {
-          created.forEach(pl => onAddPolyline(pl));
+          showNodeHint('상단 입력창에 인출선 글자를 입력해 주세요.');
         }
-        setActivePoints([]);
       }
       return;
     }
@@ -1929,15 +1929,19 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
       ctx.lineWidth = isSelected ? 4 : (layer?.lineWidth || 2);
       ctx.stroke();
 
-      // Render embedded Callout text (pure line-framed label with ZERO marker dots)
-      const calloutText = typeof pl.attributes?.CALLOUT_TEXT === 'string' ? pl.attributes.CALLOUT_TEXT.trim() : '';
-      if (calloutText) {
-        const rawFontH = Number(pl.attributes?.CALLOUT_FONT_H);
-        const worldFontH = Number.isFinite(rawFontH) && rawFontH > 0 ? rawFontH : 1;
+      const leaderFontH = Number(pl.attributes?.LEADER_FONT_H ?? pl.attributes?.CALLOUT_FONT_H);
+      const worldFontH = Number.isFinite(leaderFontH) && leaderFontH > 0 ? leaderFontH : 1;
+
+      // Render embedded Leader / legacy Callout text (pure line-based label with ZERO marker dots)
+      const embeddedText =
+        (typeof pl.attributes?.LEADER_TEXT === 'string' && pl.attributes.LEADER_TEXT.trim()) ||
+        (typeof pl.attributes?.CALLOUT_TEXT === 'string' && pl.attributes.CALLOUT_TEXT.trim()) ||
+        '';
+      if (embeddedText) {
         const pxHeight = worldFontH * view.zoom;
         if (pxHeight >= 1.5) {
-          const style = String(pl.attributes?.CALLOUT_STYLE || 'rect');
-          const linesText = calloutText.split(/\r?\n/);
+          const isLeaderStyle = !!pl.attributes?.LEADER_TEXT || String(pl.attributes?.CALLOUT_STYLE) === 'leader';
+          const linesText = embeddedText.split(/\r?\n/);
           const lineStepPx = pxHeight * 1.25;
 
           ctx.save();
@@ -1948,7 +1952,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
           ctx.lineWidth = Math.max(1.5, Math.min(3.5, pxHeight * 0.18));
           ctx.fillStyle = isSelected ? '#fbbf24' : (pl.color || layer?.color || (theme === 'dark' ? '#f8fafc' : '#0f172a'));
 
-          if (style === 'leader' && pl.points.length >= 2) {
+          if (isLeaderStyle && pl.points.length >= 2) {
             const pA = pl.points[pl.points.length - 2];
             const pB = pl.points[pl.points.length - 1];
             const shelfMidScreen = getScreen({ x: (pA.x + pB.x) / 2, y: (pA.y + pB.y) / 2 });
@@ -2447,58 +2451,45 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         ctx.textBaseline = 'middle';
         ctx.fillText(label, sc.x + 18, sc.y - 14);
         ctx.restore();
-      } else if (tool === 'callout' && !calloutSpec?.withLeader && calloutSpec?.text.trim()) {
-        const effH = calloutSpec.autoSize || !calloutSpec.textHeight
-          ? Math.max(0.05, Number((14 / Math.max(view.zoom, 0.001)).toFixed(2)))
-          : calloutSpec.textHeight;
-        const previewItems = createCalloutPolylines(
-          effectivePreviewCursor,
-          null,
-          { style: calloutSpec.style, text: calloutSpec.text.trim(), textHeight: effH, withLeader: false },
-          activeLayerId
-        );
-        ctx.save();
-        ctx.strokeStyle = '#38bdf8';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([5, 4]);
-        previewItems.forEach(item => {
-          if (item.points.length < 2) return;
-          ctx.beginPath();
-          const p0 = getScreen(item.points[0]);
-          ctx.moveTo(p0.x, p0.y);
-          for (let i = 1; i < item.points.length; i++) {
-            const ps = getScreen(item.points[i]);
-            ctx.lineTo(ps.x, ps.y);
-          }
-          if (item.isClosed) ctx.closePath();
-          ctx.stroke();
-        });
-        ctx.setLineDash([]);
-
-        const pxH = effH * view.zoom;
-        if (pxH >= 2) {
-          const linesText = calloutSpec.text.trim().split(/\r?\n/);
-          const lineStepPx = pxH * 1.25;
-          const sc = getScreen(effectivePreviewCursor);
-          ctx.font = `600 ${pxH}px ${CANVAS_SANS_FONT}`;
-          ctx.textAlign = 'center';
-          ctx.fillStyle = 'rgba(56, 189, 248, 0.9)';
-          if (calloutSpec.style === 'leader') {
-            ctx.textBaseline = 'bottom';
-            const bottomGap = Math.max(2, pxH * 0.25);
-            linesText.forEach((lt, li) => {
-              ctx.fillText(lt, sc.x, sc.y - bottomGap - (linesText.length - 1 - li) * lineStepPx);
-            });
-          } else {
-            ctx.textBaseline = 'middle';
-            const startY = sc.y - ((linesText.length - 1) * lineStepPx) / 2;
-            linesText.forEach((lt, li) => {
-              ctx.fillText(lt, sc.x, startY + li * lineStepPx);
-            });
-          }
-        }
-        ctx.restore();
       }
+    }
+
+    // 7.8 Pending Leader Draft Preview (while post-draw text input popup is open)
+    if (pendingLeader) {
+      const textStr = (leaderSpec?.text || '').trim() || '글자 입력...';
+      const draftPl = createLeaderPolyline(
+        pendingLeader.target,
+        pendingLeader.landing,
+        textStr,
+        pendingLeader.textHeight,
+        activeLayerId
+      );
+      ctx.save();
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 2.2;
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      const p0 = getScreen(draftPl.points[0]);
+      ctx.moveTo(p0.x, p0.y);
+      for (let i = 1; i < draftPl.points.length; i++) {
+        const ps = getScreen(draftPl.points[i]);
+        ctx.lineTo(ps.x, ps.y);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const pxH = pendingLeader.textHeight * view.zoom;
+      if (pxH >= 2 && draftPl.points.length >= 3) {
+        const pA = draftPl.points[1];
+        const pB = draftPl.points[2];
+        const midS = getScreen({ x: (pA.x + pB.x) / 2, y: (pA.y + pB.y) / 2 });
+        ctx.font = `600 ${pxH}px ${CANVAS_SANS_FONT}`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillStyle = '#38bdf8';
+        ctx.fillText(textStr, midS.x, midS.y - Math.max(2, pxH * 0.25));
+      }
+      ctx.restore();
     }
 
     // 8. Render Active Drawing / Multi-Point Measuring Path / Move Ghost Preview
@@ -2837,17 +2828,18 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
         ctx.fillText(label, s2.x + 18, s2.y - 14);
-      } else if (tool === 'callout' && activePoints.length === 1 && cursorWorld) {
+      } else if (tool === 'leader' && activePoints.length === 1 && cursorWorld) {
         const targetPt = activePoints[0];
         const sTarget = getScreen(targetPt);
-        const textStr = (calloutSpec?.text || '').trim() || '주석';
-        const effH = calloutSpec?.autoSize || !calloutSpec?.textHeight
+        const textStr = (leaderSpec?.text || '').trim() || '글자 입력';
+        const effH = leaderSpec?.autoSize || !leaderSpec?.textHeight
           ? Math.max(0.05, Number((14 / Math.max(view.zoom, 0.001)).toFixed(2)))
-          : calloutSpec.textHeight;
-        const previewItems = createCalloutPolylines(
-          cursorWorld,
+          : leaderSpec.textHeight;
+        const previewPl = createLeaderPolyline(
           targetPt,
-          { style: calloutSpec?.style || 'rect', text: textStr, textHeight: effH, withLeader: true },
+          cursorWorld,
+          textStr,
+          effH,
           activeLayerId
         );
 
@@ -2855,18 +2847,14 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         ctx.strokeStyle = '#38bdf8';
         ctx.lineWidth = 2;
         ctx.setLineDash([5, 4]);
-        previewItems.forEach(item => {
-          if (item.points.length < 2) return;
-          ctx.beginPath();
-          const p0 = getScreen(item.points[0]);
-          ctx.moveTo(p0.x, p0.y);
-          for (let i = 1; i < item.points.length; i++) {
-            const ps = getScreen(item.points[i]);
-            ctx.lineTo(ps.x, ps.y);
-          }
-          if (item.isClosed) ctx.closePath();
-          ctx.stroke();
-        });
+        ctx.beginPath();
+        const p0 = getScreen(previewPl.points[0]);
+        ctx.moveTo(p0.x, p0.y);
+        for (let i = 1; i < previewPl.points.length; i++) {
+          const ps = getScreen(previewPl.points[i]);
+          ctx.lineTo(ps.x, ps.y);
+        }
+        ctx.stroke();
         ctx.setLineDash([]);
 
         ctx.fillStyle = '#10b981';
@@ -2875,26 +2863,20 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         ctx.fill();
 
         const pxH = effH * view.zoom;
-        if (pxH >= 2) {
+        if (pxH >= 2 && previewPl.points.length >= 3) {
+          const pA = previewPl.points[1];
+          const pB = previewPl.points[2];
+          const shelfMidS = getScreen({ x: (pA.x + pB.x) / 2, y: (pA.y + pB.y) / 2 });
           const linesText = textStr.split(/\r?\n/);
           const lineStepPx = pxH * 1.25;
-          const sc = getScreen(cursorWorld);
           ctx.font = `600 ${pxH}px ${CANVAS_SANS_FONT}`;
           ctx.textAlign = 'center';
-          ctx.fillStyle = '#38bdf8';
-          if ((calloutSpec?.style || 'rect') === 'leader') {
-            ctx.textBaseline = 'bottom';
-            const bottomGap = Math.max(2, pxH * 0.25);
-            linesText.forEach((lt, li) => {
-              ctx.fillText(lt, sc.x, sc.y - bottomGap - (linesText.length - 1 - li) * lineStepPx);
-            });
-          } else {
-            ctx.textBaseline = 'middle';
-            const startY = sc.y - ((linesText.length - 1) * lineStepPx) / 2;
-            linesText.forEach((lt, li) => {
-              ctx.fillText(lt, sc.x, startY + li * lineStepPx);
-            });
-          }
+          ctx.textBaseline = 'bottom';
+          ctx.fillStyle = (leaderSpec?.text || '').trim() ? '#38bdf8' : 'rgba(56, 189, 248, 0.75)';
+          const bottomGap = Math.max(2, pxH * 0.25);
+          linesText.forEach((lt, li) => {
+            ctx.fillText(lt, shelfMidS.x, shelfMidS.y - bottomGap - (linesText.length - 1 - li) * lineStepPx);
+          });
         }
         ctx.restore();
       } else {

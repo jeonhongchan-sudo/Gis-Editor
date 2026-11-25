@@ -207,17 +207,8 @@ export function createEllipseByDimensions(
   return createEllipsePolyline(center, rx, ry, layerId, segments, name);
 }
 
-export type CalloutStyle = 'rect' | 'ellipse' | 'cloud' | 'leader';
-
-export interface CalloutSpec {
-  style: CalloutStyle;
-  text: string;
-  textHeight: number;
-  withLeader: boolean;
-}
-
 let cachedMeasureCtx: CanvasRenderingContext2D | null = null;
-function measureCalloutTextLayout(text: string, textHeight: number): { width: number; height: number; lineCount: number } {
+export function measureLeaderTextLayout(text: string, textHeight: number): { width: number; height: number; lineCount: number } {
   const safeH = Math.max(0.01, textHeight);
   const rawLines = text.split(/\r?\n/);
   const lines = rawLines.length > 0 ? rawLines : [''];
@@ -248,173 +239,43 @@ function measureCalloutTextLayout(text: string, textHeight: number): { width: nu
   return { width: contentW, height: contentH, lineCount: lines.length };
 }
 
-function createCloudPoints(cx: number, cy: number, boxW: number, boxH: number, textHeight: number, zVal?: number): Point2D[] {
-  const hw = boxW / 2;
-  const hh = boxH / 2;
-  const corners: Point2D[] = [
-    { x: cx - hw, y: cy + hh }, // Top-Left
-    { x: cx + hw, y: cy + hh }, // Top-Right
-    { x: cx + hw, y: cy - hh }, // Bottom-Right
-    { x: cx - hw, y: cy - hh }  // Bottom-Left
-  ];
-
-  const targetChord = Math.max(textHeight * 0.75, Math.min(boxW, boxH) * 0.42);
-  const out: Point2D[] = [];
-  const withZ = (x: number, y: number): Point2D => (zVal !== undefined ? { x, y, z: zVal } : { x, y });
-
-  for (let e = 0; e < 4; e++) {
-    const a = corners[e];
-    const b = corners[(e + 1) % 4];
-    const edgeLen = Math.hypot(b.x - a.x, b.y - a.y);
-    const count = Math.max(e % 2 === 0 ? 2 : 1, Math.round(edgeLen / targetChord));
-    const dx = (b.x - a.x) / count;
-    const dy = (b.y - a.y) / count;
-    const subLen = Math.hypot(dx, dy);
-    // Outward normal for clockwise traversal in Y-up world coordinates
-    const nx = -dy / Math.max(subLen, 1e-9);
-    const ny = dx / Math.max(subLen, 1e-9);
-    const bulge = subLen * 0.38;
-    const steps = 6;
-
-    for (let s = 0; s < count; s++) {
-      const sx = a.x + dx * s;
-      const sy = a.y + dy * s;
-      for (let k = 0; k < steps; k++) {
-        const t = k / steps;
-        const arcOut = Math.sin(Math.PI * t) * bulge;
-        out.push(withZ(sx + dx * t + nx * arcOut, sy + dy * t + ny * arcOut));
-      }
-    }
-  }
-  return out;
-}
-
 /**
- * Creates pure line-entity (CADPolyline) callout frames and optional leader lines.
- * Callout text is stored inside frame polyline attributes (`CALLOUT_TEXT`, `CALLOUT_STYLE`, `CALLOUT_FONT_H`)
- * so it renders cleanly inside the line frame without creating CADText or CADPoint markers.
+ * Creates a clean pure-line CAD leader polyline (`[targetPoint, landingPoint, shelfEnd]`).
+ * Label text is stored in `LEADER_TEXT` / `LEADER_FONT_H` attributes so it renders
+ * cleanly above the leader shelf without arrowheads or CADText/CADPoint markers.
  */
-export function createCalloutPolylines(
-  boxCenter: Point2D,
-  targetPoint: Point2D | null,
-  spec: CalloutSpec,
+export function createLeaderPolyline(
+  targetPoint: Point2D,
+  landingPoint: Point2D,
+  text: string,
+  textHeight: number,
   layerId: string,
-  baseName?: string
-): CADPolyline[] {
-  const cleanText = spec.text.trim();
-  const safeH = Math.max(0.01, spec.textHeight);
-  const layout = measureCalloutTextLayout(cleanText || ' ', safeH);
-  const zVal = boxCenter.z !== undefined && Number.isFinite(boxCenter.z) ? boxCenter.z : undefined;
-  const withZ = (x: number, y: number): Point2D => (zVal !== undefined ? { x, y, z: zVal } : { x, y });
-  const zTargetProp = targetPoint?.z !== undefined && Number.isFinite(targetPoint.z) ? { z: targetPoint.z } : (zVal !== undefined ? { z: zVal } : {});
+  name?: string
+): CADPolyline {
+  const cleanText = text.trim();
+  const safeH = Math.max(0.01, textHeight);
+  const layout = measureLeaderTextLayout(cleanText || '내용 입력', safeH);
+  const shelfLen = Math.max(safeH * 1.8, layout.width + safeH * 0.5);
+  const dirX = landingPoint.x >= targetPoint.x ? 1 : -1;
 
-  const sharedAttrs: Record<string, string | number> = {
-    CALLOUT_TEXT: cleanText,
-    CALLOUT_STYLE: spec.style,
-    CALLOUT_FONT_H: Number(safeH.toFixed(4))
+  const zTarget = targetPoint.z !== undefined && Number.isFinite(targetPoint.z) ? { z: targetPoint.z } : {};
+  const zLand = landingPoint.z !== undefined && Number.isFinite(landingPoint.z) ? { z: landingPoint.z } : {};
+
+  const p0: Point2D = { x: targetPoint.x, y: targetPoint.y, ...zTarget };
+  const p1: Point2D = { x: landingPoint.x, y: landingPoint.y, ...zLand };
+  const p2: Point2D = { x: landingPoint.x + dirX * shelfLen, y: landingPoint.y, ...zLand };
+
+  return {
+    id: makeId('leader'),
+    name: name || `인출선_${cleanText.slice(0, 12) || '주석'}`,
+    points: [p0, p1, p2],
+    isClosed: false,
+    layerId,
+    attributes: {
+      LEADER_TEXT: cleanText,
+      LEADER_FONT_H: Number(safeH.toFixed(4))
+    }
   };
-
-  if (spec.style === 'leader') {
-    const shelfHalfW = layout.width / 2 + safeH * 0.35;
-    const leftPt = withZ(boxCenter.x - shelfHalfW, boxCenter.y);
-    const rightPt = withZ(boxCenter.x + shelfHalfW, boxCenter.y);
-
-    let pts: Point2D[];
-    if (spec.withLeader && targetPoint && distance2D(targetPoint, boxCenter) > 1e-4) {
-      const targetOnLeft = targetPoint.x <= boxCenter.x;
-      const elbow = targetOnLeft ? leftPt : rightPt;
-      const end = targetOnLeft ? rightPt : leftPt;
-      pts = [{ x: targetPoint.x, y: targetPoint.y, ...zTargetProp }, elbow, end];
-    } else {
-      pts = [leftPt, rightPt];
-    }
-
-    return [
-      {
-        id: makeId('callout'),
-        name: baseName || `인출선_${cleanText.slice(0, 12) || '주석'}`,
-        points: pts,
-        isClosed: false,
-        layerId,
-        attributes: sharedAttrs
-      }
-    ];
-  }
-
-  let boxW: number;
-  let boxH: number;
-  let framePts: Point2D[];
-
-  if (spec.style === 'ellipse') {
-    const rx = (layout.width / 2) * 1.32 + safeH * 0.45;
-    const ry = (layout.height / 2) * 1.32 + safeH * 0.45;
-    boxW = rx * 2;
-    boxH = ry * 2;
-    framePts = [];
-    const segments = 56;
-    for (let i = 0; i < segments; i++) {
-      const ang = (Math.PI * 2 * i) / segments;
-      framePts.push(withZ(boxCenter.x + Math.cos(ang) * rx, boxCenter.y + Math.sin(ang) * ry));
-    }
-  } else if (spec.style === 'cloud') {
-    boxW = layout.width + safeH * 1.6;
-    boxH = layout.height + safeH * 1.3;
-    framePts = createCloudPoints(boxCenter.x, boxCenter.y, boxW, boxH, safeH, zVal);
-  } else {
-    boxW = layout.width + safeH * 1.3;
-    boxH = layout.height + safeH * 1.0;
-    const hw = boxW / 2;
-    const hh = boxH / 2;
-    framePts = [
-      withZ(boxCenter.x - hw, boxCenter.y - hh),
-      withZ(boxCenter.x + hw, boxCenter.y - hh),
-      withZ(boxCenter.x + hw, boxCenter.y + hh),
-      withZ(boxCenter.x - hw, boxCenter.y + hh)
-    ];
-  }
-
-  const result: CADPolyline[] = [
-    {
-      id: makeId('callout'),
-      name: baseName || `말풍선_${cleanText.slice(0, 12) || '주석'}`,
-      points: framePts,
-      isClosed: true,
-      layerId,
-      attributes: sharedAttrs
-    }
-  ];
-
-  if (spec.withLeader && targetPoint) {
-    const dx = targetPoint.x - boxCenter.x;
-    const dy = targetPoint.y - boxCenter.y;
-    const hw = boxW / 2;
-    const hh = boxH / 2;
-
-    let attachPt: Point2D | null = null;
-    if (spec.style === 'ellipse') {
-      const norm = Math.hypot(dx / Math.max(hw, 1e-6), dy / Math.max(hh, 1e-6));
-      if (norm > 1.02) {
-        attachPt = withZ(boxCenter.x + dx / norm, boxCenter.y + dy / norm);
-      }
-    } else {
-      const scale = 1 / Math.max(Math.abs(dx) / Math.max(hw, 1e-6), Math.abs(dy) / Math.max(hh, 1e-6));
-      if (scale < 0.98) {
-        attachPt = withZ(boxCenter.x + dx * scale, boxCenter.y + dy * scale);
-      }
-    }
-
-    if (attachPt && distance2D(targetPoint, attachPt) > 1e-4) {
-      result.push({
-        id: makeId('leader'),
-        name: `인출선_${cleanText.slice(0, 12) || '주석'}`,
-        points: [{ x: targetPoint.x, y: targetPoint.y, ...zTargetProp }, attachPt],
-        isClosed: false,
-        layerId
-      });
-    }
-  }
-
-  return result;
 }
 
 /**

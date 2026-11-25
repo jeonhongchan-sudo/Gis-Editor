@@ -4,9 +4,9 @@
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Trash2, Ruler, X, Check, Layers, CheckSquare, Database, Unlink, Scissors, ArrowUpRight, Link2, Square, Circle, Lock, Move, MessageSquare } from 'lucide-react';
+import { Trash2, Ruler, X, Check, Layers, CheckSquare, Database, Unlink, Scissors, ArrowUpRight, Link2, Square, Circle, Lock, Move } from 'lucide-react';
 import { distance2D } from './utils/geometry';
-import { CADGeometryMutation, CalloutStyle, OffsetTargetHit, createCirclePolyline, createEllipseByDimensions, createRectangleByDimensions, joinLinearEntities, moveEntitiesByDelta } from './utils/cadOperations';
+import { CADGeometryMutation, OffsetTargetHit, createCirclePolyline, createEllipseByDimensions, createLeaderPolyline, createRectangleByDimensions, joinLinearEntities, moveEntitiesByDelta } from './utils/cadOperations';
 import { forceRefreshAppFromServer } from './utils/pwaRefresh';
 import { VWorldMapLayer, VWorldOverlayConfig } from './utils/vworldTiles';
 import { COORDINATE_SYSTEMS } from './utils/projections';
@@ -220,11 +220,15 @@ export default function App() {
   const [ellipseHeightInput, setEllipseHeightInput] = useState<string>('');
   const [ellipseAnchor, setEllipseAnchor] = useState<'corner' | 'center'>('center');
   const [ellipseDimLocked, setEllipseDimLocked] = useState<boolean>(false);
-  const [calloutStyle, setCalloutStyle] = useState<CalloutStyle>('rect');
-  const [calloutTextInput, setCalloutTextInput] = useState<string>('');
-  const [calloutHeightInput, setCalloutHeightInput] = useState<string>('1.5');
-  const [calloutAutoSize, setCalloutAutoSize] = useState<boolean>(true);
-  const [calloutWithLeader, setCalloutWithLeader] = useState<boolean>(true);
+  const [leaderTextInput, setLeaderTextInput] = useState<string>('');
+  const [leaderHeightInput, setLeaderHeightInput] = useState<string>('1.5');
+  const [leaderAutoSize, setLeaderAutoSize] = useState<boolean>(true);
+  const [pendingLeader, setPendingLeader] = useState<{
+    target: Point2D;
+    landing: Point2D;
+    textHeight: number;
+  } | null>(null);
+  const [pendingLeaderText, setPendingLeaderText] = useState<string>('');
   const [cadToast, setCadToast] = useState<string | null>(null);
   const cadToastTimerRef = useRef<any>(null);
   const [snapEnabled, setSnapEnabled] = useState<boolean>(true);
@@ -354,17 +358,15 @@ export default function App() {
     return { width: w, height: h, anchor: ellipseAnchor, locked: ellipseDimLocked };
   }, [ellipseWidthInput, ellipseHeightInput, ellipseAnchor, ellipseDimLocked]);
 
-  const calloutSpec = useMemo(() => {
-    const rawH = parseFloat(calloutHeightInput);
+  const leaderSpec = useMemo(() => {
+    const rawH = parseFloat(leaderHeightInput);
     const textHeight = isFinite(rawH) && rawH > 1e-3 ? rawH : null;
     return {
-      style: calloutStyle,
-      text: calloutTextInput,
+      text: pendingLeader ? pendingLeaderText : leaderTextInput,
       textHeight,
-      autoSize: calloutAutoSize,
-      withLeader: calloutWithLeader
+      autoSize: leaderAutoSize
     };
-  }, [calloutStyle, calloutTextInput, calloutHeightInput, calloutAutoSize, calloutWithLeader]);
+  }, [leaderTextInput, leaderHeightInput, leaderAutoSize, pendingLeader, pendingLeaderText]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -378,6 +380,8 @@ export default function App() {
       } else if (e.key === 'Escape') {
         setActivePoints([]);
         setOffsetTarget(null);
+        setPendingLeader(null);
+        setPendingLeaderText('');
         setSelectedEntityIds([]);
       } else if (e.key === 'Enter') {
         if (tool === 'join') {
@@ -503,28 +507,30 @@ export default function App() {
     pushHistory('연속선 추가');
   };
 
-  const handleAddPolylines = async (items: CADPolyline[], description = '선 객체 추가') => {
-    if (items.length === 0) return;
-    setPolylines(prev => [...prev, ...items]);
-    try {
-      let pid = currentProjectId;
-      if (pid === null) {
-        pid = await db.projects.add({ name: '새 프로젝트', createdAt: Date.now(), updatedAt: Date.now() });
-        const layersToSave = layers.length > 0 ? layers : DEFAULT_LAYERS;
-        await db.layers.bulkPut(layersToSave.map(l => ({ ...l, projectId: pid! })));
-        lastZoomedProjectRef.current = pid!;
-        setCurrentProjectId(pid!);
-      }
-      await db.polylines.bulkPut(items.map(pl => ({ ...pl, projectId: pid! })));
-    } catch (err) {
-      console.error('Failed to save polylines to IndexedDB:', err);
+  const handleConfirmPendingLeader = async () => {
+    if (!pendingLeader) return;
+    const clean = pendingLeaderText.trim();
+    if (!clean) {
+      showCadToast('표시할 글자를 입력해 주세요.');
+      return;
     }
-    pushHistory(description);
+    const newLeader = createLeaderPolyline(
+      pendingLeader.target,
+      pendingLeader.landing,
+      clean,
+      pendingLeader.textHeight,
+      activeLayerId
+    );
+    await handleAddPolyline(newLeader);
+    setPendingLeader(null);
+    setPendingLeaderText('');
   };
 
   const handleSelectTool = useCallback((nextTool: ToolMode) => {
     setActivePoints([]);
     setOffsetTarget(null);
+    setPendingLeader(null);
+    setPendingLeaderText('');
     if (nextTool === 'join') {
       const validLineIds = new Set([...lines.map(l => l.id), ...polylines.filter(pl => !pl.isClosed).map(pl => pl.id)]);
       setSelectedEntityIds(prev => prev.filter(id => validLineIds.has(id)));
@@ -1201,7 +1207,12 @@ export default function App() {
           rectDimSpec={rectDimSpec}
           circleDimSpec={circleDimSpec}
           ellipseDimSpec={ellipseDimSpec}
-          calloutSpec={calloutSpec}
+          leaderSpec={leaderSpec}
+          pendingLeader={pendingLeader}
+          onRequestLeaderText={(draft) => {
+            setPendingLeader(draft);
+            setPendingLeaderText('');
+          }}
           snapEnabled={snapEnabled}
           applyZ={applyZ}
           layers={layers} points={points} lines={lines} polylines={polylines} polygons={polygons} texts={texts}
@@ -1211,7 +1222,7 @@ export default function App() {
           multiSelectMode={multiSelectMode}
           onSelectEntities={setSelectedEntityIds}
           onAddPoint={handleAddPoint}
-          onAddLine={handleAddLine} onAddPolyline={handleAddPolyline} onAddPolylines={handleAddPolylines}
+          onAddLine={handleAddLine} onAddPolyline={handleAddPolyline}
           onApplyGeometryMutation={applyGeometryMutation}
           onCursorMove={handleCursorMove}
           onLiveMeasurementChange={setLiveMeasurement}
@@ -1502,71 +1513,45 @@ export default function App() {
           </div>
         )}
 
-        {/* CAD Callout / Leader Floating Bar (Line-based, Zero Markers) */}
-        {tool === 'callout' && (
+        {/* CAD Leader Floating Bar (Pure Line-based, Zero Markers) */}
+        {tool === 'leader' && (
           <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-sky-400 dark:border-sky-500/80 px-2.5 py-1.5 rounded-xl shadow-xl max-w-[96vw]">
-            <MessageSquare className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
-            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg">
-              {([
-                { id: 'rect', label: '사각틀' },
-                { id: 'ellipse', label: '타원틀' },
-                { id: 'cloud', label: '구름틀' },
-                { id: 'leader', label: '인출선' }
-              ] as const).map(opt => (
-                <button
-                  key={opt.id}
-                  onClick={() => setCalloutStyle(opt.id)}
-                  className={`px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap transition ${
-                    calloutStyle === opt.id ? 'bg-sky-500 text-white shadow-sm' : 'text-slate-600 dark:text-slate-300'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0">
+              <path d="M4 18L11 9H21" />
+            </svg>
+            <span className="text-[11px] font-bold text-sky-600 dark:text-sky-400 whitespace-nowrap">인출선</span>
             <input
               type="text"
-              value={calloutTextInput}
-              onChange={e => setCalloutTextInput(e.target.value)}
+              value={leaderTextInput}
+              onChange={e => setLeaderTextInput(e.target.value)}
               onKeyDown={e => {
                 if (e.key === 'Escape') {
                   (e.target as HTMLInputElement).blur();
                 }
               }}
-              placeholder="표시할 글자 입력..."
-              className="w-36 sm:w-44 px-2 py-1 rounded-lg text-[11px] bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
+              placeholder="글자 (비우면 선 그린 후 입력)"
+              className="w-40 sm:w-48 px-2 py-1 rounded-lg text-[11px] bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
             />
-            <button
-              onClick={() => setCalloutWithLeader(prev => !prev)}
-              title={calloutWithLeader ? '2점 클릭: 1점 지시위치 -> 2점 말풍선 배치' : '1점 클릭: 인출선 없이 틀+글자만 바로 배치'}
-              className={`px-2 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap transition ${
-                calloutWithLeader
-                  ? 'bg-sky-500 text-white shadow-sm'
-                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-              }`}
-            >
-              {calloutWithLeader ? '인출선 ON' : '틀만 배치'}
-            </button>
             <div className="flex items-center gap-1">
               <button
-                onClick={() => setCalloutAutoSize(prev => !prev)}
-                title="켜면 현재 화면 줌 배율에 맞춘 글자/틀 크기로 자동 배치됩니다"
+                onClick={() => setLeaderAutoSize(prev => !prev)}
+                title="켜면 현재 화면 줌 배율에 맞춘 글자 크기로 자동 배치됩니다"
                 className={`px-2 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap transition ${
-                  calloutAutoSize
+                  leaderAutoSize
                     ? 'bg-emerald-600 text-white shadow-sm'
                     : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
                 }`}
               >
                 크기 자동
               </button>
-              {!calloutAutoSize && (
+              {!leaderAutoSize && (
                 <div className="flex items-center gap-1">
                   <input
                     type="number"
                     step="any"
                     min="0.05"
-                    value={calloutHeightInput}
-                    onChange={e => setCalloutHeightInput(e.target.value)}
+                    value={leaderHeightInput}
+                    onChange={e => setLeaderHeightInput(e.target.value)}
                     placeholder="m"
                     className="w-14 px-1.5 py-1 rounded-lg text-[11px] font-mono bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
                   />
@@ -1580,6 +1565,46 @@ export default function App() {
               className="p-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 transition"
             >
               <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Post-Draw Leader Text Input Prompt */}
+        {pendingLeader && (
+          <div className="absolute top-16 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border-2 border-sky-500 px-3 py-2 rounded-xl shadow-2xl max-w-[94vw] animate-in fade-in slide-in-from-top-2 duration-150">
+            <input
+              type="text"
+              autoFocus
+              value={pendingLeaderText}
+              onChange={e => setPendingLeaderText(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleConfirmPendingLeader();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setPendingLeader(null);
+                  setPendingLeaderText('');
+                }
+              }}
+              placeholder="인출선에 표시할 글자를 입력하세요..."
+              className="w-48 sm:w-60 px-2.5 py-1.5 rounded-lg text-xs bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
+            />
+            <button
+              onClick={handleConfirmPendingLeader}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-white text-xs font-semibold whitespace-nowrap transition"
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>입력</span>
+            </button>
+            <button
+              onClick={() => {
+                setPendingLeader(null);
+                setPendingLeaderText('');
+              }}
+              className="px-2 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-medium whitespace-nowrap transition"
+            >
+              취소
             </button>
           </div>
         )}

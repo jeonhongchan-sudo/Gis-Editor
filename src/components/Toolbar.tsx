@@ -27,8 +27,7 @@ import {
   Scissors,
   ArrowUpRight,
   Link2,
-  Move,
-  MessageSquare
+  Move
 } from 'lucide-react';
 import { ToolMode } from '../types/cad';
 
@@ -43,6 +42,12 @@ const OffsetIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' })
 const EllipseIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
     <ellipse cx="12" cy="12" rx="9" ry="5.5" />
+  </svg>
+);
+
+const LeaderIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <path d="M4 18L11 9H21" />
   </svg>
 );
 
@@ -201,13 +206,13 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <Pentagon className="w-4 h-4" />
         </button>
 
-        {/* Callout / Speech Bubble (Line + Text without Marker) */}
+        {/* Leader (Line + Text without Marker) */}
         <button
-          onClick={() => setTool('callout')}
-          title="말풍선 / 인출선 (마커 없는 선형 주석)"
-          className={`p-2.5 rounded-xl transition flex items-center justify-center ${btnClass(tool === 'callout')}`}
+          onClick={() => setTool('leader')}
+          title="인출선 (마커 없는 선형 글자 표시)"
+          className={`p-2.5 rounded-xl transition flex items-center justify-center ${btnClass(tool === 'leader')}`}
         >
-          <MessageSquare className="w-4 h-4" />
+          <LeaderIcon className="w-4 h-4" />
         </button>
 
         {/* Add Point */}
@@ -335,11 +340,11 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               <span>타원</span>
             </button>
             <button
-              onClick={() => { setTool('callout'); setMobileExpanded(false); }}
-              className={`p-2 rounded-xl flex flex-col items-center gap-0.5 text-[10px] ${tool === 'callout' ? 'bg-sky-500 text-white' : 'text-slate-500 dark:text-slate-300'}`}
+              onClick={() => { setTool('leader'); setMobileExpanded(false); }}
+              className={`p-2 rounded-xl flex flex-col items-center gap-0.5 text-[10px] ${tool === 'leader' ? 'bg-sky-500 text-white' : 'text-slate-500 dark:text-slate-300'}`}
             >
-              <MessageSquare className="w-4 h-4" />
-              <span>말풍선</span>
+              <LeaderIcon className="w-4 h-4" />
+              <span>인출선</span>
             </button>
             <button
               onClick={() => { setTool('break'); setMobileExpanded(false); }}
