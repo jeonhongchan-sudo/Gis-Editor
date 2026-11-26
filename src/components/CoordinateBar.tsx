@@ -40,8 +40,6 @@ interface CoordinateBarProps {
   onOpenHelp: () => void;
   onOpenManualPoint: () => void;
   onRefreshApp?: () => Promise<void>;
-  applyZ: boolean;
-  onToggleApplyZ: (next: boolean) => void;
   theme: 'light' | 'dark';
   setTheme: (t: 'light' | 'dark') => void;
 }
@@ -59,8 +57,6 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
   onOpenHelp,
   onOpenManualPoint,
   onRefreshApp,
-  applyZ,
-  onToggleApplyZ,
   theme,
   setTheme
 }) => {
@@ -381,25 +377,8 @@ export const CoordinateBar: React.FC<CoordinateBarProps> = ({
           </div>
         )}
 
-        {/* Real-time Cursor Coordinates & Z Toggle */}
+        {/* Real-time Cursor Coordinates */}
         <div className="flex items-center gap-2 sm:gap-3 ml-auto text-slate-700 dark:text-slate-300">
-          <label
-            title="체크 시 선형(선·면)에 Z좌표 포함(3D), 해제 시 2D 평면 처리"
-            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[10px] font-sans font-semibold cursor-pointer select-none transition ${
-              applyZ
-                ? 'bg-sky-50 dark:bg-sky-950/70 border-sky-300 dark:border-sky-600 text-sky-700 dark:text-sky-300'
-                : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-600'
-            }`}
-          >
-            <input
-              type="checkbox"
-              checked={applyZ}
-              onChange={e => onToggleApplyZ(e.target.checked)}
-              className="w-3 h-3 rounded border-slate-300 text-sky-600 focus:ring-sky-500 cursor-pointer"
-            />
-            <span>3D(Z)</span>
-          </label>
-
           {cursorWorld ? (
             <>
               <div className="flex items-center gap-1">

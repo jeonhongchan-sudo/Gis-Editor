@@ -78,12 +78,6 @@ export default function App() {
     localStorage.setItem('vworld_source_crs', mapConfig.sourceCrs);
   }, [mapConfig]);
 
-  // Global Z-coordinate application toggle (default: off / 2D planar)
-  const [applyZ, setApplyZ] = useState<boolean>(() => localStorage.getItem('cad_apply_z') === 'true');
-  useEffect(() => {
-    localStorage.setItem('cad_apply_z', String(applyZ));
-  }, [applyZ]);
-
   // On Mount: Load last project if exists
   useEffect(() => {
     const initApp = async () => {
@@ -457,11 +451,7 @@ export default function App() {
 
   const handleFinishDrawing = async () => {
     if (activePoints.length >= 2) {
-      const preparedPoints = activePoints.map(p =>
-        applyZ && p.z !== undefined && Number.isFinite(p.z)
-          ? { x: p.x, y: p.y, z: p.z }
-          : { x: p.x, y: p.y }
-      );
+      const preparedPoints = activePoints.map(p => ({ x: p.x, y: p.y }));
       if (tool === 'polyline') {
         const newPl: CADPolyline = {
           id: `pl-${Date.now()}`,
@@ -661,7 +651,7 @@ export default function App() {
   };
 
   const handleExecuteJoin = async () => {
-    const { mutation, error } = joinLinearEntities(selectedEntityIds, lines, polylines, layers, 0.01, applyZ);
+    const { mutation, error } = joinLinearEntities(selectedEntityIds, lines, polylines, layers, 0.01);
     if (error || !mutation) {
       showCadToast(error || '결합할 수 있는 선이 없습니다.');
       return;
@@ -985,6 +975,12 @@ export default function App() {
     } else {
       // Append Mode
       const wasNullProject = pid === null;
+      const isEmptyCanvas =
+        points.length === 0 &&
+        lines.length === 0 &&
+        polylines.length === 0 &&
+        polygons.length === 0 &&
+        texts.length === 0;
       const baseExistingLayers = layers.length > 0 ? layers : DEFAULT_LAYERS;
       if (pid === null) {
         pid = await db.projects.add({ 
@@ -1008,6 +1004,13 @@ export default function App() {
         const existing = existingLayersById.get(newLayer.id) || existingLayersByName.get(nameKey);
         if (existing) {
           idMap.set(newLayer.id, existing.id);
+          if ((wasNullProject || isEmptyCanvas) && newLayer.color) {
+            layersToAppend.push({
+              ...existing,
+              color: newLayer.color,
+              lineWidth: newLayer.lineWidth || existing.lineWidth
+            });
+          }
         } else {
           layersToAppend.push(newLayer);
           idMap.set(newLayer.id, newLayer.id);
@@ -1150,6 +1153,11 @@ export default function App() {
     return count;
   }, [selectedEntityIds, lines, polylines]);
 
+  const selectedSinglePoint = useMemo(() => {
+    if (selectedEntityIds.length !== 1) return null;
+    return points.find(p => p.id === selectedEntityIds[0]) || null;
+  }, [selectedEntityIds, points]);
+
   const measureCumulative = useMemo(() => {
     if (tool !== 'measure' || activePoints.length < 2) return 0;
     let sum = 0;
@@ -1182,8 +1190,6 @@ export default function App() {
         activeSnap={activeSnap}
         pointsCount={points.length}
         liveMeasurement={liveMeasurement}
-        applyZ={applyZ}
-        onToggleApplyZ={setApplyZ}
         onOpenImport={() => setShowImportModal(true)}
         onOpenExport={() => setShowExportModal(true)}
         onOpenTable={() => setShowTableModal(true)}
@@ -1214,7 +1220,6 @@ export default function App() {
             setPendingLeaderText('');
           }}
           snapEnabled={snapEnabled}
-          applyZ={applyZ}
           layers={layers} points={points} lines={lines} polylines={polylines} polygons={polygons} texts={texts}
           activeLayerId={activeLayerId} 
           selectedEntityId={selectedEntityId}
@@ -1883,9 +1888,27 @@ export default function App() {
         {/* Floating Multi-Select Action Bar (레이어 일괄 변경 & 일괄 삭제) */}
         {selectedEntityIds.length > 0 && tool !== 'join' && tool !== 'move' && (
           <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-30 flex flex-wrap items-center justify-center gap-1.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-amber-400 dark:border-amber-500/80 px-2.5 py-1.5 rounded-xl shadow-xl animate-in fade-in slide-in-from-top-3 duration-150 max-w-[96vw]">
-            <div className="flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400 font-bold shrink-0 px-0.5 whitespace-nowrap">
+            <div className="flex items-center gap-1.5 text-[11px] text-amber-600 dark:text-amber-400 font-bold shrink-0 px-0.5 whitespace-nowrap">
               <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" />
-              <span>{selectedEntityIds.length}개</span>
+              {selectedSinglePoint ? (
+                <div
+                  title={`X: ${selectedSinglePoint.x.toFixed(3)}m, Y: ${selectedSinglePoint.y.toFixed(3)}m${selectedSinglePoint.z !== undefined && Number.isFinite(selectedSinglePoint.z) ? `, Z: ${selectedSinglePoint.z.toFixed(3)}m` : ''}`}
+                  className="flex items-center gap-1.5"
+                >
+                  <span className="max-w-[110px] truncate text-slate-900 dark:text-white">{selectedSinglePoint.name || '측점'}</span>
+                  <span className={`px-1.5 py-0.5 rounded font-mono text-[10px] ${
+                    selectedSinglePoint.z !== undefined && Number.isFinite(selectedSinglePoint.z)
+                      ? 'bg-sky-50 dark:bg-sky-950 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                  }`}>
+                    {selectedSinglePoint.z !== undefined && Number.isFinite(selectedSinglePoint.z)
+                      ? `Z: ${selectedSinglePoint.z.toFixed(3)}m`
+                      : 'Z: 없음'}
+                  </span>
+                </div>
+              ) : (
+                <span>{selectedEntityIds.length}개</span>
+              )}
             </div>
 
             {/* Mobile / Desktop Multi-Select Append Mode Toggle */}
@@ -2075,7 +2098,6 @@ export default function App() {
           existingLayers={layers}
           existingPoints={points}
           activeLayerId={activeLayerId}
-          applyZ={applyZ}
           onImportCSVPoints={handleImportCSVPoints}
           onImportSHP={handleImportSHP}
           onClose={() => setShowImportModal(false)}
@@ -2086,7 +2108,6 @@ export default function App() {
         <ExportModal
           layers={layers} points={points} lines={lines} polylines={polylines} polygons={polygons} texts={texts}
           defaultSourceCrs={mapConfig.sourceCrs}
-          applyZ={applyZ}
           onClose={() => setShowExportModal(false)}
         />
       )}

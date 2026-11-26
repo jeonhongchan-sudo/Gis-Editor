@@ -89,7 +89,6 @@ interface CADCanvasProps {
     textHeight: number;
   }) => void;
   snapEnabled: boolean;
-  applyZ?: boolean;
   layers: CADLayer[];
   points: CADPoint[];
   lines: CADLine[];
@@ -130,7 +129,6 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
   pendingLeader = null,
   onRequestLeaderText,
   snapEnabled,
-  applyZ = false,
   layers,
   points,
   lines,
@@ -1171,10 +1169,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 
     let targetWorld = screenToWorld(screenX, screenY, rect.width, rect.height);
     const snapRes = evaluateSnap(targetWorld);
-    const pickCoord = (pt: Point2D): Point2D =>
-      applyZ && pt.z !== undefined && Number.isFinite(pt.z)
-        ? { x: pt.x, y: pt.y, z: pt.z }
-        : { x: pt.x, y: pt.y };
+    const pickCoord = (pt: Point2D): Point2D => ({ x: pt.x, y: pt.y });
 
     // 2. POLYLINE TOOL: STRICT NODE REQUIREMENT
     // User request: "연속 그리기는 측점(노드)가 있는 곳에서만 적용되게 해줘... 우리 도면은 텍스트가 노드점이 돼..."
@@ -1208,16 +1203,11 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
     // 4. POINT TOOL
     if (tool === 'point') {
       const ptName = `측점_${points.length + 1}`;
-      const snappedZ =
-        applyZ && snapRes.effectiveWorld.z !== undefined && Number.isFinite(snapRes.effectiveWorld.z)
-          ? snapRes.effectiveWorld.z
-          : undefined;
       onAddPoint({
         id: `point-${Date.now()}`,
         name: ptName,
         x: snapRes.effectiveWorld.x,
         y: snapRes.effectiveWorld.y,
-        ...(snappedZ !== undefined ? { z: snappedZ } : {}),
         layerId: activeLayerId,
         isSurveyNode: false,
         attributes: {
@@ -1637,10 +1627,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
 
   // Double click / Tap to finish Polyline or Polygon
   const handleDoubleClick = () => {
-    const pickCoord = (p: Point2D): Point2D =>
-      applyZ && p.z !== undefined && Number.isFinite(p.z)
-        ? { x: p.x, y: p.y, z: p.z }
-        : { x: p.x, y: p.y };
+    const pickCoord = (p: Point2D): Point2D => ({ x: p.x, y: p.y });
 
     if (tool === 'polyline' && activePoints.length >= 2) {
       onAddPolyline({
@@ -2021,7 +2008,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         ctx.beginPath();
         ctx.moveTo(sp1.x, sp1.y);
         ctx.lineTo(sp2.x, sp2.y);
-        ctx.strokeStyle = isSelected ? '#f59e0b' : (layer?.color || '#38bdf8');
+        ctx.strokeStyle = isSelected ? '#f59e0b' : (l.color || layer?.color || '#38bdf8');
         ctx.lineWidth = isSelected ? 4 : (layer?.lineWidth || 1.5);
         ctx.stroke();
       }
@@ -2065,7 +2052,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
         ctx.stroke();
       }
 
-      const ptColor = isSelected ? '#fbbf24' : (layer?.color || '#ef4444');
+      const ptColor = isSelected ? '#fbbf24' : (pt.color || layer?.color || '#ef4444');
       ctx.strokeStyle = ptColor;
       ctx.fillStyle = ptColor;
       ctx.lineWidth = 1.5;
@@ -2276,7 +2263,7 @@ export const CADCanvas: React.FC<CADCanvasProps> = ({
           ctx.lineWidth = Math.max(1.5, Math.min(3.5, fontPx * 0.18));
           ctx.strokeText(labelText, chosenCandidate.tx, chosenCandidate.ty);
 
-          ctx.fillStyle = isSelected ? '#fbbf24' : (layerRef?.color || (theme === 'dark' ? '#e2e8f0' : '#334155'));
+          ctx.fillStyle = isSelected ? '#fbbf24' : (pt.color || layerRef?.color || (theme === 'dark' ? '#e2e8f0' : '#334155'));
           ctx.fillText(labelText, chosenCandidate.tx, chosenCandidate.ty);
           ctx.restore();
         }

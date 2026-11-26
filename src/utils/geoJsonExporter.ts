@@ -145,7 +145,7 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       const rawRotation = Number(a.ROTATION ?? a.rotation);
       const rotation = Number.isFinite(rawRotation) ? Number(rawRotation.toFixed(4)) : 0;
       const layerName = getLayerName(p.layerId);
-      const markerColor = getLayerColor(p.layerId, a['marker-color'] ?? a.color);
+      const markerColor = getLayerColor(p.layerId, p.color ?? a['marker-color'] ?? a.color);
       const markerSymbol = String(a['marker-symbol'] || 'circle');
 
       features.push({
@@ -174,10 +174,13 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
               id: p.id,
               TEXTSTRING: textString,
               layer: layerName,
+              layerId: p.layerId,
               TEXTHEIGHT: textHeight,
               ROTATION: rotation,
+              'marker-color': markerColor,
               'marker-size': normalizeInternalMarkerSize(a['marker-size']),
               'marker-symbol': markerSymbol,
+              ...(p.color ? { color: normalizeHexColor(p.color, markerColor) } : {}),
               ...(p.z !== undefined && Number.isFinite(Number(p.z)) ? { z: Number(p.z) } : {}),
               ...(p.isSurveyNode !== undefined ? { isSurveyNode: p.isSurveyNode } : {}),
               ...pickCustomAttributes(a)
@@ -224,6 +227,9 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
               TEXTHEIGHT: textHeight,
               rotation: t.rotation,
               layer: layerName,
+              layerId: t.layerId,
+              'marker-color': markerColor,
+              ...(t.color ? { color: normalizeHexColor(t.color, markerColor) } : {}),
               dxftype: 'TEXT',
               ...pickCustomAttributes(t.attributes)
             }
@@ -264,6 +270,10 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
               id: l.id,
               name: l.name,
               layer: layerName,
+              layerId: l.layerId,
+              stroke,
+              'stroke-width': strokeWidth,
+              ...(l.color ? { color: normalizeHexColor(l.color, stroke) } : {}),
               ...pickCustomAttributes(l.attributes)
             }
       });
@@ -313,6 +323,10 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
               id: pl.id,
               name: pl.name,
               layer: layerName,
+              layerId: pl.layerId,
+              stroke,
+              'stroke-width': strokeWidth,
+              ...(pl.color ? { color: normalizeHexColor(pl.color, stroke) } : {}),
               ...(pl.isClosed ? { isClosed: true } : {}),
               ...pickCustomAttributes(pl.attributes)
             }
@@ -360,6 +374,10 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
               id: pg.id,
               name: pg.name,
               layer: layerName,
+              layerId: pg.layerId,
+              stroke,
+              'stroke-width': strokeWidth,
+              ...(pg.color ? { color: normalizeHexColor(pg.color, stroke) } : {}),
               isClosed: true,
               ...pickCustomAttributes(pg.attributes)
             }
@@ -379,7 +397,10 @@ export function exportToGeoJson(options: GeoJsonExportOptions): any {
       generator: 'Web GIS/CAD App',
       version: '1.0.0',
       exportedAt: new Date().toISOString(),
-      layers: layers.map(({ color: _color, ...rest }) => rest),
+      layers: layers.map(l => ({
+        ...l,
+        color: normalizeHexColor(l.color, '#38bdf8')
+      })),
       crs: 'RAW_TM',
       sourceCrs
     },

@@ -9,6 +9,17 @@ import { transformCoords } from './projections';
 
 const LAYER_COLORS = ['#38bdf8', '#34d399', '#f43f5e', '#fbbf24', '#a855f7', '#60a5fa', '#f97316'];
 
+function normalizeHexColor(val: unknown): string | undefined {
+  if (typeof val !== 'string') return undefined;
+  const trimmed = val.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) return trimmed.toLowerCase();
+  if (/^#[0-9a-fA-F]{3}$/.test(trimmed)) {
+    const r = trimmed[1], g = trimmed[2], b = trimmed[3];
+    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+  }
+  return undefined;
+}
+
 /**
  * Parses GeoJSON and converts it into our internal CAD representation.
  * Supports source CRS transformation to local CAD coordinates (or standard EPSG:5186 etc.)
@@ -24,6 +35,7 @@ export function parseGeoJson(
   const polygons: CADPolygon[] = [];
   const texts: CADText[] = [];
   const layerMap = new Map<string, CADLayer>();
+  const layerByIdMap = new Map<string, CADLayer>();
 
   // 0. Pre-load layers from metadata if this is one of our backups
   // We identify our backups via the metadata.generator field
@@ -33,14 +45,17 @@ export function parseGeoJson(
   if (isOurBackup && Array.isArray(metaLayers)) {
     metaLayers.forEach((l: any) => {
       if (l && typeof l === 'object' && l.id && l.name) {
-        layerMap.set(l.name, {
+        const layerObj: CADLayer = {
           id: l.id,
           name: l.name,
-          color: l.color || LAYER_COLORS[layerMap.size % LAYER_COLORS.length],
+          color: normalizeHexColor(l.color) || LAYER_COLORS[layerMap.size % LAYER_COLORS.length],
           visible: l.visible !== undefined ? !!l.visible : true,
           locked: l.locked !== undefined ? !!l.locked : false,
-          lineWidth: l.lineWidth || 2
-        });
+          lineWidth: typeof l.lineWidth === 'number' && Number.isFinite(l.lineWidth) && l.lineWidth > 0 ? l.lineWidth : 2,
+          ...(l.isSurveyPointsLayer !== undefined ? { isSurveyPointsLayer: !!l.isSurveyPointsLayer } : {})
+        };
+        layerMap.set(l.name, layerObj);
+        layerByIdMap.set(l.id, layerObj);
       }
     });
   }
@@ -91,19 +106,37 @@ export function parseGeoJson(
     if (!geom) return;
 
     // Determine layer name (fallback to default)
-    const layerName = props.layer || props.Layer || props.CADLayer || props.layername || '기본 레이어';
-    
-    if (!layerMap.has(layerName)) {
-      layerMap.set(layerName, {
-        id: props.layerId || `layer-${layerName.replace(/[\s\.]/g, '_')}`,
+    const layerName = String(props.layer || props.Layer || props.CADLayer || props.layername || '기본 레이어');
+    const propLayerId = typeof props.layerId === 'string' && props.layerId.trim() ? props.layerId.trim() : undefined;
+    const featureColor =
+      normalizeHexColor(props.color) ||
+      normalizeHexColor(props.stroke) ||
+      normalizeHexColor(props['marker-color']) ||
+      normalizeHexColor(props.layerColor);
+    const rawStrokeWidth = Number(props['stroke-width']);
+    const featureLineWidth = Number.isFinite(rawStrokeWidth) && rawStrokeWidth > 0 ? rawStrokeWidth : 2;
+
+    let layer = (propLayerId && layerByIdMap.get(propLayerId)) || layerMap.get(layerName);
+    if (!layer) {
+      const candidateId = propLayerId || `layer-${layerName.replace(/[\s\.]/g, '_')}`;
+      layer = {
+        id: candidateId,
         name: layerName,
-        color: LAYER_COLORS[layerMap.size % LAYER_COLORS.length],
+        color: featureColor || LAYER_COLORS[layerMap.size % LAYER_COLORS.length],
         visible: true,
         locked: false,
-        lineWidth: 2
-      });
+        lineWidth: featureLineWidth
+      };
+      layerMap.set(layerName, layer);
+      layerByIdMap.set(layer.id, layer);
+    } else if (!isOurBackup && featureColor && !layer.color) {
+      layer.color = featureColor;
     }
-    const layer = layerMap.get(layerName)!;
+
+    const explicitEntityColor = normalizeHexColor(props.color);
+    const entityColorOverride =
+      explicitEntityColor ||
+      (featureColor && featureColor.toLowerCase() !== layer.color.toLowerCase() ? featureColor : undefined);
 
     // Coordinate transformation helper
     const getPoint = (coords: number[], includeZ = false): Point2D => {
@@ -141,6 +174,7 @@ export function parseGeoJson(
           y: pt.y,
           z: ptZ,
           layerId: layer.id,
+          ...(entityColorOverride ? { color: entityColorOverride } : {}),
           isSurveyNode: true,
           attributes: cleanAttributes(props, name)
         });
@@ -154,6 +188,7 @@ export function parseGeoJson(
           y: pt.y,
           z: ptZ,
           layerId: layer.id,
+          ...(entityColorOverride ? { color: entityColorOverride } : {}),
           isSurveyNode: props.isSurveyNode !== undefined ? !!props.isSurveyNode : true,
           attributes: cleanAttributes(props, name)
         });
@@ -172,6 +207,7 @@ export function parseGeoJson(
           y: pt.y,
           z: ptZ,
           layerId: layer.id,
+          ...(entityColorOverride ? { color: entityColorOverride } : {}),
           isSurveyNode: true,
           attributes: cleanAttributes(props, mptName)
         });
@@ -193,6 +229,7 @@ export function parseGeoJson(
         name: props.NAME || props.name || props.title || `LINE_${idx + 1}`,
         points: pts,
         layerId: layer.id,
+        ...(entityColorOverride ? { color: entityColorOverride } : {}),
         isClosed,
         attributes: cleanAttributes(props)
       });
@@ -204,6 +241,7 @@ export function parseGeoJson(
           name: props.NAME || props.name || props.title || `MLINE_${idx + 1}_${subIdx + 1}`,
           points: pts,
           layerId: layer.id,
+          ...(entityColorOverride ? { color: entityColorOverride } : {}),
           attributes: cleanAttributes(props)
         });
       });
@@ -227,6 +265,7 @@ export function parseGeoJson(
             name: ringIdx === 0 ? baseName : `${baseName}_내부${ringIdx}`,
             points: pts,
             layerId: layer.id,
+            ...(entityColorOverride ? { color: entityColorOverride } : {}),
             isClosed: true,
             attributes: cleanAttributes(props)
           });
@@ -252,6 +291,7 @@ export function parseGeoJson(
               name: ringIdx === 0 ? baseName : `${baseName}_내부${ringIdx}`,
               points: pts,
               layerId: layer.id,
+              ...(entityColorOverride ? { color: entityColorOverride } : {}),
               isClosed: true,
               attributes: cleanAttributes(props)
             });

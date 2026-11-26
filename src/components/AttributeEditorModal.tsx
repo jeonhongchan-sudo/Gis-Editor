@@ -179,7 +179,9 @@ export const AttributeEditorModal: React.FC<AttributeEditorModalProps> = ({
         name: p.name || '측점',
         layerId: p.layerId,
         layerName: getLayerName(p.layerId),
-        info: `좌표: ${p.x.toFixed(3)}, ${p.y.toFixed(3)}`,
+        info: p.z !== undefined && Number.isFinite(p.z)
+          ? `좌표: ${p.x.toFixed(3)}, ${p.y.toFixed(3)} · Z: ${p.z.toFixed(3)}m`
+          : `좌표: ${p.x.toFixed(3)}, ${p.y.toFixed(3)}`,
         points: [{ x: p.x, y: p.y }],
         attributes: { ...(p.attributes || {}) }
       });

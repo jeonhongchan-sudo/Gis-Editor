@@ -56,10 +56,7 @@ function makeId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-const pickCoord = (p: Point2D, applyZ: boolean): Point2D =>
-  applyZ && p.z !== undefined && Number.isFinite(p.z)
-    ? { x: p.x, y: p.y, z: p.z }
-    : { x: p.x, y: p.y };
+const pickCoord = (p: Point2D): Point2D => ({ x: p.x, y: p.y });
 
 export function createRectanglePolyline(
   p1: Point2D,
@@ -283,19 +280,18 @@ export function createLeaderPolyline(
  * along with cumulative arc-lengths at each vertex.
  */
 function getChainWithArcLengths(
-  entity: { kind: 'line'; data: CADLine } | { kind: 'polyline'; data: CADPolyline },
-  applyZ = false
+  entity: { kind: 'line'; data: CADLine } | { kind: 'polyline'; data: CADPolyline }
 ): { pts: Point2D[]; cumLen: number[]; totalLength: number; isClosed: boolean } {
   let pts: Point2D[];
   let isClosed = false;
 
   if (entity.kind === 'line') {
     pts = [
-      pickCoord(entity.data.start, applyZ),
-      pickCoord(entity.data.end, applyZ)
+      pickCoord(entity.data.start),
+      pickCoord(entity.data.end)
     ];
   } else {
-    pts = entity.data.points.map(p => pickCoord(p, applyZ));
+    pts = entity.data.points.map(p => pickCoord(p));
     isClosed = !!entity.data.isClosed;
     if (isClosed && pts.length >= 2) {
       const first = pts[0];
@@ -1043,8 +1039,7 @@ export function joinLinearEntities(
   lines: CADLine[],
   polylines: CADPolyline[],
   layers: CADLayer[],
-  tolerance = 0.01,
-  applyZ = false
+  tolerance = 0.01
 ): { mutation: CADGeometryMutation | null; error?: string } {
   const idSet = new Set(selectedIds);
   const layerMap = new Map(layers.map(l => [l.id, l]));
@@ -1068,8 +1063,8 @@ export function joinLinearEntities(
       sourceLineIds: [ln.id],
       sourcePolylineIds: [],
       points: [
-        pickCoord(ln.start, applyZ),
-        pickCoord(ln.end, applyZ)
+        pickCoord(ln.start),
+        pickCoord(ln.end)
       ],
       layerId: ln.layerId,
       color: ln.color,
@@ -1085,7 +1080,7 @@ export function joinLinearEntities(
     chains.push({
       sourceLineIds: [],
       sourcePolylineIds: [pl.id],
-      points: pl.points.map(p => pickCoord(p, applyZ)),
+      points: pl.points.map(p => pickCoord(p)),
       layerId: pl.layerId,
       color: pl.color,
       name: pl.name,

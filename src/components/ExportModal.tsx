@@ -27,7 +27,6 @@ interface ExportModalProps {
   polygons: CADPolygon[];
   texts: CADText[];
   defaultSourceCrs?: string;
-  applyZ?: boolean;
   onClose: () => void;
 }
 
@@ -39,7 +38,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   polygons,
   texts,
   defaultSourceCrs,
-  applyZ = false,
   onClose
 }) => {
   const [isExportingShp, setIsExportingShp] = useState(false);
@@ -97,7 +95,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         layers,
         targetCrs: isWgs84 ? 'EPSG:4326' : undefined,
         sourceCrs: isWgs84 ? sourceCrs : undefined,
-        applyLinearZ: !isWgs84 && applyZ
+        applyLinearZ: false
       });
 
       const jsonStr = JSON.stringify(geojson, null, 2);

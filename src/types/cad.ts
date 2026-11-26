@@ -34,6 +34,7 @@ export interface CADPoint extends Point2D {
   id: string;
   name: string; // 항목 / TextString / Point Name
   layerId: string;
+  color?: string;
   isSurveyNode?: boolean;
   attributes?: Record<string, string | number>;
 }

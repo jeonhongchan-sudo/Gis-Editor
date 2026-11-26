@@ -37,7 +37,6 @@ interface ImportModalProps {
   existingLayers?: CADLayer[];
   existingPoints?: CADPoint[];
   activeLayerId?: string;
-  applyZ?: boolean;
   onImportCSVPoints: (
     points: CADPoint[],
     append: boolean,
@@ -78,7 +77,6 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   existingLayers = [],
   existingPoints = [],
   activeLayerId,
-  applyZ = false,
   onImportCSVPoints,
   onImportSHP,
   onClose
@@ -679,10 +677,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
       return;
     }
 
-    const filterLinearPt = (pt: Point2D): Point2D =>
-      applyZ && pt.z !== undefined && Number.isFinite(pt.z)
-        ? { x: pt.x, y: pt.y, z: pt.z }
-        : { x: pt.x, y: pt.y };
+    const filterLinearPt = (pt: Point2D): Point2D => ({ x: pt.x, y: pt.y });
 
     const filteredResult: SHPParseResult = {
       ...shpResult,
